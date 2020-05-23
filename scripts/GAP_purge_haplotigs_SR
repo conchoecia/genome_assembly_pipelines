@@ -1,0 +1,511 @@
+"""
+Haplotig removal from several candidate genome assemblies.
+
+This pipeline is stage two in diploid genome assembly for invertebrates.
+
+It first characterizes how many reads are mapped to each genome assembly.
+Then, with some user intervention it purges haplotigs.
+After purging haplotigs it clips the overlapping ends of the genome assembly.
+Lastly, it characterizes the resulting assemblies and makes a table for the user to look at
+ to select the best assemblies.
+"""
+from subprocess import Popen, PIPE
+import os
+import pandas as pd
+import subprocess
+import sys
+import time
+filepath = os.path.dirname(os.path.realpath(__file__))
+fs_path=os.path.join(filepath, "../bin/fasta_stats")
+
+configfile: "config.yaml"
+maxthreads = 90
+
+print(config["assemblies"])
+
+def run_fasta_stats(fpath):
+    """
+    This runs fasta_stats on an assembly and returns a dictionary of the values.
+    """
+    this_data = {}
+    # This version is if you want N95_scaflen. Not a good idea for bad assemblies.
+    #new_fields = ["num_scaffolds", "num_tigs", "tot_size_scaffolds",
+    #              "tot_size_tigs", "scaffold_N50", "scaffold_L50",
+    #              "contig_N50", "contig_L50", "perGap", "N95_scaflen", "numGaps"]
+    new_fields = ["num_scaffolds",
+                  "num_tigs",
+                  "tot_size_scaffolds",
+                  "tot_size_tigs",
+                  "scaffold_N50",
+                  "scaffold_L50",
+                  "scaffold_N90",
+                  "scaffold_L90",
+                  "scaffold_N95",
+                  "scaffold_L95",
+                  "contig_N50",
+                  "contig_L50",
+                  "contig_N90",
+                  "contig_L90",
+                  "contig_N95",
+                  "contig_L95",
+                  "perGap",
+                  "numGaps"]
+    tcmd = "{} {}".format(fs_path, fpath).split(" ")
+    results = subprocess.run(tcmd, stdout=subprocess.PIPE).stdout.decode('utf-8').split()
+    assert len(new_fields)==len(results)
+    for i in range(len(results)):
+        if new_fields[i] == "perGap":
+            this_data[new_fields[i]] = float(results[i].strip('%'))
+        else:
+            this_data[new_fields[i]] = int(results[i])
+    return(this_data)
+
+def parse_flagstat(tfile):
+    """
+    just gets the percent mapping from flagstat
+    """
+    pmap = -1
+    with open(tfile, "r") as f:
+        counter = 0
+        for line in f:
+            if line.strip():
+                counter += 1
+                if counter == 5:
+                    assert "mapped" in line
+                    pmap = float(line.split("(")[1].split("%")[0])
+                    break
+    return pmap
+
+def parse_permap(tfile):
+    """
+    just gets the percent of bases in the reads that mapped,
+      and the number of reads that mapped
+    """
+    bmap = -1
+    pmap = -1
+    with open(tfile, "r") as f:
+        counter = 0
+        for line in f:
+            line = line.strip()
+            if line:
+                counter += 1
+                if counter == 3:
+                    assert "%" in line
+                    bmap = float(line.replace("%",""))
+                elif counter == 6:
+                    assert "%" in line
+                    pmap = float(line.replace("%",""))
+
+    return [bmap, pmap]
+
+rule all:
+    input:
+        #expand("PH_pipeline/bams/SR_to_{nom}.sorted.bam", nom=config["assemblies"]),
+        "PH_pipeline/data_output/SR_read_id_and_length.txt",
+        expand("PH_pipeline/before_PH/{nom}_SR.flagstat", nom=config["assemblies"]),
+        expand("PH_pipeline/before_PH/{nom}_SR.permap.txt", nom=config["assemblies"]),
+        #get the histogram pdf
+        expand("PH_pipeline/coverage/plot_histo_SR_{nom}.pdf", nom=config["assemblies"]),
+        expand("PH_pipeline/PH_hist/SR_to_{nom}.sorted.bam.gencov", nom=config["assemblies"]),
+        #purge
+        expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.fasta", nom=config["assemblies"], CO=[90, 80, 70]),
+        #clip
+        expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta", nom=config["assemblies"], CO=[90, 80, 70]),
+        #now collect information about the clip
+        expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.permap.txt", nom=config["assemblies"], CO=[90, 80, 70]),
+        expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.flagstat", nom=config["assemblies"], CO=[90, 80, 70]),
+        expand("PH_pipeline/coverage_after_clip/plot_histo_SR_{nom}_CO{CO}.pdf", nom=config["assemblies"], CO=[90, 80, 70]),
+        "PH_pipeline/final_results/final_results.tsv"
+
+rule map_SR_to_assembly:
+    input:
+        SHOTF = config["shot_f"],
+        SHOTR = config["shot_r"]
+    output:
+        bam = "PH_pipeline/bams/SR_to_{nom}.sorted.bam"
+    params:
+        assembly = lambda wildcards: config["assemblies"][wildcards.nom]
+    threads:
+        maxthreads
+    shell:
+        """
+        bwa index {params.assembly}
+        bwa mem -t {threads} {params.assembly} {input.SHOTF} {input.SHOTR} | \
+            samtools view -hb -@ {threads} - | \
+            samtools sort -@ {threads} - > {output.bam}
+        samtools index {output.bam}
+        """
+
+rule generate_SR_read_length:
+    input:
+        SR = config["shot_f"]
+    output:
+        txt = "PH_pipeline/data_output/SR_read_id_and_length.txt"
+    threads:
+        1
+    shell:
+        """
+        bioawk -cfastx '{{ printf("%s\\t%s\\n", $name, length($seq)) }}' {input.SR} > {output.txt}
+        """
+
+rule flagstat_mapped_before_purge:
+    input:
+        bam = "PH_pipeline/bams/SR_to_{nom}.sorted.bam"
+    output:
+        flagstat_info = "PH_pipeline/before_PH/{nom}_SR.flagstat"
+    threads:
+        1
+    shell:
+        """
+        samtools flagstat {input.bam} > {output.flagstat_info}
+        """
+
+rule percent_of_data_mapping_before:
+    input:
+        bam = "PH_pipeline/bams/SR_to_{nom}.sorted.bam",
+        txt = "PH_pipeline/data_output/SR_read_id_and_length.txt"
+    output:
+        per_map = "PH_pipeline/before_PH/{nom}_SR.permap.txt"
+    threads:
+        1
+    run:
+        transcript_to_len = {}
+        added = set()
+        tot_mapped = 0
+        num_reads = 0
+        tot_size = 0
+        print("reading in the thing")
+        with open(input.txt, "r") as f:
+            for line in f:
+                if line.strip():
+                    splitd = line.split()
+                    transcript_to_len[splitd[0]] = int(splitd[1])
+                    tot_size += int(splitd[1])
+                    num_reads += 1
+        print("done reading in the thing")
+        command = "samtools view -F 4 {} | cut -f1".format(input.bam)
+        #command = "cat temp.sam"
+
+        #print("command is: ", command)
+        #sys.exit()
+        process = Popen(command, stdout=PIPE, shell=True)
+        blank_counter = 0
+        while True:
+            line = process.stdout.readline().rstrip().decode("utf-8").strip()
+            if (len(added) % 1000) == 0:
+               sys.stdout.write("  {0:.3f}% Done. {1:.3f}% of data mapped.\r".format(
+                                100 * (len(added)/num_reads),
+                                100 * (tot_mapped/tot_size)))
+               sys.stdout.flush()
+            if not line.strip():
+                blank_counter += 1
+                if blank_counter > 99999:
+                    break
+            else:
+                if line not in added:
+                    added.add(line)
+                    tot_mapped += transcript_to_len[line]
+
+        with open(output.per_map, "w") as f:
+            print("Number of bases mapped: {}".format(tot_mapped), file=f)
+            print("Number of bases total: {}".format(tot_size), file=f)
+            print("{0:.4}%".format(100* (tot_mapped/tot_size)), file=f)
+            print("", file=f)
+            print("Number of reads mapped: {}".format(len(added)), file=f)
+            print("Number of reads total: {}".format(num_reads), file=f)
+            print("{0:.4}%".format(100* (len(added)/num_reads)), file=f)
+
+rule cov_histo_check:
+    """
+    just checks the average coverage of the bam files before running
+     purge haplotigs
+    """
+    input:
+        bam = "PH_pipeline/bams/SR_to_{nom}.sorted.bam",
+        assembly = lambda wildcards: config["assemblies"][wildcards.nom]
+    output:
+        cov = "PH_pipeline/coverage/SR_{nom}.cov",
+        his = "PH_pipeline/coverage/histo_SR_{nom}.histo",
+        pdf = "PH_pipeline/coverage/plot_histo_SR_{nom}.pdf"
+    threads:
+        1
+    shell:
+        """
+        bedtools genomecov -d -ibam {input.bam} \
+            -g {input.assembly} > {output.cov}
+        cut -f3 {output.cov} | sort | uniq -c | \
+            column -t | sort -k2 -n > {output.his}
+        cat {output.his} | plot_uniq_c.py -x 15 -X 400 -d
+        mv read_depth_histogram.pdf {output.pdf}
+        """
+
+rule PH_hist:
+    input:
+        bam = "PH_pipeline/bams/SR_to_{nom}.sorted.bam",
+        assembly = lambda wildcards: config["assemblies"][wildcards.nom]
+    output:
+        gc  = "PH_pipeline/PH_hist/SR_to_{nom}.sorted.bam.gencov",
+        pdf = "PH_pipeline/PH_hist/SR_to_{nom}.sorted.bam.histogram.png"
+    params:
+        gc  = lambda wildcards: "SR_to_{}.sorted.bam.gencov".format(wildcards.nom),
+        pdf = lambda wildcards: "SR_to_{}.sorted.bam.histogram.png".format(wildcards.nom)
+    threads:
+        10
+    shell:
+        """
+        purge_haplotigs hist -b {input.bam} \
+            -g {input.assembly} -t {threads} -d 500
+        mv {params.gc} {output.gc}
+        mv {params.pdf} {output.pdf}
+        """
+
+rule PH_cov:
+    input:
+        gc = "PH_pipeline/PH_hist/SR_to_{nom}.sorted.bam.gencov"
+    output:
+        csv = "PH_pipeline/PH_cov/{nom}_cov_stats.csv"
+    params:
+        low = config["low"],
+        medium = config["medium"],
+        high = config["high"]
+    threads:
+        1
+    shell:
+        """
+        purge_haplotigs  cov  -i {input.gc}  \
+               -l {params.low} -m {params.medium} -h {params.high} \
+               -o {output.csv} -j 80  -s 80
+        """
+
+rule PH_purge:
+    input:
+        assembly = lambda wildcards: config["assemblies"][wildcards.nom],
+        csv = "PH_pipeline/PH_cov/{nom}_cov_stats.csv",
+        bam = "PH_pipeline/bams/SR_to_{nom}.sorted.bam"
+    output:
+        assembly = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.fasta",
+        haplotigs = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.haplotigs.fasta"
+    params:
+        tempdir  = lambda wildcards: "temp_{}_{}".format(wildcards.nom, wildcards.CO),
+        cutoff   = lambda wildcards: wildcards.CO,
+        outdir   = lambda wildcards: "PH_pipeline/PH_purge/{0}_assemblies/PH_purge_{0}_CO{1}/".format(wildcards.nom, wildcards.CO),
+        mkdir1   = "PH_purge",
+        mkdir2   = lambda wildcards: "PH_pipeline/PH_purge/{0}_assemblies".format(wildcards.nom),
+        mv_these = lambda wildcards: "PH_pipeline/PH_purge_{}_CO{}".format(wildcards.nom, wildcards.CO)
+    threads:
+        maxthreads
+    shell:
+        """
+        rm -rf {params.tempdir}
+        mkdir {params.tempdir}
+        cd {params.tempdir}
+        purge_haplotigs purge -g {input.assembly} \
+               -c ../{input.csv} -t {threads} \
+               -d -b ../{input.bam} \
+               -a {params.cutoff} \
+               -o {params.mv_these}
+
+        if [ ! -d ../{params.mkdir1} ]
+        then
+            mkdir -p ../{params.mkdir1}
+        fi
+
+        if [ ! -d ../{params.mkdir2} ]
+        then
+            mkdir -p ../{params.mkdir2}
+        fi
+
+        if [ ! -d ../{params.outdir} ]
+        then
+            mkdir -p ../{params.outdir}
+        fi
+
+        mv {params.mv_these}* ../{params.outdir}
+        mv dotplots* ../{params.outdir}
+        cd ..
+        rm -rf {params.tempdir}
+        """
+
+rule PH_clip:
+    input:
+        assembly = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.fasta",
+        haplotigs = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.haplotigs.fasta"
+    output:
+        clip = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta"
+    params:
+        outdir   = lambda wildcards: "PH_pipeline/PH_purge/{0}_assemblies/PH_purge_{0}_CO{1}/".format(wildcards.nom, wildcards.CO),
+        mv_these = lambda wildcards: "PH_pipeline/PH_purge_{}_CO{}_clip".format(wildcards.nom, wildcards.CO)
+    threads:
+        maxthreads
+    shell:
+        """
+        purge_haplotigs clip  -p {input.assembly} \
+               -h {input.haplotigs} \
+               -o {params.mv_these}
+        mv {params.mv_these}* {params.outdir}
+        """
+
+rule map_SR_to_purged:
+    input:
+        SHOTF = config["shot_f"],
+        SHOTR = config["shot_r"],
+        assembly = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta"
+    output:
+        bam = temp("PH_pipeline/bams/clipped/SR_to_{nom}_CO{CO}_clip.sorted.bam")
+    threads:
+        maxthreads
+    shell:
+        """
+        bwa index {input.assembly}
+        bwa mem -t {threads} {input.assembly} {input.SHOTF} {input.SHOTR} | \
+            samtools view -hb -@ {threads} - | \
+            samtools sort -@ {threads} - > {output.bam}
+        """
+
+rule flagstat_mapped_after_purge:
+    input:
+        bam = "PH_pipeline/bams/clipped/SR_to_{nom}_CO{CO}_clip.sorted.bam"
+    output:
+        flagstat_info = "PH_pipeline/after_PH/{nom}_CO{CO}_SR.flagstat"
+    threads:
+        1
+    shell:
+        """
+        samtools flagstat {input.bam} > {output.flagstat_info}
+        """
+
+rule percent_of_data_mapping_after_purge:
+    input:
+        bam = "PH_pipeline/bams/clipped/SR_to_{nom}_CO{CO}_clip.sorted.bam",
+        txt = "PH_pipeline/data_output/SR_read_id_and_length.txt"
+    output:
+        per_map = "PH_pipeline/after_PH/{nom}_CO{CO}_SR.permap.txt"
+    threads:
+        1
+    run:
+        transcript_to_len = {}
+        added = set()
+        tot_mapped = 0
+        num_reads = 0
+        tot_size = 0
+        print("reading in the thing")
+        with open(input.txt, "r") as f:
+            for line in f:
+                if line.strip():
+                    splitd = line.split()
+                    transcript_to_len[splitd[0]] = int(splitd[1])
+                    tot_size += int(splitd[1])
+                    num_reads += 1
+        print("done reading in the thing")
+        command = "samtools view -F 4 {} | cut -f1".format(input.bam)
+        #command = "cat temp.sam"
+
+        #print("command is: ", command)
+        #sys.exit()
+        process = Popen(command, stdout=PIPE, shell=True)
+        blank_counter = 0
+        while True:
+            line = process.stdout.readline().rstrip().decode("utf-8").strip()
+            if (len(added) % 1000) == 0:
+               sys.stdout.write("  {0:.3f}% Done. {1:.3f}% of data mapped.\r".format(
+                                100 * (len(added)/num_reads),
+                                100 * (tot_mapped/tot_size)))
+               sys.stdout.flush()
+            if not line.strip():
+                blank_counter += 1
+                if blank_counter > 99999:
+                    break
+            else:
+                if line not in added:
+                    added.add(line)
+                    tot_mapped += transcript_to_len[line]
+
+        with open(output.per_map, "w") as f:
+            print("Number of bases mapped: {}".format(tot_mapped), file=f)
+            print("Number of bases total: {}".format(tot_size), file=f)
+            print("{0:.4}%".format(100* (tot_mapped/tot_size)), file=f)
+            print("", file=f)
+            print("Number of reads mapped: {}".format(len(added)), file=f)
+            print("Number of reads total: {}".format(num_reads), file=f)
+            print("{0:.4}%".format(100* (len(added)/num_reads)), file=f)
+
+rule cov_histo_check_after_purge:
+    """
+    just checks the average coverage of the bam files before running
+     purge haplotigs
+    """
+    input:
+        bam = "PH_pipeline/bams/clipped/SR_to_{nom}_CO{CO}_clip.sorted.bam",
+        assembly = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta"
+    output:
+        cov = "PH_pipeline/coverage_after_clip/SR_{nom}_CO{CO}.cov",
+        his = "PH_pipeline/coverage_after_clip/histo_SR_{nom}_CO{CO}.histo",
+        pdf = "PH_pipeline/coverage_after_clip/plot_histo_SR_{nom}_CO{CO}.pdf"
+    threads:
+        1
+    shell:
+        """
+        bedtools genomecov -d -ibam {input.bam} \
+            -g {input.assembly} > {output.cov}
+        cut -f3 {output.cov} | sort | uniq -c | \
+            column -t | sort -k2 -n > {output.his}
+        cat {output.his} | plot_uniq_c.py -x 15 -X 400 -d
+        mv read_depth_histogram.pdf {output.pdf}
+        """
+
+rule make_genome_stats_table:
+    """
+    makes a table of all the relevant genome stats
+    """
+    input:
+        assembly = expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta", nom=config["assemblies"], CO=[90, 80, 70]),
+        per_before = expand("PH_pipeline/before_PH/{nom}_SR.permap.txt", nom=config["assemblies"], CO=[90, 80, 70]),
+        per_map = expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.permap.txt", nom=config["assemblies"], CO=[90, 80, 70]),
+        flagstat_before = expand("PH_pipeline/before_PH/{nom}_SR.flagstat", nom=config["assemblies"], CO=[90, 80, 70]),
+        flagstat_info = expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.flagstat", nom=config["assemblies"], CO=[90, 80, 70])
+
+    output:
+        results_table = "PH_pipeline/final_results/final_results.tsv"
+    run:
+        all_samples = []
+        for nom in config["assemblies"]:
+            for CO in [90, 80, 70]:
+                tfile = "PH_purge/{0}_assemblies/PH_purge_{0}_CO{1}/PH_purge_{0}_CO{1}_clip.fasta".format(nom, CO)
+                this_dict = {}
+                this_dict["assem_file"] = tfile
+                this_dict["PH_CO"] = CO
+                this_dict["name"] = nom
+                # get the NCBI info first
+                # now get the other assembly info from fasta_stats
+                fstats_dict = run_fasta_stats(tfile)
+                z1 = {**this_dict, **fstats_dict}
+
+                # BEFORE PURGE HAPLOTIGS
+                # get the flagstat info
+                fstat_file = "before_PH/{0}_SR.flagstat".format(nom)
+                z1["before_flagstat_pMap"] = parse_flagstat(fstat_file)
+                #get the manually calculated percent that maps (bases and reads)
+                pmap_file = "before_PH/{0}_SR.permap.txt".format(nom)
+                results = parse_permap(pmap_file)
+                z1["before_manual_pBMap"] = results[0]
+                z1["before_manual_pMap"] = results[1]
+
+                # AFTER PURGE HAPLOTIGS
+                # get the flagstat info
+                fstat_file = "after_PH/{0}_CO{1}_SR.flagstat".format(nom, CO)
+                z1["after_flagstat_pMap"] = parse_flagstat(fstat_file)
+                #get the manually calculated percent that maps (bases and reads)
+                pmap_file = "after_PH/{0}_CO{1}_SR.permap.txt".format(nom, CO)
+                results = parse_permap(pmap_file)
+                z1["after_manual_pBMap"] = results[0]
+                z1["after_manual_pMap"] = results[1]
+
+                # DIFFERENCE
+                z1["before_minus_after_flagstat_pMap"] = z1["before_flagstat_pMap"] - z1["after_flagstat_pMap"]
+                z1["before_minus_after_manual_pBMap"]  = z1["before_manual_pBMap"] - z1["after_manual_pBMap"]
+                z1["before_minus_after_manual_pMap"]   = z1["before_manual_pMap"] - z1["after_manual_pMap"]
+                all_samples.append(z1)
+                time.sleep(1)
+        # now make a df with all the results
+        df = pd.DataFrame(all_samples)
+        df.to_csv(output.results_table, sep='\t', index=False)
