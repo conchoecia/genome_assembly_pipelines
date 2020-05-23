@@ -9,6 +9,7 @@ After purging haplotigs it clips the overlapping ends of the genome assembly.
 Lastly, it characterizes the resulting assemblies and makes a table for the user to look at
  to select the best assemblies.
 """
+
 from subprocess import Popen, PIPE
 import os
 import pandas as pd
@@ -298,7 +299,7 @@ rule PH_purge:
         tempdir  = lambda wildcards: "temp_{}_{}".format(wildcards.nom, wildcards.CO),
         cutoff   = lambda wildcards: wildcards.CO,
         outdir   = lambda wildcards: "PH_pipeline/PH_purge/{0}_assemblies/PH_purge_{0}_CO{1}/".format(wildcards.nom, wildcards.CO),
-        mkdir1   = "PH_purge",
+        mkdir1   = "PH_pipeline/PH_purge",
         mkdir2   = lambda wildcards: "PH_pipeline/PH_purge/{0}_assemblies".format(wildcards.nom),
         mv_these = lambda wildcards: "PH_pipeline/PH_purge_{}_CO{}".format(wildcards.nom, wildcards.CO)
     threads:
