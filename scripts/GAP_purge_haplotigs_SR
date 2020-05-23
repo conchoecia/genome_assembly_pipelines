@@ -272,6 +272,15 @@ rule PH_cov:
         1
     shell:
         """
+        if [[ {params.low} -eq -1 ]]; then
+            exit 1
+        fi
+        if [[ {params.medium} -eq -1 ]]; then
+            exit 1
+        fi
+        if [[ {params.high} -eq -1 ]]; then
+            exit 1
+        fi
         purge_haplotigs  cov  -i {input.gc}  \
                -l {params.low} -m {params.medium} -h {params.high} \
                -o {output.csv} -j 80  -s 80
