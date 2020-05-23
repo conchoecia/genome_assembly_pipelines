@@ -1,0 +1,26 @@
+# Put all the assemblies to run through the Purge Haplotigs pipeline here
+assemblies:
+   masurca: "/path/to/masurca/assembly.fa"
+   canu: "/path/to/canu/assembly.fa"
+   wtdbg2: "/a/different/path/to/wtdbg2/assembly"
+   custom: "/path/to/a/custom/assembly.fa"
+
+# Just the path to the shotgun reads. Right now the pipeline only
+#  supports one pair of paired WGS files.
+shot_f: "/bigdata/user/darrin/tjalfie/reads/shot/Tj_shot_f.fq.gz"
+shot_r: "/bigdata/user/darrin/tjalfie/reads/shot/Tj_shot_r.fq.gz"
+
+# To set these parameters you need to generate the histogram from the bam file.
+#  [Look at the instructions here for how to pick low, med, and high](https://bitbucket.org/mroachawri/purge_haplotigs/src/master/)
+#
+#  There is an example photo here: https://bitbucket-assetroot.s3.amazonaws.com/repository/Ej8Mz7/84978409-phased_coverage_histogram.png?AWSAccessKeyId=AKIA6KOSE3BNJRRFUUX6&Expires=1590201948&Signature=PihHmYMpBqCIi6Vc9axC7ag914A%3D
+#
+#  And another example photo here: https://bitbucket-assetroot.s3.amazonaws.com/repository/Ej8Mz7/1039246939-coverage_histogram.png?AWSAccessKeyId=AKIA6KOSE3BNJRRFUUX6&Expires=1590202035&Signature=1WiFVJibktV1gwm7f14GSIorA4Q%3D
+#
+#  Keep these parameters at -1 until you actually know what they are from the plot.
+#   Snakemake will crash once and give you a chance to look at the png output file.
+#   Picks the parameters from the png histogram and edit this file. Then run
+#   snakemake again. The pipeline should run to completeion now.
+low: -1
+medium: -1
+high: -1
