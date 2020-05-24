@@ -1,0 +1,75 @@
+"""
+This pipeline runs through many parameters for wtdbg2
+  to try to find the best assembly
+"""
+config["READS"] = "/bigdata/raw/genomic_reads/PacBio/Tjal_reads/final_fastq/Tjal_subreads_final.nomito.fasta.gz"
+
+A_param = ["-A", "None"]
+e_param = [1,2,3]
+g_param = ["127m"]
+k_param = [0]
+L_param = [1000, 5000]
+p_param = [0, 15, 17, 19]
+R_param = ["-R", "None"]
+S_param = [2]
+s_param = [0.05]
+X_param = [50, 200]
+
+rule all:
+    input:
+        expand("assem_logs/params{A}_e{e}_g{g}_k{k}_L{L}_p{p}_R{R}_S{S}_s{s}_X{X}.SMlog", A = A_param,
+               e = e_param,
+               g = g_param,
+               k = k_param,
+               L = L_param,
+               p = p_param,
+               R = R_param,
+               S = S_param,
+               s = s_param,
+               X = X_param)
+
+rule assemble:
+    input:
+        reads = config["READS"]
+    output:
+        outfile = "assem_logs/params{A}_e{e}_g{g}_k{k}_L{L}_p{p}_R{R}_S{S}_s{s}_X{X}.SMlog"
+    params:
+        prefix = lambda wildcards: "params{A}_e{e}_g{g}_k{k}_L{L}_p{p}_R{R}_S{S}_s{s}_X{X}".format(
+            A = wildcards.A,
+            e = wildcards.e,
+            g = wildcards.g,
+            k = wildcards.k,
+            L = wildcards.L,
+            p = wildcards.p,
+            R = wildcards.R,
+            S = wildcards.S,
+            s = wildcards.s,
+            X = wildcards.X),
+        A = lambda wildcards: wildcards.A if wildcards.A != "None" else "",
+        e = lambda wildcards: wildcards.e,
+        g = lambda wildcards: wildcards.g,
+        k = lambda wildcards: wildcards.k,
+        L = lambda wildcards: wildcards.L,
+        p = lambda wildcards: wildcards.p,
+        R = lambda wildcards: wildcards.R if wildcards.R != "None" else "",
+        S = lambda wildcards: wildcards.S,
+        s = lambda wildcards: wildcards.s,
+        X = lambda wildcards: wildcards.X
+    threads: workflow.cores
+    shell:
+        """
+        if (( {params.k} + {params.p} <= 25 ))
+        then
+            wtdbg2 {params.A} -e {params.e} \
+               -g {params.g} -k {params.k} -L {params.L} \
+               -p {params.p} {params.R} \
+               -S {params.S} -s {params.s} \
+               -X {params.X} \
+               -i {input.reads} \
+               -t {threads} -fo {params.prefix} 2>&1 | tee temp.SMlog
+        else
+            echo 'Nothing' > temp.SMlog
+        fi
+        rm -f {params.prefix}*
+        mv temp.SMlog assem_logs/{params.prefix}.SMlog
+        """
