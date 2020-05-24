@@ -1,6 +1,6 @@
 """
 - This script runs SALSA2 using proximity ligation data.
-  - It also outputs a report of the genome quality before and after
+ - It also outputs a report of the genome quality before and after
     scaffolding.
 """
 
@@ -110,13 +110,14 @@ rule SALSA_salsa:
         fai = "GAP_salsa/input/{nom}_salsa_input.fasta.fai",
         bed = "GAP_salsa/input/bed/{nom}_alignment.bed"
     output:
+        cleaned = "GAP_salsa/output/{nom}/assembly.cleaned.fasta",
         final = "GAP_salsa/output/{nom}/scaffolds_FINAL.fasta"
     params:
         out = lambda w: "GAP_salsa/output/{}".format(w.nom),
         rest_site = config["junctions"]
     shell:
         """
-        python {input.salsa} \
+        python2 {input.salsa} \
           -a {input.assem} \
           -l {input.fai} \
           -b {input.bed} \

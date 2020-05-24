@@ -12,6 +12,7 @@ bin/fasta_stats: ${FSD}fasta_stats.cc ${FSD}itoa.cc ${FSD}open_compressed.h
 dependencies/SALSA/run_pipeline.py:
 	mkdir -p dependencies
 	cd dependencies; git clone https://github.com/marbl/SALSA.git
+	for file in dependencies/SALSA/*.py; do sed -i '1s;^;#!/usr/bin/python2\n;' $${file}; done
 
 dependencies/SALSA/break_contigs_start: dependencies/SALSA/run_pipeline.py
 	cd dependencies/SALSA; make
