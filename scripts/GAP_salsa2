@@ -1,0 +1,125 @@
+"""
+- This script runs SALSA2 using proximity ligation data.
+  - It also outputs a report of the genome quality before and after
+    scaffolding.
+"""
+
+configfile: "config.yaml"
+
+import sys
+
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+salsa_path=os.path.join(filepath, "../dependencies/SALSA/run_pipeline.py")
+
+rule all:
+    input:
+        # run salsa 1
+        expand("GAP_salsa/output/{nom}/scaffolds_FINAL.fasta", nom = config["assemblies"])
+
+
+rule SALSA_index:
+    """
+    here, restriction site is lower case in params
+    the input is from pilon2 after nanopolish
+    """
+    input:
+        assembly = lambda wildcards: config["assemblies"][wildcards.nom],
+    output:
+        assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
+        amb =   "GAP_salsa/input/{nom}_salsa_input.fasta.amb",
+        ann =   "GAP_salsa/input/{nom}_salsa_input.fasta.ann",
+        bwt =   "GAP_salsa/input/{nom}_salsa_input.fasta.bwt",
+        pac =   "GAP_salsa/input/{nom}_salsa_input.fasta.pac",
+    threads:
+        1
+    shell:
+        """
+        ln -s {input.assembly} {output.assem}
+        bwa index -a is {output.assem}
+        """
+
+rule SALSA_map:
+    """
+    Still not sure if this is is OK with the -5SPM
+    """
+    input:
+        assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
+        amb =   "GAP_salsa/input/{nom}_salsa_input.fasta.amb",
+        ann =   "GAP_salsa/input/{nom}_salsa_input.fasta.ann",
+        bwt =   "GAP_salsa/input/{nom}_salsa_input.fasta.bwt",
+        pac =   "GAP_salsa/input/{nom}_salsa_input.fasta.pac",
+        f   = lambda wildcards: config["libraries"][wildcards.lib]["read1"],
+        r   = lambda wildcards: config["libraries"][wildcards.lib]["read2"]
+    output:
+        bam = temp("GAP_salsa/input/bams/{nom}_{lib}.sorted.bam"),
+    threads:
+        workflow.cores
+    shell:
+        """
+        bwa mem -5SPM -t {threads} {input.assem} \
+                 {input.f} {input.r} | \
+                 samtools view -hb -@ {threads} - | \
+                 samtools sort -@ {threads} - > {output.bam}
+        """
+
+rule merge_bams:
+    input:
+        bams = expand("GAP_salsa/input/bams/{{nom}}_{lib}.sorted.bam",
+                      lib = config["libraries"])
+    output:
+        bam = "GAP_salsa/input/bams/{nom}_all_libs.sorted.bam"
+    threads: 1
+    shell:
+        """
+        samtools merge {output.bam} {input.bams}
+        """
+
+rule SALSA_bed:
+    input:
+        bam = "GAP_salsa/input/bams/{nom}_all_libs.sorted.bam"
+    output:
+        bed = "GAP_salsa/input/bed/{nom}_alignment.bed"
+    threads:
+        1
+    shell:
+        """
+        bamToBed -i {input.bam} | \
+        sort -k 4 > {output.bed}
+        """
+
+rule SALSA_faidx:
+    input:
+        assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
+    output:
+        fai = "GAP_salsa/input/{nom}_salsa_input.fasta.fai",
+    threads:
+        1
+    shell:
+        """
+        samtools faidx {input.assem}
+        """
+
+rule SALSA_salsa:
+    """
+    in this case, the rest_site in params is all-caps. This is the param fed to
+      salsa to tell it the restriction site.
+    """
+    input:
+        salsa = salsa_path,
+        assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
+        fai = "GAP_salsa/input/{nom}_salsa_input.fasta.fai",
+        bed = "GAP_salsa/input/bed/{nom}_alignment.bed"
+    output:
+        final = "GAP_salsa/output/{nom}/scaffolds_FINAL.fasta"
+    params:
+        out = lambda w: "GAP_salsa/output/{}".format(w.nom),
+        rest_site = config["junctions"]
+    shell:
+        """
+        python {input.salsa} \
+          -a {input.assem} \
+          -l {input.fai} \
+          -b {input.bed} \
+          -e {params.rest_site} \
+          -o {params.out}
+        """
