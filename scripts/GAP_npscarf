@@ -3,6 +3,7 @@ After removing haplotigs it is possible to join the ends using long reads.
 npScarf does this. This software joins contigs with npScarf then outputs a QC report.
 """
 from subprocess import Popen, PIPE
+from functions import run_fasta_stats, parse_flagstat, parse_permap
 import pandas as pd
 import subprocess
 import sys
