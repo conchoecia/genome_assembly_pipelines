@@ -1,8 +1,10 @@
 """
 these are functions that are common to several pipelines
 """
+import os
 from subprocess import Popen, PIPE
 import subprocess
+import sys
 
 def percent_of_data_mapping(bam, read_id_length, output_txt):
     """
@@ -55,6 +57,9 @@ def run_fasta_stats(fpath):
     """
     This runs fasta_stats on an assembly and returns a dictionary of the values.
     """
+    filepath = os.path.dirname(os.path.realpath(__file__))
+    fs_path=os.path.join(filepath, "../bin/fasta_stats")
+
     this_data = {}
     # This version is if you want N95_scaflen. Not a good idea for bad assemblies.
     #new_fields = ["num_scaffolds", "num_tigs", "tot_size_scaffolds",
