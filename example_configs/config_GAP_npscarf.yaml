@@ -1,0 +1,5 @@
+assemblies:
+  assembly_file1: "/path/to/assembly/file1.fasta"
+  assembly_file2: "/path/to/assembly/file2.fasta"
+
+long_reads: "/the/long/reads/are/here.fasta.gz"
