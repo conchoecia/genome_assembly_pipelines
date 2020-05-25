@@ -3,11 +3,13 @@ This pipeline polishes the genomes using short reads and pilon.
 """
 
 configfile: "config.yaml"
-maxthreads = 90
+
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+pilon_path=os.path.join(filepath, "../bin/pilon-1.23.jar")
 
 rule all:
     input:
-        expand("assemblies/pilon/output/{nom}_pilon_output.fasta", nom=config["assemblies"]),
+        expand("GAP_polish_SR/output/{nom}_pilon_output.fasta", nom=config["assemblies"]),
 
 rule pilon_index:
     """
@@ -16,13 +18,11 @@ rule pilon_index:
     input:
         assem = lambda wildcards: config["assemblies"][wildcards.nom]
     output:
-        assem = "assemblies/pilon/input/{nom}_pilon_input.fasta",
-        amb   = "assemblies/pilon/input/{nom}_pilon_input.fasta.amb",
-        ann   = "assemblies/pilon/input/{nom}_pilon_input.fasta.ann",
-        bwt   = "assemblies/pilon/input/{nom}_pilon_input.fasta.bwt",
-        pac   = "assemblies/pilon/input/{nom}_pilon_input.fasta.pac",
-    params:
-        pilonround = 1
+        assem = "GAP_polish_SR/input/{nom}_pilon_input.fasta",
+        amb   = "GAP_polish_SR/input/{nom}_pilon_input.fasta.amb",
+        ann   = "GAP_polish_SR/input/{nom}_pilon_input.fasta.ann",
+        bwt   = "GAP_polish_SR/input/{nom}_pilon_input.fasta.bwt",
+        pac   = "GAP_polish_SR/input/{nom}_pilon_input.fasta.pac",
     threads:
         1
     shell:
@@ -33,19 +33,17 @@ rule pilon_index:
 
 rule pilon_map:
     input:
-        assem = "assemblies/pilon/input/{nom}_pilon_input.fasta",
-        amb   = "assemblies/pilon/input/{nom}_pilon_input.fasta.amb",
-        ann   = "assemblies/pilon/input/{nom}_pilon_input.fasta.ann",
-        bwt   = "assemblies/pilon/input/{nom}_pilon_input.fasta.bwt",
-        pac   = "assemblies/pilon/input/{nom}_pilon_input.fasta.pac",
+        assem = "GAP_polish_SR/input/{nom}_pilon_input.fasta",
+        amb   = "GAP_polish_SR/input/{nom}_pilon_input.fasta.amb",
+        ann   = "GAP_polish_SR/input/{nom}_pilon_input.fasta.ann",
+        bwt   = "GAP_polish_SR/input/{nom}_pilon_input.fasta.bwt",
+        pac   = "GAP_polish_SR/input/{nom}_pilon_input.fasta.pac",
         shotf = config["shotf"],
         shotr = config["shotr"],
     output:
-        bam = "bams/pilon/shot_to_{nom}_pilon_input.sorted.bam",
+        bam = "GAP_polish_SR/input/bams/shot_to_{nom}_pilon_input.sorted.bam",
     threads:
-        maxthreads
-    params:
-        pilonround = 1
+        workflow.cores
     shell:
         """
         bwa mem -t {threads} {input.assem} \
@@ -56,9 +54,9 @@ rule pilon_map:
 
 rule pilon_indexbam:
     input:
-        bam = "bams/pilon/shot_to_{nom}_pilon_input.sorted.bam",
+        bam = "GAP_polish_SR/input/bams/shot_to_{nom}_pilon_input.sorted.bam",
     output:
-        bai = "bams/pilon/shot_to_{nom}_pilon_input.sorted.bam.bai",
+        bai = "GAP_polish_SR/input/bams/shot_to_{nom}_pilon_input.sorted.bam.bai",
     threads:
         1
     shell:
@@ -68,22 +66,24 @@ rule pilon_indexbam:
 
 rule pilon_piloncorrect:
     input:
-        assem = "assemblies/pilon/input/{nom}_pilon_input.fasta",
-        bam = "bams/pilon/shot_to_{nom}_pilon_input.sorted.bam",
-        bai = "bams/pilon/shot_to_{nom}_pilon_input.sorted.bam.bai",
-        pilon = config["pilonpath"]
+        assem = "GAP_polish_SR/input/{nom}_pilon_input.fasta",
+        bam   = "GAP_polish_SR/input/bams/shot_to_{nom}_pilon_input.sorted.bam",
+        bai   = "GAP_polish_SR/input/bams/shot_to_{nom}_pilon_input.sorted.bam.bai",
+        pilon = pilon_path
     output:
-        assem = "assemblies/pilon/output/{nom}_pilon_output.fasta"
-    threads:
-        maxthreads
+        assem = "GAP_polish_SR/output/{nom}_pilon_output.fasta"
     params:
-        pilonround = 1
+        outdir     = "GAP_polish_SR/output/",
+        out_prefix = lambda wildcards: "{}_pilon_output".format(wildcards.nom),
+        sed_path   = lambda wildcards: "GAP_polish_SR/output/{}_pilon_output.fasta".format(wildcards.nom)
+    threads:
+        workflow.cores
     shell:
         """
         java -Xmx100G -jar {input.pilon} --genome {input.assem} \
                  --frags {input.bam} \
-                 --outdir assemblies/pilon{params.pilonround}/output/ \
-                 --output {wildcards.nom}_pilon{params.pilonround}_output \
+                 --outdir {params.outdir} \
+                 --output {params.out_prefix} \
                  --threads {threads}
-        sed -i 's/_pilon//g' assemblies/pilon{params.pilonround}/output/{wildcards.nom}_pilon{params.pilonround}_output.fasta
+        sed -i 's/_pilon//g' {params.sed_path}
         """
