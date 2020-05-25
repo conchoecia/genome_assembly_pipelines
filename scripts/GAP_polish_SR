@@ -1,5 +1,5 @@
 """
-This pipeline polishes the genomes
+This pipeline polishes the genomes using short reads and pilon.
 """
 
 configfile: "config.yaml"
@@ -7,20 +7,20 @@ maxthreads = 90
 
 rule all:
     input:
-        expand("assemblies/pilon1/output/{nom}_pilon1_output.fasta", nom=config["assemblies"]),
+        expand("assemblies/pilon/output/{nom}_pilon_output.fasta", nom=config["assemblies"]),
 
-rule pilon1_index:
+rule pilon_index:
     """
-    pilon1 is the last step
+    pilon is the last step
     """
     input:
         assem = lambda wildcards: config["assemblies"][wildcards.nom]
     output:
-        assem = "assemblies/pilon1/input/{nom}_pilon1_input.fasta",
-        amb   = "assemblies/pilon1/input/{nom}_pilon1_input.fasta.amb",
-        ann   = "assemblies/pilon1/input/{nom}_pilon1_input.fasta.ann",
-        bwt   = "assemblies/pilon1/input/{nom}_pilon1_input.fasta.bwt",
-        pac   = "assemblies/pilon1/input/{nom}_pilon1_input.fasta.pac",
+        assem = "assemblies/pilon/input/{nom}_pilon_input.fasta",
+        amb   = "assemblies/pilon/input/{nom}_pilon_input.fasta.amb",
+        ann   = "assemblies/pilon/input/{nom}_pilon_input.fasta.ann",
+        bwt   = "assemblies/pilon/input/{nom}_pilon_input.fasta.bwt",
+        pac   = "assemblies/pilon/input/{nom}_pilon_input.fasta.pac",
     params:
         pilonround = 1
     threads:
@@ -31,17 +31,17 @@ rule pilon1_index:
         bwa index -a is {output.assem}
         """
 
-rule pilon1_map:
+rule pilon_map:
     input:
-        assem = "assemblies/pilon1/input/{nom}_pilon1_input.fasta",
-        amb   = "assemblies/pilon1/input/{nom}_pilon1_input.fasta.amb",
-        ann   = "assemblies/pilon1/input/{nom}_pilon1_input.fasta.ann",
-        bwt   = "assemblies/pilon1/input/{nom}_pilon1_input.fasta.bwt",
-        pac   = "assemblies/pilon1/input/{nom}_pilon1_input.fasta.pac",
+        assem = "assemblies/pilon/input/{nom}_pilon_input.fasta",
+        amb   = "assemblies/pilon/input/{nom}_pilon_input.fasta.amb",
+        ann   = "assemblies/pilon/input/{nom}_pilon_input.fasta.ann",
+        bwt   = "assemblies/pilon/input/{nom}_pilon_input.fasta.bwt",
+        pac   = "assemblies/pilon/input/{nom}_pilon_input.fasta.pac",
         shotf = config["shotf"],
         shotr = config["shotr"],
     output:
-        bam = "bams/pilon1/shot_to_{nom}_pilon1_input.sorted.bam",
+        bam = "bams/pilon/shot_to_{nom}_pilon_input.sorted.bam",
     threads:
         maxthreads
     params:
@@ -54,11 +54,11 @@ rule pilon1_map:
                  samtools sort -@ {threads} - > {output.bam}
         """
 
-rule pilon1_indexbam:
+rule pilon_indexbam:
     input:
-        bam = "bams/pilon1/shot_to_{nom}_pilon1_input.sorted.bam",
+        bam = "bams/pilon/shot_to_{nom}_pilon_input.sorted.bam",
     output:
-        bai = "bams/pilon1/shot_to_{nom}_pilon1_input.sorted.bam.bai",
+        bai = "bams/pilon/shot_to_{nom}_pilon_input.sorted.bam.bai",
     threads:
         1
     shell:
@@ -66,14 +66,14 @@ rule pilon1_indexbam:
         samtools index {input.bam}
         """
 
-rule pilon1_piloncorrect:
+rule pilon_piloncorrect:
     input:
-        assem = "assemblies/pilon1/input/{nom}_pilon1_input.fasta",
-        bam = "bams/pilon1/shot_to_{nom}_pilon1_input.sorted.bam",
-        bai = "bams/pilon1/shot_to_{nom}_pilon1_input.sorted.bam.bai",
+        assem = "assemblies/pilon/input/{nom}_pilon_input.fasta",
+        bam = "bams/pilon/shot_to_{nom}_pilon_input.sorted.bam",
+        bai = "bams/pilon/shot_to_{nom}_pilon_input.sorted.bam.bai",
         pilon = config["pilonpath"]
     output:
-        assem = "assemblies/pilon1/output/{nom}_pilon1_output.fasta"
+        assem = "assemblies/pilon/output/{nom}_pilon_output.fasta"
     threads:
         maxthreads
     params:
