@@ -16,6 +16,28 @@ rule all:
         # run salsa 1
         expand("GAP_salsa/output/{nom}/scaffolds_FINAL.fasta", nom = config["assemblies"])
 
+rule clean_assembly:
+    """
+    salsa doesn't like input fasta files that have the : character in the header
+    """
+    input:
+        assembly = lambda wildcards: config["assemblies"][wildcards.nom],
+    output:
+        assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
+    threads: 1
+    run:
+        out_handle = open(output.assem, "w")
+        new_counter = 1
+        with open(input.assembly, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    if line[0] == ">":
+                        print(">salsainput{}".format(new_counter), file=out_handle)
+                        new_counter += 1
+                    else:
+                        print(line, file = out_handle)
+        out_handle.close()
 
 rule SALSA_index:
     """
@@ -23,9 +45,8 @@ rule SALSA_index:
     the input is from pilon2 after nanopolish
     """
     input:
-        assembly = lambda wildcards: config["assemblies"][wildcards.nom],
-    output:
         assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
+    output:
         amb =   "GAP_salsa/input/{nom}_salsa_input.fasta.amb",
         ann =   "GAP_salsa/input/{nom}_salsa_input.fasta.ann",
         bwt =   "GAP_salsa/input/{nom}_salsa_input.fasta.bwt",
@@ -34,8 +55,7 @@ rule SALSA_index:
         1
     shell:
         """
-        ln -s {input.assembly} {output.assem}
-        bwa index -a is {output.assem}
+        bwa index -a is {input.assem}
         """
 
 rule SALSA_map:
@@ -117,10 +137,14 @@ rule SALSA_salsa:
         rest_site = config["junctions"]
     shell:
         """
+        set +eu
+        source activate py27
         python2 {input.salsa} \
           -a {input.assem} \
           -l {input.fai} \
           -b {input.bed} \
           -e {params.rest_site} \
           -o {params.out}
+        conda deactivate
+        set -eu
         """
