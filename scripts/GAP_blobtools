@@ -26,7 +26,7 @@ rule getdiamondhits:
         """
         diamond blastx \
           --query {input.assembly} \
-          --db {output.dmnd_out} \
+          --db {input.db} \
           --outfmt 6 \
           --sensitive \
           --max-target-seqs 1 \
