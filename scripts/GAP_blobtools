@@ -1,0 +1,76 @@
+"""
+This snakefile runs blobtools.
+"""
+configfile: "config.yaml"
+config["tool"] = "GAP_blobtools"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png",
+               nom = config["assemblies"])
+
+# this bit makes softlinks of the assemblies and maps the short reads
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+SR_link_and_map=os.path.join(filepath, "snakemake_includes/SR_map_to_input")
+include: SR_link_and_map
+
+rule getdiamondhits:
+    input:
+        db = config["diamond_db"],
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        dmnd_out = config["tool"] + "/input/dmnd/{nom}_dmnd.out"
+    threads:
+        workflow.cores
+    shell:
+        """
+        diamond blastx \
+          --query {input.assembly} \
+          --db {output.dmnd_out} \
+          --outfmt 6 \
+          --sensitive \
+          --max-target-seqs 1 \
+          --threads {threads} \
+          --out {output.dmnd_out}
+        """
+
+rule blobtools_create:
+    input:
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        bam = config["tool"] + "/input/bams/SR_to_{nom}_input.sorted.bam",
+        bai = config["tool"] + "/input/bams/SR_to_{nom}_input.sorted.bam.bai",
+        dmnd = config["tool"] + "/input/dmnd/{nom}_dmnd.out"
+    output:
+        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
+    params:
+        blob_prefix  = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools"
+    shell:
+        """
+        blobtools create \
+           -i {input.assembly} \
+           -b {input.bam} \
+           -t {input.dmnd} \
+           -o {params.blob_prefix}
+        """
+
+rule blobtools_view_and_plot:
+    input:
+        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
+    output:
+        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png"
+    threads: 1
+    shell:
+        """
+        blobtools view -i {input.blob_results}
+        blobtools plot -i {input.blob_results}
+        """
+
+#blastn \
+# -task megablast \
+# -query "${ASSEMBLY}" \
+# -db "${BLASTDIR}/nt" \
+# -outfmt '6 qseqid staxids bitscore std' \
+# -max_target_seqs 10 \
+# -max_hsps 1 \
+# -num_threads "${THREADS}" \
+# -evalue 1e-5 > assem_to_nt.txt
