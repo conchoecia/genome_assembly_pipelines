@@ -1,0 +1,122 @@
+"""
+This snakefile takes an input fasta file,
+  sorts the scaffolds from longest to shortest,
+  then outputs a new fasta file with all of those
+  scaffolds renamed sca1, sca2, ... scaN
+"""
+import subprocess
+configfile: "config.yaml"
+config["tool"] = "GAP_reorder_assembly"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/assembly/{nom}_output.fasta",
+               nom=config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule make_a_renamed_file:
+    """
+    The fasta headers might have some weird characters, so just make a temp
+    assembly that we will rename
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    output:
+        assem = temp(config["tool"] + "/input/assembly/{nom}_input.renamed.fasta"),
+    threads: 1
+    run:
+        scaf_counter = 1
+        output_handle = open(output.assem, "w")
+        with open(input.assem, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    if line[0] == ">":
+                        print(">sca{}".format(scaf_counter),
+                              file = output_handle)
+                        scaf_counter += 1
+                    else:
+                        print(line, file = output_handle)
+        output_handle.close()
+
+rule fai_index_assemblies:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.renamed.fasta",
+    output:
+        fai = temp(config["tool"] + "/input/assembly/{nom}_input.renamed.fasta.fai")
+    shell:
+        """
+        samtools faidx {input.assem}
+        """
+
+rule get_sort_list:
+    """
+    sort the fai file to figure out the longest scaffolds
+    """
+    input:
+        fai = config["tool"] + "/input/assembly/{nom}_input.renamed.fasta.fai"
+    output:
+        sort_list = temp(config["tool"] + "/input/sort_list/{nom}_sort_list.txt")
+    threads: 1
+    shell:
+        """
+        sort -k2 -nr {input.fai} | cut -f1,2 > {output.sort_list}
+        """
+
+rule reorder_fasta:
+    """
+    this reorders the fasta files based on the length
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.renamed.fasta",
+        fai = config["tool"] + "/input/assembly/{nom}_input.renamed.fasta.fai",
+        sort_list = config["tool"] + "/input/sort_list/{nom}_sort_list.txt"
+    output:
+        assem = temp(config["tool"] + "/output/assembly/{nom}_output.temp.fasta")
+    threads: 1
+    run:
+        first = True
+        with open(input.sort_list, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    scaf   = line.split()[0]
+                    length = line.split()[1]
+                    if first:
+                        this_cmd = "samtools faidx {} {}:1-{} > {}".format(input.assem, scaf, length, output.assem)
+                        subprocess.run(this_cmd, shell = True)
+                        first = False
+                    else:
+                        this_cmd = "samtools faidx {} {}:1-{} >> {}".format(input.assem, scaf, length, output.assem)
+                        subprocess.run(this_cmd, shell = True)
+
+rule rename_the_final_file:
+    """
+    The fasta headers might have some weird characters, so just make a temp
+    assembly that we will rename
+    """
+    input:
+        assem = config["tool"] + "/output/assembly/{nom}_output.temp.fasta"
+    output:
+        assem = config["tool"] + "/output/assembly/{nom}_output.fasta",
+    threads: 1
+    run:
+        scaf_counter = 1
+        output_handle = open(output.assem, "w")
+        with open(input.assem, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    if line[0] == ">":
+                        print(">sca{}".format(scaf_counter),
+                              file = output_handle)
+                        scaf_counter += 1
+                    else:
+                        print(line, file = output_handle)
+        output_handle.close()
