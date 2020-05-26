@@ -1,0 +1,14 @@
+rule softlink_assembly:
+    """
+    map the short reads to the input assembly
+    """
+    input:
+        assem = lambda wildcards: config["assemblies"][wildcards.nom]
+    output:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    threads:
+        1
+    shell:
+        """
+        ln -s {input.assem} {output.assem}
+        """

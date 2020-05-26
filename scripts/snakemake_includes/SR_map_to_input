@@ -2,23 +2,23 @@
 this rule performs a pretty standard job - it makes soft links of the input
   - assemblies and maps reads to them with bwa mem.
 """
-rule softlink_assembly_and_index:
-    """
-    map the short reads to the input assembly
-    """
+
+#this include makes the assembly softlinks
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "assembly_softlinks")
+include: softlinks_rule_path
+
+rule index_softlinks:
     input:
-        assem = lambda wildcards: config["assemblies"][wildcards.nom]
-    output:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    output:
         amb   = config["tool"] + "/input/assembly/{nom}_input.fasta.amb",
         ann   = config["tool"] + "/input/assembly/{nom}_input.fasta.ann",
         bwt   = config["tool"] + "/input/assembly/{nom}_input.fasta.bwt",
         pac   = config["tool"] + "/input/assembly/{nom}_input.fasta.pac",
-    threads:
-        1
+    threads: 1
     shell:
         """
-        ln -s {input.assem} {output.assem}
         bwa index -a is {output.assem}
         """
 
