@@ -8,19 +8,15 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "assembly_softlinks")
 include: softlinks_rule_path
 
-rule index_softlinks:
-    input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-    output:
-        amb   = config["tool"] + "/input/assembly/{nom}_input.fasta.amb",
-        ann   = config["tool"] + "/input/assembly/{nom}_input.fasta.ann",
-        bwt   = config["tool"] + "/input/assembly/{nom}_input.fasta.bwt",
-        pac   = config["tool"] + "/input/assembly/{nom}_input.fasta.pac",
-    threads: 1
-    shell:
-        """
-        bwa index -a is {output.assem}
-        """
+# Now index the assembly softlinks
+# output is:
+#     amb   = config["tool"] + "/input/assembly/{nom}_input.fasta.amb",
+#     ann   = config["tool"] + "/input/assembly/{nom}_input.fasta.ann",
+#     bwt   = config["tool"] + "/input/assembly/{nom}_input.fasta.bwt",
+#     pac   = config["tool"] + "/input/assembly/{nom}_input.fasta.pac",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+index_rule_path=os.path.join(filepath, "index_softlinks")
+include: index_rule_path
 
 rule pilon_map:
     input:

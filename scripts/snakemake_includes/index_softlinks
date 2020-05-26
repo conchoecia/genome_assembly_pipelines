@@ -1,0 +1,13 @@
+rule index_softlinks:
+    input:
+       assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    output:
+        amb   = config["tool"] + "/input/assembly/{nom}_input.fasta.amb",
+        ann   = config["tool"] + "/input/assembly/{nom}_input.fasta.ann",
+        bwt   = config["tool"] + "/input/assembly/{nom}_input.fasta.bwt",
+        pac   = config["tool"] + "/input/assembly/{nom}_input.fasta.pac",
+    threads: 1
+    shell:
+        """
+        bwa index -a is {output.assem}
+        """
