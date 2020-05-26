@@ -29,9 +29,20 @@ rule getdiamondhits:
           --db {input.db} \
           --outfmt 6 \
           --sensitive \
-          --max-target-seqs 1 \
+          --evalue 1e-25 \
           --threads {threads} \
           --out {output.dmnd_out}
+        blobtools taxify -f {output.dmnd_out} -m {input.taxids} -s 0 -t 2
+        """
+rule blobtools_taxonify:
+    input:
+        dmnd_out = config["tool"] + "/input/dmnd/{nom}_dmnd.out",
+        taxids = config["diamond_db"].replace(".diamond.dmnd", ".taxids")
+    output:
+        taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.taxified.out",
+    shell:
+        """
+        blobtools taxify -f {input.dmnd_out} -m {input.taxids} -s 0 -t 2
         """
 
 rule blobtools_create:
@@ -39,7 +50,7 @@ rule blobtools_create:
         assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
         bam = config["tool"] + "/input/bams/SR_to_{nom}_input.sorted.bam",
         bai = config["tool"] + "/input/bams/SR_to_{nom}_input.sorted.bam.bai",
-        dmnd = config["tool"] + "/input/dmnd/{nom}_dmnd.out"
+        taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.taxified.out"
     output:
         blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
     params:
@@ -49,7 +60,7 @@ rule blobtools_create:
         blobtools create \
            -i {input.assembly} \
            -b {input.bam} \
-           -t {input.dmnd} \
+           -t {input.taxonify_out} \
            -o {params.blob_prefix}
         """
 
@@ -58,11 +69,15 @@ rule blobtools_view_and_plot:
         blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
     output:
         blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png"
+    params:
+        mv_prefix = lambda wildcards: "{}_blobtools.blobDB.".format(wildcards.nom),
+        mv_folder = lambda wildcards: config["tool"] + "/output/blobtools_{}/".format(wildcards.nom)
     threads: 1
     shell:
         """
         blobtools view -i {input.blob_results}
         blobtools plot -i {input.blob_results}
+        mv {params.mv_prefix}* {params.mv_folder}
         """
 
 #blastn \
