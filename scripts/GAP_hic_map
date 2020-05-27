@@ -44,7 +44,7 @@ rule map_hic_to_ref:
         left  = lambda wildcards: config["libs"][wildcards.lib]["read1"],
         right = lambda wildcards: config["libs"][wildcards.lib]["read2"]
     output:
-        bam   = config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam"
+        bam   = temp(config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam")
     threads:
         workflow.cores
     shell:
@@ -229,7 +229,7 @@ rule cat_bams:
         bams = expand(config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam",
                       nom = config["assemblies"], lib=config["libs"]),
     output:
-        merged= temp(config["tool"] + "/input/temp/bams/all_to_{nom}.bam")
+        merged= config["tool"] + "/input/temp/bams/all_to_{nom}.bam"
     shell:
         """
         samtools cat {input.bams} > {output.merged}
