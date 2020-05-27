@@ -1,0 +1,246 @@
+"""
+This snakefile maps all the HiC reads to a final genome assembly
+  - It also makes a pretextmap file for quickly looking at the hic-maps
+"""
+configfile: "config.yaml"
+config["tool"] = "GAP_hic_map"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt", nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.cool",
+               nom = config["assemblies"], binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.mcool",
+               nom = config["assemblies"], binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule index_ref:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        amb   = config["tool"] + "/input/assembly/{nom}_input.fasta.amb",
+        ann   = config["tool"] + "/input/assembly/{nom}_input.fasta.ann",
+        bwt   = config["tool"] + "/input/assembly/{nom}_input.fasta.bwt",
+        pac   = config["tool"] + "/input/assembly/{nom}_input.fasta.pac",
+    shell:
+        """
+        bwa index {input.assem}
+        """
+
+rule map_hic_to_ref:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        amb   = config["tool"] + "/input/assembly/{nom}_input.fasta.amb",
+        ann   = config["tool"] + "/input/assembly/{nom}_input.fasta.ann",
+        bwt   = config["tool"] + "/input/assembly/{nom}_input.fasta.bwt",
+        pac   = config["tool"] + "/input/assembly/{nom}_input.fasta.pac",
+        left  = lambda wildcards: config["libs"][wildcards.lib]["read1"],
+        right = lambda wildcards: config["libs"][wildcards.lib]["read2"]
+    output:
+        bam   = config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam"
+    threads:
+        workflow.cores
+    shell:
+        """
+        bwa mem -SP5M -t {threads} {input.assem} {input.left} {input.right} | \
+            samtools view -hb -@ {threads} - > {output.bam}
+        """
+
+rule chrom_size:
+    """
+    make a file with the chromosome sizes
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    threads: 1
+    shell:
+        """
+        bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
+        """
+
+rule hic_make_pairsam:
+    """
+    # BAM to pairs: annotate reads, create a pairsam file
+    """
+    input:
+        bam   = config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        ps = temp(config["tool"] + "/output/temp/pairsam/{nom}_{lib}_parsed.pairsam.gz")
+    threads: 1
+    shell:
+        """
+        samtools view -h {input.bam} | \
+          pairtools parse -c {input.cs} -o {output.ps}
+        """
+
+rule hic_sort_pairsam:
+    """
+    Sorting pairs by chromosome1-chromosome2-position1-position2
+    <n_proc> = number of processors to be used
+    """
+    input:
+        ps = config["tool"] + "/output/temp/pairsam/{nom}_{lib}_parsed.pairsam.gz"
+    output:
+        pps = temp(config["tool"] + "/output/temp/sorted/{nom}_{lib}_parsed_sorted.pairsam.gz")
+    threads:
+        max(workflow.cores/9, 9)
+    shell:
+        """
+        pairtools sort --nproc {threads} -o {output.pps} {input.ps}
+        """
+
+rule hic_dedup:
+    """
+    # NOTE: this step needs to write a lot of tmp files,
+      and by default your tmp directory is in your home directory,
+      which can fill up. To avoid that, do this before running the sort command:
+
+     # Marking duplicates
+     # <n_proc> = number of processors to be used
+    """
+    input:
+        pps = config["tool"] + "/output/temp/sorted/{nom}_{lib}_parsed_sorted.pairsam.gz"
+    output:
+        dpps = temp(config["tool"] + "/output/temp/dedupe/{nom}_{lib}_parsed_sorted_dedupe.pairsam.gz")
+    threads:
+        max(workflow.cores/9, 9)
+    params:
+        lib = lambda w: w.lib
+    shell:
+        """
+        mkdir tempdir{params.lib}
+        export TMPDIR=tempdir{params.lib}
+        pairtools dedup --nproc-in {threads} --mark-dups -o {output.dpps} {input.pps}
+        rm -rf tempdir{params.lib}
+        """
+
+rule hic_filter:
+    input:
+        dpps = config["tool"] + "/output/temp/dedupe/{nom}_{lib}_parsed_sorted_dedupe.pairsam.gz"
+    output:
+        filt = temp(config["tool"] + "/output/temp/filt/{nom}_{lib}_parsed_sorted_dedupe_filt.pairsam.gz")
+    threads:
+        1
+    shell:
+        """
+        pairtools select  '(pair_type == "UU") or (pair_type == "UR") or (pair_type == "RU")' \
+          -o {output.filt} {input.dpps}
+        """
+
+rule generate_final_pairs:
+    """
+    generate the final output
+    """
+    input:
+        filt = config["tool"] + "/output/temp/filt/{nom}_{lib}_parsed_sorted_dedupe_filt.pairsam.gz"
+    output:
+        final = temp(config["tool"] + "/output/temp/final/{nom}/{nom}_{lib}.pairs.gz")
+    threads:
+        1
+    shell:
+        """
+        pairtools split --output-pairs {output.final} {input.filt}
+        """
+
+rule merge_all_pairs:
+    """
+    merges the pairs into a single file
+    """
+    input:
+        all_pairs = expand(config["tool"] + "/output/temp/final/{nom}/{nom}_{lib}.pairs.gz", 
+                           nom = config["assemblies"], lib=config["libs"]),
+    output:
+        merged = config["tool"] + "/output/{nom}/{nom}_merged.pairs.gz"
+    shell:
+        """
+        rm -rf pairtools_merge_tmp
+        mkdir pairtools_merge_tmp
+        pairtools merge -o {output.merged} --tmpdir pairtools_merge_tmp {input.all_pairs}
+        rm -rf pairtools_merge_tmp
+        """
+
+rule index_pairs:
+    """
+    indexing output. the *.pairs.gz suffix is important to parse the file correctly!
+    """
+    input:
+        merged = config["tool"] + "/output/{nom}/{nom}_merged.pairs.gz"
+    output:
+        index = config["tool"] + "/output/{nom}/{nom}_merged.pairs.gz.px2"
+    threads:
+        1
+    shell:
+        """
+        pairix -f {input.merged}
+        """
+
+rule make_bins_individual:
+    """
+    This makes the matrix and bins everything
+    i.e. binsize: 5000 (high resolution), 500000 (lower resolution)
+    """
+    input:
+        final = config["tool"] + "/output/{nom}/{nom}_merged.pairs.gz",
+        index = config["tool"] + "/output/{nom}/{nom}_merged.pairs.gz.px2",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
+    threads:
+        1
+    params:
+        bs = lambda wildcards: wildcards.binsize,
+        nom = lambda wildcards: wildcards.nom
+    shell:
+        """
+        cooler cload pairix {input.cs}:{params.bs} {input.final} cool/{params.nom}.{params.bs}.cool
+        """
+
+rule normalize_matrix:
+    """
+    ## Matrix normalization/ balancing
+    #cooler balance res.<binsize>.cool
+    ## if any problems with creating output add "--force" option
+    #
+    ## Aggregation (for HiGlass view) - This generates a *.mcool file
+    """
+    input:
+        cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
+    output:
+        mcool = config["tool"] + "/output/{nom}/{nom}.{binsize}.mcool"
+    shell:
+        """
+        cooler zoomify -o {output.mcool} {input.cool}
+        """
+
+rule cat_bams:
+    input:
+        bams = expand(config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam",
+                      nom = config["assemblies"], lib=config["libs"]),
+    output:
+        merged= temp(config["tool"] + "/input/temp/bams/all_to_{nom}.bam")
+    shell:
+        """
+        samtools cat {input.bams} > {output.merged}
+        """
+
+rule make_pretextmap:
+    input:
+        merged= config["tool"] + "/input/temp/bams/all_to_{nom}.bam"
+    output:
+        pretext = config["tool"] + "/output/{nom}/{nom}.pretext"
+    threads:
+        1
+    shell:
+        """
+        samtools view -h {input.merged} | PretextMap -o {output.pretext}
+        """
