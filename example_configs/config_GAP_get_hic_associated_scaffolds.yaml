@@ -1,0 +1,16 @@
+# This script pulls out the most strongly associated scaffolds with
+#   a set of "bait" scaffolds using Hi-C data.
+assemblies:
+  name_of_assembly1:
+    bam: "/bam/of/hic/reads/to/assembly1.sorted.bam"
+    # this is a list of contigs that you want to use as linkage seeds
+    associated_with:
+      - tig00000003
+      - tig00000006
+      - tig00000009
+      - tig00000015
+      - tig00000020
+  assembly2_name:
+    bam: "/bam/of/hic/reads/to/assembly2.sorted.bam"
+    associated_with:
+      - sca17

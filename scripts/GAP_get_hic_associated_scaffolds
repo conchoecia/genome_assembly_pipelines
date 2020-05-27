@@ -1,0 +1,77 @@
+"""
+This script uses a bam file of aligned Hi-C reads to determine associations
+  between scaffolds. This is useful for pulling out contigs that are
+  associated with bacterial scaffolds.
+"""
+import subprocess
+import pandas as pd
+import numpy as np
+
+configfile: "config.yaml"
+config["tool"] = "GAP_get_hic_associated_scaffolds"
+
+print(config)
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/{nom}_hic_linkage_list.linked.txt",
+               nom=config["assemblies"])
+
+rule get_raw_counts:
+    input:
+        bam = lambda wildcards: config["assemblies"][wildcards.nom]["bam"]
+    output:
+        raw_counts = config["tool"] + "/output/{nom}_hic_linkage_list.raw"
+    threads: 1
+    run:
+        run_this = "samtools view -F 1284 -q 20 {}".format(input.bam)
+        process = subprocess.Popen(run_this, shell=True, stdout=subprocess.PIPE)
+        counts = {}
+        for line in iter(process.stdout.readline, b''):
+            splitd = line.decode("utf-8").split()
+            match = splitd[2]
+            mate  = splitd[6]
+            out = tuple(sorted([match, mate]))
+            if out not in counts:
+                counts[out] = 1
+            else:
+                counts[out] += 1
+        with open(output.raw_counts, "w") as f:
+            for key in counts:
+                if counts[key] >= 10:
+                    print("{}\t{}\t{}".format(key[0], key[1], counts[key]),
+                          file = f)
+
+rule get_top_5_percent_and_orig:
+    """
+    this gets the strongest 5% of the connections
+    """
+    input:
+        raw_counts = config["tool"] + "/output/{nom}_hic_linkage_list.raw"
+    output:
+        filtered_counts = config["tool"] + "/output/{nom}_hic_linkage_list.top5per.txt"
+    run:
+        df = pd.read_csv(input.raw_counts, header = None, sep = "\t")
+        df.columns = ["source", "target", "weight"]
+        a = np.array(df["weight"].unique())
+        fifthpercentile = np.percentile(a, 95)
+        filtered = df.loc[df["weight"] >= fifthpercentile,]
+        filtered.to_csv(output.filtered_counts, sep = "\t", index=None)
+
+rule get_list_of_fifthpercentile_plus_original:
+    input:
+        filtered_counts = config["tool"] + "/output/{nom}_hic_linkage_list.top5per.txt"
+    output:
+        final_list = config["tool"] + "/output/{nom}_hic_linkage_list.linked.txt"
+    params:
+        original = lambda wildcards: config["assemblies"][wildcards.nom]["associated_with"]
+    run:
+        linked = set(params.original)
+        df = pd.read_csv(input.filtered_counts, header = 0, sep = "\t")
+        for index, row in df.iterrows():
+            linked.add(row["source"])
+            linked.add(row["target"])
+        with open(output.final_list, "w") as f:
+            for entry in linked:
+                if entry != "=":
+                    print(entry, file=f)
