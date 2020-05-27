@@ -199,10 +199,12 @@ rule make_bins_individual:
         1
     params:
         bs = lambda wildcards: wildcards.binsize,
-        nom = lambda wildcards: wildcards.nom
+        nom = lambda wildcards: wildcards.nom,
+        outname = lambda wildcards: "{tool}/output/{nom}/{nom}.{binsize}.cool".format(
+            tool=config["tool"], nom = wildcards.nom, binsize = wildcards.binsize)
     shell:
         """
-        cooler cload pairix {input.cs}:{params.bs} {input.final} cool/{params.nom}.{params.bs}.cool
+        cooler cload pairix {input.cs}:{params.bs} {input.final} {params.outname}
         """
 
 rule normalize_matrix:
