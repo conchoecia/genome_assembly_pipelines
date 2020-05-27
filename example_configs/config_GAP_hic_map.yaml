@@ -1,0 +1,20 @@
+assemblies:
+  renamed: "/path/to/some/assembly/we/want/hic/maps/for.fasta"
+
+# these are just the sizes of the bins to make cooler files
+binsize:
+  - 500
+  - 5000
+  - 50000
+
+libs:
+  HiC-lib1:
+    read1:
+    - /path/to/HiC-lib1_f.fastq.gz
+    read2:
+    - /path/to/HiC-lib1_r.fastq.gz
+  Another-HiC-lib:
+    read1:
+    - /path/to/Another-HiC-lib_f.fastq.gz
+    read2:
+    - /path/to/Another-HiC-lib_r.fastq.gz
