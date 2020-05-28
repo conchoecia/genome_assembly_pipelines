@@ -12,7 +12,8 @@ rule all:
                nom = config["assemblies"], binsize=config["binsize"]),
         expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.mcool",
                nom = config["assemblies"], binsize=config["binsize"]),
-        expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"])
+        expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/all_to_{nom}.bam")
 
 # make softlinks of the input files
 # files end up here:
@@ -229,7 +230,7 @@ rule cat_bams:
         bams = expand(config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam",
                       nom = config["assemblies"], lib=config["libs"]),
     output:
-        merged= config["tool"] + "/input/temp/bams/all_to_{nom}.bam"
+        merged= config["tool"] + "/output/{nom}/all_to_{nom}.bam"
     shell:
         """
         samtools cat {input.bams} > {output.merged}
@@ -237,7 +238,7 @@ rule cat_bams:
 
 rule make_pretextmap:
     input:
-        merged= config["tool"] + "/input/temp/bams/all_to_{nom}.bam"
+        merged= config["tool"] + "/output/{nom}/all_to_{nom}.bam"
     output:
         pretext = config["tool"] + "/output/{nom}/{nom}.pretext"
     threads:
