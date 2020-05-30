@@ -1,0 +1,186 @@
+"""
+This makes new fastq or fasta files based on mapping.
+
+Maps reads to the assembly, and bins the reads based on what they map to best.
+  If the read isn't in one of the bins that we selected, then it is put
+  into the "everything else" read set.
+"""
+
+import os.path
+
+configfile: "config.yaml"
+config["tool"] = "GAP_bin_reads_by_mapping"
+
+
+rule all:
+    input:
+        config["tool"] + "/input/bams/long/longreads_to_ref.sorted.bam",
+        expand(config["tool"] + "/input/bams/WGS/{shotlib}_to_ref.sorted.bam",
+               shotlib = config["libs"]["shotgun"]),
+        expand(config["tool"] + "/output/fastx/{binname}_longreads.fx.gz",
+               binname = [x for x in config["bins"]] + ["everythingelse"])
+
+
+rule index_softlinks:
+    input:
+        assem = config["assembly"],
+    output:
+        assem = config["tool"] + "/input/assembly/input.fasta",
+        amb   = config["tool"] + "/input/assembly/input.fasta.amb",
+        ann   = config["tool"] + "/input/assembly/input.fasta.ann",
+        bwt   = config["tool"] + "/input/assembly/input.fasta.bwt",
+        pac   = config["tool"] + "/input/assembly/input.fasta.pac",
+    threads: 1
+    shell:
+        """
+        ln -s {input.assem} {output.assem}
+        bwa index -a is {output.assem}
+        """
+
+rule map_shot_to_reference:
+    input:
+        assem = config["tool"] + "/input/assembly/input.fasta",
+        amb   = config["tool"] + "/input/assembly/input.fasta.amb",
+        shotf = lambda wildcards: config["libs"]["shotgun"][wildcards.shotlib]["read1"],
+        shotr = lambda wildcards: config["libs"]["shotgun"][wildcards.shotlib]["read2"]
+    output:
+        bam = config["tool"] + "/input/bams/WGS/{shotlib}_to_ref.sorted.bam"
+    threads: workflow.cores
+    params:
+        sort_threads = (workflow.cores/4)
+    shell:
+        """
+        bwa mem -t {threads} {input.assem} {input.shotf} {input.shotr} | \
+          samtools view -F 2308 -hb -@ {params.sort_threads} - | \
+          samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule map_chicago_to_reference:
+    input:
+        assem = config["tool"] + "/input/assembly/input.fasta",
+        amb   = config["tool"] + "/input/assembly/input.fasta.amb",
+        chicagof = lambda wildcards: config["libs"]["chicago"][wildcards.chicagolib]["read1"],
+        chicagor = lambda wildcards: config["libs"]["chicago"][wildcards.chicagolib]["read2"]
+    output:
+        bam = config["tool"] + "/input/bams/chicago/{chicagolib}_to_ref.sorted.bam"
+    threads: workflow.cores
+    params:
+        sort_threads = (workflow.cores/4)
+    shell:
+        """
+        bwa mem -SP5M -t {threads} {input.assem} {input.chicagof} {input.chicagor} | \
+            samtools view -F 2308 -hb -@ {threads} - | \
+            samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule map_hic_to_reference:
+    input:
+        assem = config["tool"] + "/input/assembly/input.fasta",
+        amb   = config["tool"] + "/input/assembly/input.fasta.amb",
+        hicf = lambda wildcards: config["libs"]["hic"][wildcards.hiclib]["read1"],
+        hicr = lambda wildcards: config["libs"]["hic"][wildcards.hiclib]["read2"]
+    output:
+        bam = config["tool"] + "/input/bams/chicago/{hiclib}_to_ref.sorted.bam"
+    threads: workflow.cores
+    params:
+        sort_threads = (workflow.cores/4)
+    shell:
+        """
+        bwa mem -SP5M -t {threads} {input.assem} {input.chicagof} {input.chicagor} | \
+            samtools view -F 2308 -hb -@ {threads} - | \
+            samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule map_longreads_to_reference:
+    input:
+        assem = config["tool"] + "/input/assembly/input.fasta",
+        amb   = config["tool"] + "/input/assembly/input.fasta.amb",
+        longreads = lambda wildcards: config["libs"]["long"]
+    output:
+        bam = config["tool"] + "/input/bams/long/longreads_to_ref.sorted.bam"
+    threads: workflow.cores
+    params:
+        sort_threads = (workflow.cores/4)
+    shell:
+        """
+        minimap2 -t {threads} -ax map-pb {input.assem} {input.longreads} | \
+            samtools view -F 2308 -hb -@ {threads} - | \
+            samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule longreads_into_bin_readlist:
+    input:
+        bam = config["tool"] + "/input/bams/long/longreads_to_ref.sorted.bam",
+        longreads = lambda wildcards: config["libs"]["long"]
+    output:
+        lists = expand(config["tool"] + "/output/bin_readlists/long/{binname}_longreads.txt",
+                       binname = [x for x in config["bins"]] + ["everythingelse"])
+    params:
+        outprefix = config["tool"] + "/output/bin_readlists/long/"
+    threads: 1
+    run:
+        import gzip
+        from Bio import SeqIO
+        #first get all the read names
+        all_reads  = set()
+
+        file_prefix = os.path.splitext(input.longreads)[0]
+        extension = os.path.splitext(input.longreads)[1]
+        if extension == ".gz":
+            with gzip.open(input.longreads, "rt") as handle:
+                for record in SeqIO.parse(handle, os.path.splitext(file_prefix)[1][1:]):
+                    all_reads.add(record.id)
+        else:
+            with open(input.longreads, "r") as handle:
+                for record in SeqIO.parse(handle, os.path.splitext(file_prefix)[1][1:]):
+                    all_reads.add(record.id)
+
+        # set up the data structure to record reads to bins
+        bin_lookup = {}
+        for thisbin in config["bins"]:
+            for scaf in config["bins"][thisbin]:
+                bin_lookup[scaf] = thisbin
+        bin_to_reads = {thisbin:set() for thisbin in config["bins"]}
+        run_this = "samtools view -F 2308 {}".format(input.bam)
+        process = subprocess.Popen(run_this, shell=True, stdout=subprocess.PIPE)
+        counts = {}
+
+        #read in the bam file and assign reads to bins
+        for line in iter(process.stdout.readline, b''):
+            splitd = line.decode("utf-8").split()
+            scaf = splitd[2]
+            readname = splitd[0]
+            if scaf in bin_lookup:
+                bin_to_reads[bin_lookup[scaf]].add(readname)
+
+        # now make sure there is no overlap in the bins
+        checked = set()
+        for key in bin_to_reads:
+            for key2 in bin_to_reads:
+                if key != key2:
+                    check_tuple = tuple(sorted([key, key2]))
+                    if check_tuple not in checked:
+                        assert len(bin_to_reads[key].intersection(bin_to_reads[key2])) == 0
+                        checked.add(check_tuple)
+        # now get the rest of the reads into their own bin
+        everything_else = all_reads - set.union(*[bin_to_reads[key] for key in bin_to_reads])
+
+        # now iterate through all the sets and save files
+        with open("{}everythingelse_longreads.txt".format(params.outprefix), "w") as f:
+            for entry in everything_else:
+                print(entry, file=f)
+        for thisbin in bin_to_reads:
+            with open("{}{}_longreads.txt".format(params.outprefix, thisbin), "w") as f:
+                for entry in bin_to_reads[thisbin]:
+                    print(entry, file=f)
+
+rule get_longreads_into_binned_fastx:
+    input:
+        read_list = config["tool"] + "/output/bin_readlists/long/{binname}_longreads.txt",
+        longreads = lambda wildcards: config["libs"]["long"]
+    output:
+        fastx = config["tool"] + "/output/fastx/{binname}_longreads.fx.gz"
+    shell:
+        """
+        seqtk subseq {input.longreads} {input.read_list}  | gzip > {output.fastx}
+        """

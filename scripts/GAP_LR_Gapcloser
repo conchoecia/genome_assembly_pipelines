@@ -1,0 +1,34 @@
+"""
+This script runs LR Gapcloser
+"""
+configfile: "config.yaml"
+config["tool"] = "GAP_LR_Gapcloser"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/assembly/{nom}/iteration-3/gapclosed.fasta",
+               nom = config["assemblies"])
+
+#this include makes the assembly softlinks
+# outpath is = config["tool"] + "/input/assembly/{nom}_input.fasta"
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule run_LR_Gapcloser:
+    input:
+        long_reads = config["long_reads"],
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        assem = config["tool"] + "/output/assembly/{nom}/iteration-3/gapclosed.fasta"
+    params:
+        toolname = config["tool"],
+        outprefix = lambda wildcards: wildcards.nom
+    threads: workflow.cores
+    shell:
+        """
+        rm -r {params.toolname}/output/assembly/{params.outprefix}
+        LR_Gapcloser.sh -i {input.assem} \
+          -l {input.long_reads} -s p -t {threads} \
+          -o {params.toolname}/output/assembly/{params.outprefix}
+        """
