@@ -12,35 +12,32 @@ filepath = os.path.dirname(os.path.realpath(__file__))
 fs_path=os.path.join(filepath, "../bin/fasta_stats")
 
 configfile: "config.yaml"
-maxthreads = 90
+config["tool"] = "GAP_npscarf"
 
-print(config["assemblies"])
 
 rule all:
     input:
-        # get mapping info before scaffolding
-        expand("GAP_npscarf/before_NPS/{nom}_LR.permap.txt", nom=config["assemblies"]),
-        expand("GAP_npscarf/before_NPS/{nom}_LR.flagstat", nom=config["assemblies"]),
-        # now scaffold with npscarf
-        expand("GAP_npscarf/npscarf/{nom}_nps/{nom}_nps.fin.fasta", nom=config["assemblies"]),
-        #now collect information about the merge
-        expand("GAP_npscarf/after_NPS/{nom}_LR.permap.txt", nom=config["assemblies"]),
-        expand("GAP_npscarf/after_NPS/{nom}_LR.flagstat", nom=config["assemblies"]),
-        "GAP_npscarf/final_results/final_results.tsv"
+        expand(config["tool"] + "/output/assembly/{nom}_output.fasta",nom=config["assemblies"])
+
+#this include makes the assembly softlinks
+# outpath is = config["tool"] + "/input/assembly/{nom}_input.fasta"
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
 
 rule map_LR_to_assembly:
     input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
         LR = config["long_reads"]
     output:
-        bam = temp("GAP_npscarf/bams/LR_to_{nom}.sorted.bam")
+        bam = temp(config["tool"] + "/input/bam/LR_to_{nom}.sorted.bam")
     params:
-        assembly = lambda wildcards: config["assemblies"][wildcards.nom],
-        sort_threads = int(maxthreads/3)
+        sort_threads = int(workflow.cores/3)
     threads:
         workflow.cores
     shell:
         """
-        minimap2 -t {threads} -ax map-pb {params.assembly} {input.LR} | \
+        minimap2 -t {threads} -ax map-pb {input.assem} {input.LR} | \
             samtools view -hb -@ {params.sort_threads} - | \
             samtools sort -@ {params.sort_threads} - > {output.bam}
         """
@@ -49,7 +46,7 @@ rule generate_LR_read_length:
     input:
         LR = config["long_reads"]
     output:
-        txt = "GAP_npscarf/data_output/LR_read_id_and_length.txt"
+        txt = config["tool"] + "/stats/LR_read_id_and_length.txt"
     threads:
         1
     shell:
@@ -59,9 +56,9 @@ rule generate_LR_read_length:
 
 rule flagstat_mapped_before_purge:
     input:
-        bam = "GAP_npscarf/bams/LR_to_{nom}.sorted.bam"
+        bam = config["tool"] + "/input/bam/LR_to_{nom}.sorted.bam"
     output:
-        flagstat_info = "GAP_npscarf/before_NPS/{nom}_LR.flagstat"
+        flagstat_info = config["tool"] + "/stats/{nom}_LR_input.flagstat"
     threads:
         1
     shell:
@@ -71,10 +68,10 @@ rule flagstat_mapped_before_purge:
 
 rule percent_of_data_mapping_before:
     input:
-        bam = "GAP_npscarf/bams/LR_to_{nom}.sorted.bam",
-        txt = "GAP_npscarf/data_output/LR_read_id_and_length.txt"
+        bam = config["tool"] + "/input/bam/LR_to_{nom}.sorted.bam",
+        txt = config["tool"] + "/stats/LR_read_id_and_length.txt"
     output:
-        per_map = "GAP_npscarf/before_NPS/{nom}_LR.permap.txt"
+        per_map = config["tool"] + "/stats/{nom}_LR_input.permap.txt"
     threads:
         1
     run:
@@ -82,54 +79,66 @@ rule percent_of_data_mapping_before:
 
 rule map_LR_for_npscarf:
     input:
-        LR = config["long_reads"]
+        LR = config["long_reads"],
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
     output:
-        sam = temp("GAP_npscarf/bams/LR_to_{nom}.sorted.sam")
-    params:
-        assembly = lambda wildcards: config["assemblies"][wildcards.nom]
+        sam = temp(config["tool"] + "/input/bam/LR_to_{nom}.sorted.sam")
     threads: workflow.cores
     shell:
         """
-        minimap2 -t {threads} -Y -ax map-pb {params.assembly} {input.LR} > {output.sam}
+        minimap2 -t {threads} -Y -ax map-pb {input.assem} {input.LR} > {output.sam}
         """
 
 rule npscarf_join:
     input:
-        sam = "GAP_npscarf/bams/LR_to_{nom}.sorted.sam",
-        LR = config["long_reads"],
+        sam = config["tool"] + "/input/bam/LR_to_{nom}.sorted.sam",
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        LR = config["long_reads"]
     output:
-        assem = "GAP_npscarf/npscarf/{nom}_nps/{nom}_nps.fin.fasta"
+        assem = config["tool"] + "/output/{nom}_nps/{nom}_nps.fin.fasta"
     params:
-        assembly = lambda wildcards: config["assemblies"][wildcards.nom],
-        prefix   = lambda wildcards: "GAP_npscarf/npscarf/{0}_nps/{0}_nps".format(wildcards.nom)
-    threads: maxthreads - 2
+        prefix   = lambda wildcards: config["tool"] + "/output/{0}_nps/{0}_nps".format(wildcards.nom)
+    threads: workflow.cores - 2
     shell:
         """
         cat {input.sam} | \
           jsa.np.npscarf -input - -format sam \
-          -seq {params.assembly} -prefix {params.prefix}
+          -seq {input.assem} -prefix {params.prefix}
         """
+
+rule softlink_to_out:
+    input:
+        assem = config["tool"] + "/output/{nom}_nps/{nom}_nps.fin.fasta"
+    output:
+        assem = config["tool"] + "/output/assembly/{nom}_output.fasta"
+    threads: 1
+    run:
+        input_path  = os.path.abspath(input.assem)
+        output_path = os.path.abspath(output.assem)
+        os.symlink(input_path, output_path)
 
 rule map_LR_to_merged:
     input:
         LR = config["long_reads"],
-        assembly = "GAP_npscarf/npscarf/{nom}_nps/{nom}_nps.fin.fasta"
+        assem = config["tool"] + "/output/assembly/{nom}_output.fasta",
     output:
-        bam = temp("GAP_npscarf/bams/merged/LR_to_{nom}_clip.sorted.bam")
+        bam = temp(config["tool"] + "/stats/bam/LR_to_{nom}_output.sorted.bam")
     params:
-         sort_threads = int(maxthreads/3)
+         sort_threads = int(workflow.cores/3)
     threads:
         workflow.cores
     shell:
         """
-        minimap2 -t {threads} -ax map-pb {input.assembly} {input.LR} | \
+        minimap2 -t {threads} -ax map-pb {input.assem} {input.LR} | \
             samtools view -hb -@ {params.sort_threads} - | \
             samtools sort -@ {params.sort_threads} - > {output.bam}
         """
 
+
+
 rule flagstat_mapped_after_merge:
     input:
-        bam = "GAP_npscarf/bams/merged/LR_to_{nom}_clip.sorted.bam"
+        bam = config["tool"] + "/stats/bam/LR_to_{nom}_output.sorted.bam"
     output:
         flagstat_info = "GAP_npscarf/after_NPS/{nom}_LR.flagstat"
     threads:
