@@ -15,7 +15,7 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 include: softlinks_rule_path
 
-rule run_LR_Gapcloser:
+rule run_TGS_Gapcloser:
     input:
         long_reads = config["long_reads"],
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
