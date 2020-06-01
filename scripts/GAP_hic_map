@@ -7,13 +7,19 @@ config["tool"] = "GAP_hic_map"
 
 rule all:
     input:
+        #stats
+        expand(config["tool"] + "/output/pairsam_stats/{nom}_{lib}_parsed.pairsam.stats",
+               nom = config["assemblies"], lib=config["libs"]),
+        expand(config["tool"] + "/output/pairsam_stats/{nom}_{lib}_parsed_sorted_dedupe.pairsam.stats",
+               nom = config["assemblies"], lib=config["libs"]),
+        #final files
         expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt", nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.cool",
                nom = config["assemblies"], binsize=config["binsize"]),
         expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.mcool",
                nom = config["assemblies"], binsize=config["binsize"]),
         expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/all_to_{nom}.bam")
+        expand(config["tool"] + "/output/{nom}/all_to_{nom}.bam", nom = config["assemblies"])
 
 # make softlinks of the input files
 # files end up here:
@@ -50,8 +56,10 @@ rule map_hic_to_ref:
         workflow.cores
     shell:
         """
-        bwa mem -SP5M -t {threads} {input.assem} {input.left} {input.right} | \
+        # DONT PIPE INTO SAMTOOLS SORT
+        bwa mem -5SPM -t {threads} {input.assem} {input.left} {input.right} | \
             samtools view -hb -@ {threads} - > {output.bam}
+        # DO NOT PIPE INTO SAMTOOLS SORT
         """
 
 rule chrom_size:
@@ -76,12 +84,14 @@ rule hic_make_pairsam:
         bam   = config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam",
         cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
     output:
-        ps = temp(config["tool"] + "/output/temp/pairsam/{nom}_{lib}_parsed.pairsam.gz")
+        ps = temp(config["tool"] + "/output/temp/pairsam/{nom}_{lib}_parsed.pairsam.gz"),
+        stats = config["tool"] + "/output/pairsam_stats/{nom}_{lib}_parsed.pairsam.stats"
     threads: 1
     shell:
         """
         samtools view -h {input.bam} | \
-          pairtools parse -c {input.cs} -o {output.ps}
+          pairtools parse --output-stats {output.stats} \
+          -c {input.cs} -o {output.ps}
         """
 
 rule hic_sort_pairsam:
@@ -112,7 +122,8 @@ rule hic_dedup:
     input:
         pps = config["tool"] + "/output/temp/sorted/{nom}_{lib}_parsed_sorted.pairsam.gz"
     output:
-        dpps = temp(config["tool"] + "/output/temp/dedupe/{nom}_{lib}_parsed_sorted_dedupe.pairsam.gz")
+        dpps = temp(config["tool"] + "/output/temp/dedupe/{nom}_{lib}_parsed_sorted_dedupe.pairsam.gz"),
+        stats = config["tool"] + "/output/pairsam_stats/{nom}_{lib}_parsed_sorted_dedupe.pairsam.stats"
     threads:
         max(workflow.cores/9, 9)
     params:
@@ -121,7 +132,9 @@ rule hic_dedup:
         """
         mkdir tempdir{params.lib}
         export TMPDIR=tempdir{params.lib}
-        pairtools dedup --nproc-in {threads} --mark-dups -o {output.dpps} {input.pps}
+        pairtools dedup --nproc-in {threads} \
+          --output-stats {output.stats} \
+          --mark-dups -o {output.dpps} {input.pps}
         rm -rf tempdir{params.lib}
         """
 
@@ -208,7 +221,7 @@ rule make_bins_individual:
         cooler cload pairix {input.cs}:{params.bs} {input.final} {params.outname}
         """
 
-rule normalize_matrix:
+rule zoomify_matrix:
     """
     ## Matrix normalization/ balancing
     #cooler balance res.<binsize>.cool

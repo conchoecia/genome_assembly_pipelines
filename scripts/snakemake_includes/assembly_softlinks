@@ -1,9 +1,10 @@
+import os
 rule softlink_assembly:
     """
     map the short reads to the input assembly
     """
     input:
-        assem = lambda wildcards: config["assemblies"][wildcards.nom]
+        assem = lambda wildcards: os.path.abspath(config["assemblies"][wildcards.nom])
     output:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
     threads:
