@@ -18,6 +18,10 @@ rule all:
                nom = config["assemblies"], binsize=config["binsize"]),
         expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.mcool",
                nom = config["assemblies"], binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/{nom}.balanced.{binsize}.cool",
+               nom = config["assemblies"], binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/{nom}.balanced.{binsize}.mcool",
+               nom = config["assemblies"], binsize=config["binsize"]),
         expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/all_to_{nom}.bam", nom = config["assemblies"])
 
@@ -223,16 +227,42 @@ rule make_bins_individual:
 
 rule zoomify_matrix:
     """
-    ## Matrix normalization/ balancing
-    #cooler balance res.<binsize>.cool
-    ## if any problems with creating output add "--force" option
-    #
     ## Aggregation (for HiGlass view) - This generates a *.mcool file
     """
     input:
         cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
     output:
         mcool = config["tool"] + "/output/{nom}/{nom}.{binsize}.mcool"
+    shell:
+        """
+        cooler zoomify -o {output.mcool} {input.cool}
+        """
+
+rule balance_matrix:
+    """
+    ## Matrix normalization/ balancing
+    #cooler balance res.<binsize>.cool
+    ## if any problems with creating output add "--force" option
+    """
+    input:
+        cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool",
+        mcool = config["tool"] + "/output/{nom}/{nom}.{binsize}.mcool"
+    output:
+        cool = config["tool"] + "/output/{nom}/{nom}.balanced.{binsize}.cool"
+    shell:
+        """
+        cp {input.cool} {output.cool}
+        cooler balance --force {output.cool}
+        """
+
+rule zoomify_balanced:
+    """
+    Generate a multi-cooler file for the balanced dataset
+    """
+    input:
+        cool = config["tool"] + "/output/{nom}/{nom}.balanced.{binsize}.cool"
+    output:
+        mcool = config["tool"] + "/output/{nom}/{nom}.balanced.{binsize}.mcool"
     shell:
         """
         cooler zoomify -o {output.mcool} {input.cool}
