@@ -1,0 +1,70 @@
+"""
+This snakefile takes an input fasta file,
+  then sorts the scaffolds from longest to shortest.
+It does not rename scaffolds.
+"""
+import subprocess
+configfile: "config.yaml"
+config["tool"] = "GAP_reorder_assembly"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/assembly/{nom}_output.fasta",
+               nom=config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule fai_index_assemblies:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        fai = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.fai")
+    shell:
+        """
+        samtools faidx {input.assem}
+        """
+
+rule get_sort_list:
+    """
+    sort the fai file to figure out the longest scaffolds
+    """
+    input:
+        fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai"
+    output:
+        sort_list = temp(config["tool"] + "/input/sort_list/{nom}_sort_list.txt")
+    threads: 1
+    shell:
+        """
+        sort -k2 -nr {input.fai} | cut -f1,2 > {output.sort_list}
+        """
+
+rule reorder_fasta:
+    """
+    this reorders the fasta files based on the length
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai",
+        sort_list = config["tool"] + "/input/sort_list/{nom}_sort_list.txt"
+    output:
+        assem = config["tool"] + "/output/assembly/{nom}_output.fasta"
+    threads: 1
+    run:
+        first = True
+        with open(input.sort_list, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    scaf   = line.split()[0]
+                    if first:
+                        this_cmd = "samtools faidx {} {} > {}".format(input.assem, scaf, output.assem)
+                        subprocess.run(this_cmd, shell = True)
+                        first = False
+                    else:
+                        this_cmd = "samtools faidx {} {} >> {}".format(input.assem, scaf, output.assem)
+                        subprocess.run(this_cmd, shell = True)
