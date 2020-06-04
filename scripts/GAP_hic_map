@@ -18,9 +18,9 @@ rule all:
                nom = config["assemblies"], binsize=config["binsize"]),
         expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.mcool",
                nom = config["assemblies"], binsize=config["binsize"]),
-        expand(config["tool"] + "/output/{nom}/{nom}.balanced.{binsize}.cool",
+        expand(config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool",
                nom = config["assemblies"], binsize=config["binsize"]),
-        expand(config["tool"] + "/output/{nom}/{nom}.balanced.{binsize}.mcool",
+        expand(config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.mcool",
                nom = config["assemblies"], binsize=config["binsize"]),
         expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/all_to_{nom}.bam", nom = config["assemblies"])
@@ -248,7 +248,7 @@ rule balance_matrix:
         cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool",
         mcool = config["tool"] + "/output/{nom}/{nom}.{binsize}.mcool"
     output:
-        cool = config["tool"] + "/output/{nom}/{nom}.balanced.{binsize}.cool"
+        cool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
     shell:
         """
         cp {input.cool} {output.cool}
@@ -260,9 +260,9 @@ rule zoomify_balanced:
     Generate a multi-cooler file for the balanced dataset
     """
     input:
-        cool = config["tool"] + "/output/{nom}/{nom}.balanced.{binsize}.cool"
+        cool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
     output:
-        mcool = config["tool"] + "/output/{nom}/{nom}.balanced.{binsize}.mcool"
+        mcool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.mcool"
     shell:
         """
         cooler zoomify -o {output.mcool} {input.cool}
