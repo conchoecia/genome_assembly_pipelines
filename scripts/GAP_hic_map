@@ -252,7 +252,7 @@ rule balance_matrix:
     shell:
         """
         cp {input.cool} {output.cool}
-        cooler balance --force {output.cool}
+        cooler balance --cis-only --force {output.cool}
         """
 
 rule zoomify_balanced:
