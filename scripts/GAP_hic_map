@@ -111,7 +111,7 @@ rule hic_sort_pairsam:
         max(workflow.cores/9, 9)
     shell:
         """
-        pairtools sort --nproc {threads} -o {output.pps} {input.ps}
+        pairtools sort --nproc {threads} -o {output.pps} {input.ps} --tmpdir=./
         """
 
 rule hic_dedup:
