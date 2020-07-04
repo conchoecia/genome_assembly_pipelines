@@ -2,8 +2,10 @@
 This snakefile maps all the HiC reads to a final genome assembly
   - It also makes a pretextmap file for quickly looking at the hic-maps
 """
+
 configfile: "config.yaml"
-config["tool"] = "GAP_hic_map"
+
+config["tool"] = "GAP_hic_map2"
 
 rule all:
     input:
@@ -99,9 +101,17 @@ rule hic_make_pairsam:
     threads: 1
     shell:
         """
-        samtools cat -h {input.bam} | samtools view -h - | \
-          pairtools parse --output-stats {output.stats} \
-          -c {input.cs} -o {output.ps}
+        NUMBAM=$(echo "{input.bam}" | sed 's/ /\\n/g' | wc -l)
+        if [ ${{NUMBAM}} -gt 1 ]
+          then
+            samtools cat -h {input.bam} | samtools view -h - | \
+              pairtools parse --output-stats {output.stats} \
+              -c {input.cs} -o {output.ps}
+          else
+            samtools view -h {input.bam} | \
+              pairtools parse --output-stats {output.stats} \
+              -c {input.cs} -o {output.ps}
+        fi
         """
 
 rule hic_sort_pairsam:
@@ -282,7 +292,7 @@ rule plot_matrices:
     threads: 1
     shell:
         """
-        hicPlotMatrix -m {input.pearson} --outFileName {output.pdf} --perChr --bigwig {input.pca1}
+        hicPlotMatrix --colorMap cmr.iceburn -m {input.pearson} --outFileName {output.pdf} --perChr --bigwig {input.pca1}
         """
 
 ## Now plot the gene interactions matrix
@@ -324,10 +334,16 @@ rule make_pretextmap:
         bam   = expand(config["tool"] + "/input/bams/{{nom}}_{lib}_to_ref.sorted.bam", lib=config["libs"]),
     output:
         pretext = config["tool"] + "/output/{nom}/{nom}.pretext"
-    threads:
-        1
+    threads: 1
     shell:
         """
-        samtools cat -h {input.bam} | samtools view -h - | \
-            PretextMap -o {output.pretext}
+        NUMBAM=$(echo "{input.bam}" | sed 's/ /\\n/g' | wc -l)
+        if [ ${{NUMBAM}} -gt 1 ]
+          then
+            samtools cat -h {input.bam} | samtools view -h - | \
+                PretextMap -o {output.pretext}
+          else
+            samtools view -h {input.bam} | \
+                PretextMap -o {output.pretext}
+        fi
         """

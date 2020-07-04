@@ -1,0 +1,6 @@
+assemblies:
+        your_assembly_name: /path/to/the/genome/assembly.fa
+
+long_reads: /your/path/to/either/pacbio/or/ont/reads_ont.fq.gz
+# should be pb or ont
+readtype: ont

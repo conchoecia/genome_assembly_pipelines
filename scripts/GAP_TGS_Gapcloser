@@ -23,7 +23,8 @@ rule run_TGS_Gapcloser:
         assem = config["tool"] + "/output/assembly/{nom}/{nom}.scaff_seqs"
     params:
         toolname = config["tool"],
-        outprefix = lambda wildcards: wildcards.nom
+        outprefix = lambda wildcards: wildcards.nom,
+        readtype = config["readtype"]
     threads: workflow.cores
     shell:
         """
@@ -33,5 +34,5 @@ rule run_TGS_Gapcloser:
           --ne \
           --thread {threads} \
           --output {params.toolname}/output/assembly/{params.outprefix}/{params.outprefix} \
-          --tgstype pb
+          --tgstype {params.readtype}
         """
