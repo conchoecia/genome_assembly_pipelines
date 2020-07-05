@@ -1,0 +1,52 @@
+"""
+This just converts scaffolds to contigs
+"""
+configfile: "config.yaml"
+config["tool"] = "GAP_scaffolds_to_contigs"
+
+rule all:
+    input:
+        #stats
+        expand(config["tool"] + "/output/pairsam_stats/{nom}_{lib}_parsed.pairsam.stats",
+               nom = config["assemblies"], lib=config["libs"]),
+        expand(config["tool"] + "/output/pairsam_stats/{nom}_{lib}_parsed_sorted_dedupe.pairsam.stats",
+               nom = config["assemblies"], lib=config["libs"]),
+        #final files
+        expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt", nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.cool",
+               nom = config["assemblies"], binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.mcool",
+               nom = config["assemblies"], binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool",
+               nom = config["assemblies"], binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.mcool",
+               nom = config["assemblies"], binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/all_to_{nom}.bam", nom = config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule scaffolds_to_contigs:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        assem = config["tool"] + "/output/{nom}_output.fasta"
+    threads: 1
+    run:
+        from Bio import SeqIO
+        import sys,re
+
+        out = open(output.assem, 'w')
+
+        sequence = ''.join([str(record.seq).strip() for record in SeqIO.parse(input.assem, "fasta")])
+
+        m=re.sub('[nN]+','\n',sequence).split('\n')
+
+        for i in range(1,len(m)):
+            out.write('>contig_'+str(i)+'\n')
+            out.write(m[i]+'\n')
