@@ -41,8 +41,7 @@ rule clean_assembly:
 
 rule SALSA_index:
     """
-    here, restriction site is lower case in params
-    the input is from pilon2 after nanopolish
+    just index the assembly before mapping all the reads
     """
     input:
         assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
@@ -134,7 +133,7 @@ rule SALSA_salsa:
         final = "GAP_salsa/output/{nom}/scaffolds_FINAL.fasta"
     params:
         out = lambda w: "GAP_salsa/output/{}".format(w.nom),
-        rest_site = config["junctions"]
+        rest_site = config["junctions"].upper()
     shell:
         """
         set +eu
@@ -143,6 +142,8 @@ rule SALSA_salsa:
           -a {input.assem} \
           -l {input.fai} \
           -b {input.bed} \
+          -m no \
+          -p \
           -e {params.rest_site} \
           -o {params.out}
         conda deactivate
