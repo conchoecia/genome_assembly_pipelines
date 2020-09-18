@@ -33,14 +33,17 @@ rule all:
         #final files
         # chromsize
         expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt", nom = config["assemblies"]),
+        # get the diagnostic png before doing anything else
+        expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.cool.png",
+               nom = config["assemblies"], binsize=config["binsize"]),
         # balanced cool
         expand(config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool",
                nom = config["assemblies"], binsize=config["binsize"]),
         # mcool from balanced
         expand(config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.mcool",
                nom = config["assemblies"], binsize=config["binsize"]),
-        # pretext view
-        expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
+        ## pretext view
+        #expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
         # plots of AB compartmentalization
         expand(config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf", nom = config["assemblies"], binsize = [x for x in config["binsize"] if int(x) >= 50000])
 
@@ -239,21 +242,63 @@ rule make_bins_individual:
         cooler cload pairix {input.cs}:{params.bs} {input.final} {params.outname}
         """
 
-rule balance_matrix:
+rule diagnostic_plot:
     """
-    ## Matrix normalization/ balancing
-    #cooler balance res.<binsize>.cool
-    ## if any problems with creating output add "--force" option
+    This generates a diagnostic plot of the bin distribution to pick the z-score cutoffs
     """
     input:
         cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
     output:
-        cool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
+        png = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool.png"
     shell:
         """
-        cp {input.cool} {output.cool}
-        cooler balance --force {output.cool}
+        hicCorrectMatrix diagnostic_plot -m {input.cool} -o {output.png}
         """
+
+rule cutoff_matrix:
+    """
+    Balances the matrix using the z-score cutoffs. Removes bins that are too dense or sparse
+    """
+    input:
+        png = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool.png",
+        cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
+    output:
+        balanced = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
+    params:
+        zmin = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmin"],
+        zmax = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmax"],
+        binsize = lambda wildcards: wildcards.binsize
+    shell:
+        """
+        if [ "{params.zmin}" -eq "0" ]; then
+            echo "Set the {params.binsize} zmin to something other than 0";
+            exit;
+        fi
+        if [ "{params.zmin}" -eq "0" ]; then
+            echo "Set the {params.binsize} zmax to something other than 0";
+            exit;
+        fi
+        hicCorrectMatrix correct -m {input.cool} \
+             --filterThreshold {params.zmin} {params.zmax} \
+             -o {output.balanced}
+        """
+
+#rule old_balance_matrix:
+#    """
+#    ## Matrix normalization/ balancing
+#    #cooler balance res.<binsize>.cool
+#    ## if any problems with creating output add "--force" option
+#    # this only works with --cis-only. Otherwise it drops a ton of bins
+#    """
+#    input:
+#        cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
+#    output:
+#        cool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
+#    shell:
+#        """
+#        cp {input.cool} {output.cool}
+#        cooler balance --force {output.cool}
+#        """
 
 rule zoomify_matrix:
     """
@@ -268,7 +313,7 @@ rule zoomify_matrix:
         cooler zoomify -o {output.mcool} {input.cool}
         """
 
-# Filter out the small chromosomes for further analysis
+# Filter out the small chromosomes for further analyses/balancing/et cet
 rule only_chromosomes:
     input:
         cool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool",
@@ -434,6 +479,10 @@ rule plot_matrices_custom:
         #first, just read in the the dataframe to get all of the chromosomes
         chroms = list(concat["target"].unique())
 
+        directorypath = output.pdf.replace(".pdf", "")
+        if not os.path.exists(directorypath):
+            os.mkdir(directorypath)
+
         for middle in ["dark", "light"]:
             for thischrom in chroms:
                 missing_rows = []
@@ -476,6 +525,9 @@ rule plot_matrices_custom:
                 ax.set_xlabel("Position (Mb)")
                 fig = ax.get_figure()
                 fig.tight_layout()
+                pngpath = directorypath + "/plot_of_{}.{}.{}.png".format(thischrom, interval, middle)
+                print("Saving the file: {}".format(pngpath))
+                fig.savefig(pngpath, dpi=300)
                 pp.savefig()
                 fig.clear()
         pp.close()

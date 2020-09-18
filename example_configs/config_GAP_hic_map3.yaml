@@ -1,0 +1,42 @@
+# Author dts 2020
+# dts@ucsc.edu
+# dschultz@mbari.org
+#
+# This config file is for the script `config_GAP_hic_map3.yaml`
+#  https://github.com/conchoecia/genome_assembly_pipelines
+
+assemblies:
+  code_name_for_this_assembly: "/path/to/assembly.fasta"
+
+# these are just the sizes of the bins to make cooler files
+binsize:
+  # the size of the bin goes here. Change this number to whatever
+  250000:
+    # the zmin and zmax MUST be set to zero when running this pipeline.
+    #  Halfway through, hicCorrectMatrix diagnostic_plot will run and
+    #  generate png images of the z-scores of bin intensities.
+    #  You must download these and determine the min and max z score
+    #  for cutoff.
+    #  Use this website as a guide https://hicexplorer.readthedocs.io/en/latest/content/example_usage.html#correction-of-hi-c-matrix
+    #
+    # Once you figure out what cutoffs you'd like, set zmin and zmax to
+    #  something other than zero then just restart the pipeline
+    zmin: 0
+    zmax: 0
+  # Yep - you can do multiple bin sizes
+  50000:
+    zmin: 0
+    zmax: 0
+
+
+libs:
+  HiC-lib1:
+    read1:
+    - /path/to/HiC-lib1_f.fastq.gz
+    read2:
+    - /path/to/HiC-lib1_r.fastq.gz
+  Another-HiC-lib:
+    read1:
+    - /path/to/Another-HiC-lib_f.fastq.gz
+    read2:
+    - /path/to/Another-HiC-lib_r.fastq.gz
