@@ -1,14 +1,11 @@
 # Put all the assemblies to run through the Purge Haplotigs pipeline here
 assemblies:
-   masurca: "/path/to/masurca/assembly.fa"
-   canu: "/path/to/canu/assembly.fa"
-   wtdbg2: "/a/different/path/to/wtdbg2/assembly"
-   custom: "/path/to/a/custom/assembly.fa"
+   assembly_name: "/path/to/your/assembly/here.fasta"
 
 # Just the path to the shotgun reads. Right now the pipeline only
 #  supports one pair of paired WGS files.
-shot_f: "/bigdata/user/darrin/tjalfie/reads/shot/Tj_shot_f.fq.gz"
-shot_r: "/bigdata/user/darrin/tjalfie/reads/shot/Tj_shot_r.fq.gz"
+shot_f: "/path/to/forward/reads.fastq.gz"
+shot_r: "/path/to/reverse/reads.fastq.gz"
 
 # To set these parameters you need to generate the histogram from the bam file.
 #  [Look at the instructions here for how to pick low, med, and high](https://bitbucket.org/mroachawri/purge_haplotigs/src/master/)
