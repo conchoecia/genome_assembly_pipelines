@@ -1,0 +1,10 @@
+assemblies:
+  some_name_you_pick: "/path/to/assembly/to/revcomp.fasta"
+
+# a list of sequences in the assembly to revcomp
+rc:
+  - sca4
+  - sca6
+  - sca7
+  - sca9
+  - sca10
