@@ -19,11 +19,25 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 include: softlinks_rule_path
 
-rule fai_index_assemblies:
+rule print_out_temp_assembly_rewrap:
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
     output:
-        fai = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.fai")
+        assem = temp(config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta")
+    run:
+        from Bio import SeqIO
+
+        outhandle = open(output.assem, "w")
+        with open(input.assem, "rU") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                SeqIO.write(record, outhandle, "fasta")
+        outhandle.close()
+
+rule fai_index_assemblies:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta"
+    output:
+        fai = temp(config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai")
     shell:
         """
         samtools faidx {input.assem}
@@ -34,7 +48,7 @@ rule get_sort_list:
     sort the fai file to figure out the longest scaffolds
     """
     input:
-        fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai"
+        fai = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai"
     output:
         sort_list = temp(config["tool"] + "/input/sort_list/{nom}_sort_list.txt")
     threads: 1
@@ -48,8 +62,8 @@ rule reorder_fasta:
     this reorders the fasta files based on the length
     """
     input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai",
+        assem = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta",
+        fai = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai",
         sort_list = config["tool"] + "/input/sort_list/{nom}_sort_list.txt"
     output:
         assem = config["tool"] + "/output/assembly/{nom}_output.fasta"
