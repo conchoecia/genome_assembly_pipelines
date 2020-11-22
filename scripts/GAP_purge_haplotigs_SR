@@ -16,88 +16,14 @@ import pandas as pd
 import subprocess
 import sys
 import time
+import functions
 filepath = os.path.dirname(os.path.realpath(__file__))
 fs_path=os.path.join(filepath, "../bin/fasta_stats")
 
+config["tool"] = "GAP_purge_haplotigs_SR"
+CUTOFFS = [90, 80, 70]
+
 configfile: "config.yaml"
-maxthreads = 90
-
-print(config["assemblies"])
-
-def run_fasta_stats(fpath):
-    """
-    This runs fasta_stats on an assembly and returns a dictionary of the values.
-    """
-    this_data = {}
-    # This version is if you want N95_scaflen. Not a good idea for bad assemblies.
-    #new_fields = ["num_scaffolds", "num_tigs", "tot_size_scaffolds",
-    #              "tot_size_tigs", "scaffold_N50", "scaffold_L50",
-    #              "contig_N50", "contig_L50", "perGap", "N95_scaflen", "numGaps"]
-    new_fields = ["num_scaffolds",
-                  "num_tigs",
-                  "tot_size_scaffolds",
-                  "tot_size_tigs",
-                  "scaffold_N50",
-                  "scaffold_L50",
-                  "scaffold_N90",
-                  "scaffold_L90",
-                  "scaffold_N95",
-                  "scaffold_L95",
-                  "contig_N50",
-                  "contig_L50",
-                  "contig_N90",
-                  "contig_L90",
-                  "contig_N95",
-                  "contig_L95",
-                  "perGap",
-                  "numGaps"]
-    tcmd = "{} {}".format(fs_path, fpath).split(" ")
-    results = subprocess.run(tcmd, stdout=subprocess.PIPE).stdout.decode('utf-8').split()
-    assert len(new_fields)==len(results)
-    for i in range(len(results)):
-        if new_fields[i] == "perGap":
-            this_data[new_fields[i]] = float(results[i].strip('%'))
-        else:
-            this_data[new_fields[i]] = int(results[i])
-    return(this_data)
-
-def parse_flagstat(tfile):
-    """
-    just gets the percent mapping from flagstat
-    """
-    pmap = -1
-    with open(tfile, "r") as f:
-        counter = 0
-        for line in f:
-            if line.strip():
-                counter += 1
-                if counter == 5:
-                    assert "mapped" in line
-                    pmap = float(line.split("(")[1].split("%")[0])
-                    break
-    return pmap
-
-def parse_permap(tfile):
-    """
-    just gets the percent of bases in the reads that mapped,
-      and the number of reads that mapped
-    """
-    bmap = -1
-    pmap = -1
-    with open(tfile, "r") as f:
-        counter = 0
-        for line in f:
-            line = line.strip()
-            if line:
-                counter += 1
-                if counter == 3:
-                    assert "%" in line
-                    bmap = float(line.replace("%",""))
-                elif counter == 6:
-                    assert "%" in line
-                    pmap = float(line.replace("%",""))
-
-    return [bmap, pmap]
 
 rule all:
     input:
@@ -109,13 +35,13 @@ rule all:
         expand("PH_pipeline/coverage/plot_histo_SR_{nom}.pdf", nom=config["assemblies"]),
         expand("PH_pipeline/PH_hist/SR_to_{nom}.sorted.bam.gencov", nom=config["assemblies"]),
         #purge
-        expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.fasta", nom=config["assemblies"], CO=[90, 80, 70]),
+        expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.fasta", nom=config["assemblies"], CO=CUTOFFS),
         #clip
-        expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta", nom=config["assemblies"], CO=[90, 80, 70]),
+        expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta", nom=config["assemblies"], CO=CUTOFFS),
         #now collect information about the clip
-        expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.permap.txt", nom=config["assemblies"], CO=[90, 80, 70]),
-        expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.flagstat", nom=config["assemblies"], CO=[90, 80, 70]),
-        expand("PH_pipeline/coverage_after_clip/plot_histo_SR_{nom}_CO{CO}.pdf", nom=config["assemblies"], CO=[90, 80, 70]),
+        expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.permap.txt", nom=config["assemblies"], CO=CUTOFFS),
+        expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.flagstat", nom=config["assemblies"], CO=CUTOFFS),
+        expand("PH_pipeline/coverage_after_clip/plot_histo_SR_{nom}_CO{CO}.pdf", nom=config["assemblies"], CO=CUTOFFS),
         "PH_pipeline/final_results/final_results.tsv"
 
 rule map_SR_to_assembly:
@@ -127,7 +53,7 @@ rule map_SR_to_assembly:
     params:
         assembly = lambda wildcards: config["assemblies"][wildcards.nom]
     threads:
-        maxthreads
+        workflow.cores
     shell:
         """
         bwa index {params.assembly}
@@ -296,19 +222,21 @@ rule PH_purge:
         assembly = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.fasta",
         haplotigs = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.haplotigs.fasta"
     params:
-        tempdir  = lambda wildcards: "temp_{}_{}".format(wildcards.nom, wildcards.CO),
         cutoff   = lambda wildcards: wildcards.CO,
-        outdir   = lambda wildcards: "PH_pipeline/PH_purge/{0}_assemblies/PH_purge_{0}_CO{1}/".format(wildcards.nom, wildcards.CO),
+        tempdir  = lambda wildcards: "temp_{}_{}".format(wildcards.nom, wildcards.CO),
+        mv_these = lambda wildcards: "PH_purge_{0}_CO{1}".format(wildcards.nom, wildcards.CO),
         mkdir1   = "PH_pipeline/PH_purge",
         mkdir2   = lambda wildcards: "PH_pipeline/PH_purge/{0}_assemblies".format(wildcards.nom),
-        mv_these = lambda wildcards: "PH_pipeline/PH_purge_{}_CO{}".format(wildcards.nom, wildcards.CO)
+        outdir   = lambda wildcards: "PH_pipeline/PH_purge/{0}_assemblies/PH_purge_{0}_CO{1}/".format(wildcards.nom, wildcards.CO),
     threads:
-        maxthreads
+        workflow.cores
     shell:
         """
         rm -rf {params.tempdir}
         mkdir {params.tempdir}
         cd {params.tempdir}
+        mkdir {params.mv_these}
+
         purge_haplotigs purge -g {input.assembly} \
                -c ../{input.csv} -t {threads} \
                -d -b ../{input.bam} \
@@ -346,13 +274,21 @@ rule PH_clip:
         outdir   = lambda wildcards: "PH_pipeline/PH_purge/{0}_assemblies/PH_purge_{0}_CO{1}/".format(wildcards.nom, wildcards.CO),
         mv_these = lambda wildcards: "PH_pipeline/PH_purge_{}_CO{}_clip".format(wildcards.nom, wildcards.CO)
     threads:
-        maxthreads
+        workflow.cores
     shell:
         """
+        mkdir -p {params.mv_these}
         purge_haplotigs clip  -p {input.assembly} \
                -h {input.haplotigs} \
                -o {params.mv_these}
-        mv {params.mv_these}* {params.outdir}
+        # sometimes there are no overlaps, and the directory just ends up empty.
+        # in that case we need to handle the file specially.
+        if [ -z "$(ls -A /path/to/dir)" ]; then
+            cp {input.assembly} {output.clip}
+        else
+            mv {params.mv_these}* {params.outdir}
+        fi
+        rm -rf {params.mv_these}
         """
 
 rule map_SR_to_purged:
@@ -363,7 +299,7 @@ rule map_SR_to_purged:
     output:
         bam = temp("PH_pipeline/bams/clipped/SR_to_{nom}_CO{CO}_clip.sorted.bam")
     threads:
-        maxthreads
+        workflow.cores
     shell:
         """
         bwa index {input.assembly}
@@ -468,18 +404,17 @@ rule make_genome_stats_table:
     makes a table of all the relevant genome stats
     """
     input:
-        assembly = expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta", nom=config["assemblies"], CO=[90, 80, 70]),
-        per_before = expand("PH_pipeline/before_PH/{nom}_SR.permap.txt", nom=config["assemblies"], CO=[90, 80, 70]),
-        per_map = expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.permap.txt", nom=config["assemblies"], CO=[90, 80, 70]),
-        flagstat_before = expand("PH_pipeline/before_PH/{nom}_SR.flagstat", nom=config["assemblies"], CO=[90, 80, 70]),
-        flagstat_info = expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.flagstat", nom=config["assemblies"], CO=[90, 80, 70])
-
+        assembly = expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta", nom=config["assemblies"], CO=CUTOFFS),
+        per_before = expand("PH_pipeline/before_PH/{nom}_SR.permap.txt", nom=config["assemblies"], CO=CUTOFFS),
+        per_map = expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.permap.txt", nom=config["assemblies"], CO=CUTOFFS),
+        flagstat_before = expand("PH_pipeline/before_PH/{nom}_SR.flagstat", nom=config["assemblies"], CO=CUTOFFS),
+        flagstat_info = expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.flagstat", nom=config["assemblies"], CO=CUTOFFS)
     output:
         results_table = "PH_pipeline/final_results/final_results.tsv"
     run:
         all_samples = []
         for nom in config["assemblies"]:
-            for CO in [90, 80, 70]:
+            for CO in CUTOFFS:
                 tfile = "PH_purge/{0}_assemblies/PH_purge_{0}_CO{1}/PH_purge_{0}_CO{1}_clip.fasta".format(nom, CO)
                 this_dict = {}
                 this_dict["assem_file"] = tfile
