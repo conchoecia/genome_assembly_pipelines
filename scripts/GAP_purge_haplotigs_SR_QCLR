@@ -127,12 +127,13 @@ rule map_LR_to_assembly:
     output:
         bam = "PH_pipeline/bams/LR_to_{nom}.sorted.bam"
     params:
-        assembly = lambda wildcards: config["assemblies"][wildcards.nom]
+        assembly = lambda wildcards: config["assemblies"][wildcards.nom],
+        aflag = config["minimap2_ax_flag"]
     threads:
         workflow.cores - 1
     shell:
         """
-        minimap2 -t {threads} {params.assembly} {input.longreads} | \
+        minimap2 -ax {params.aflag} -t {threads} {params.assembly} {input.longreads} | \
             samtools view -hb -@ {threads} - | \
             samtools sort -@ {threads} - > {output.bam}
         samtools index {output.bam}
@@ -394,11 +395,13 @@ rule map_LR_to_purged:
         assembly = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta"
     output:
         bam = temp("PH_pipeline/bams/clipped/LR_to_{nom}_CO{CO}_clip.sorted.bam")
+    params:
+        aflag = config["minimap2_ax_flag"]
     threads:
         workflow.cores - 1
     shell:
         """
-        minimap2 -t {threads} {input.assembly} {input.longreads} | \
+        minimap2 -ax {params.aflag} -t {threads} {input.assembly} {input.longreads} | \
             samtools view -hb -@ {threads} - | \
             samtools sort -@ {threads} - > {output.bam}
         """
