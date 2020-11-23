@@ -9,5 +9,5 @@ rule index_softlinks:
     threads: 1
     shell:
         """
-        bwa index -a is {output.assem}
+        bwa index -a is {input.assem}
         """
