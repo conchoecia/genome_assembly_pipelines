@@ -29,11 +29,12 @@ rule getdiamondhits:
           --db {input.db} \
           --outfmt 6 \
           --sensitive \
-          --evalue 1e-25 \
+          --evalue 0.001 \
           --threads {threads} \
           --out {output.dmnd_out}
         blobtools taxify -f {output.dmnd_out} -m {input.taxids} -s 0 -t 2
         """
+
 rule blobtools_taxonify:
     input:
         dmnd_out = config["tool"] + "/input/dmnd/{nom}_dmnd.out",
