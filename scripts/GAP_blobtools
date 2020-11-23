@@ -1,5 +1,5 @@
 """
-This snakefile runs blobtools.
+This snakefile runs blobtools on the assembly.
 """
 configfile: "config.yaml"
 config["tool"] = "GAP_blobtools"
