@@ -415,33 +415,33 @@ rule make_genome_stats_table:
         all_samples = []
         for nom in config["assemblies"]:
             for CO in CUTOFFS:
-                tfile = "PH_purge/{0}_assemblies/PH_purge_{0}_CO{1}/PH_purge_{0}_CO{1}_clip.fasta".format(nom, CO)
+                tfile = "PH_pipeline/PH_purge/{0}_assemblies/PH_purge_{0}_CO{1}/PH_purge_{0}_CO{1}_clip.fasta".format(nom, CO)
                 this_dict = {}
                 this_dict["assem_file"] = tfile
                 this_dict["PH_CO"] = CO
                 this_dict["name"] = nom
                 # get the NCBI info first
                 # now get the other assembly info from fasta_stats
-                fstats_dict = run_fasta_stats(tfile)
+                fstats_dict = functions.run_fasta_stats(tfile)
                 z1 = {**this_dict, **fstats_dict}
 
                 # BEFORE PURGE HAPLOTIGS
                 # get the flagstat info
-                fstat_file = "before_PH/{0}_SR.flagstat".format(nom)
-                z1["before_flagstat_pMap"] = parse_flagstat(fstat_file)
+                fstat_file = "PH_pipeline/before_PH/{}_SR.flagstat".format(nom)
+                z1["before_flagstat_pMap"] = functions.parse_flagstat(fstat_file)
                 #get the manually calculated percent that maps (bases and reads)
-                pmap_file = "before_PH/{0}_SR.permap.txt".format(nom)
-                results = parse_permap(pmap_file)
+                pmap_file = "PH_pipeline/before_PH/{}_SR.permap.txt".format(nom)
+                results = functions.parse_permap(pmap_file)
                 z1["before_manual_pBMap"] = results[0]
                 z1["before_manual_pMap"] = results[1]
 
                 # AFTER PURGE HAPLOTIGS
                 # get the flagstat info
-                fstat_file = "after_PH/{0}_CO{1}_SR.flagstat".format(nom, CO)
-                z1["after_flagstat_pMap"] = parse_flagstat(fstat_file)
+                fstat_file = "PH_pipeline/after_PH/{0}_CO{1}_SR.flagstat".format(nom, CO)
+                z1["after_flagstat_pMap"] = functions.parse_flagstat(fstat_file)
                 #get the manually calculated percent that maps (bases and reads)
-                pmap_file = "after_PH/{0}_CO{1}_SR.permap.txt".format(nom, CO)
-                results = parse_permap(pmap_file)
+                pmap_file = "PH_pipeline/after_PH/{0}_CO{1}_SR.permap.txt".format(nom, CO)
+                results = functions.parse_permap(pmap_file)
                 z1["after_manual_pBMap"] = results[0]
                 z1["after_manual_pMap"] = results[1]
 
