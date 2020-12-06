@@ -142,7 +142,7 @@ rule hic_sort_pairsam:
     output:
         pps = config["tool"] + "/output/temp/sorted/{nom}_parsed_sorted.pairsam.gz"
     threads:
-        max(workflow.cores/9, 9)
+        workflow.cores - 1
     shell:
         """
         pairtools sort --nproc {threads} -o {output.pps} {input.ps} --tmpdir=./
@@ -163,7 +163,7 @@ rule hic_dedup:
         dpps = config["tool"] + "/output/temp/dedupe/{nom}_parsed_sorted_dedupe.pairsam.gz",
         stats = config["tool"] + "/output/pairsam_stats/{nom}_parsed_sorted_dedupe.pairsam.stats"
     threads:
-        max(workflow.cores/9, 9)
+        workflow.cores - 1
     params:
         nom = lambda w: w.nom
     shell:
