@@ -14,14 +14,28 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 SR_link_and_map=os.path.join(filepath, "snakemake_includes/SR_map_to_input")
 include: SR_link_and_map
 
-rule getdiamondhits:
-    input:
-        db = config["diamond_db"],
-        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta"
+rule download_taxid:
     output:
-        dmnd_out = config["tool"] + "/input/dmnd/{nom}_dmnd.out"
+        taxid_file = filepath + "/../db/nr_accesion_to_taxids.txt"
+    threads: 1
+    params:
+        db = config["nr_db"]
+    shell:
+        """
+        blastdbcmd -db {params.db} -entry all \
+           -outfmt "%a %T" | \
+           awk '{{print($1, "NCBI_TaxID", $2)}}' > {output.taxid_file}
+        """
+
+rule get_diamond_nr_hits:
+    input:
+        db = config["diamond_nr_db"],
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        taxid_file = filepath + "/../db/nr_accesion_to_taxids.txt"
+    output:
+        dmnd_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx"
     threads:
-        workflow.cores
+        workflow.cores - 1
     shell:
         """
         diamond blastx \
@@ -32,18 +46,19 @@ rule getdiamondhits:
           --evalue 0.001 \
           --threads {threads} \
           --out {output.dmnd_out}
-        blobtools taxify -f {output.dmnd_out} -m {input.taxids} -s 0 -t 2
         """
 
 rule blobtools_taxonify:
     input:
-        dmnd_out = config["tool"] + "/input/dmnd/{nom}_dmnd.out",
-        taxids = config["diamond_db"].replace(".diamond.dmnd", ".taxids")
+        dmnd_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx",
+        taxid_file = filepath + "/../db/nr_accesion_to_taxids.txt"
     output:
-        taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.taxified.out",
+        taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
+    params:
+        outprefix = lambda wildcards: config["tool"] + "/input/dmnd/{}_dmnd.blastx.taxified".format(wildcards.nom)
     shell:
         """
-        blobtools taxify -f {input.dmnd_out} -m {input.taxids} -s 0 -t 2
+        blobtools taxify -f {input.dmnd_out} -m {input.taxid_file} -s 0 -t 2 -o {params.outprefix}
         """
 
 rule blobtools_create:
@@ -51,7 +66,7 @@ rule blobtools_create:
         assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
         bam = config["tool"] + "/input/bams/SR_to_{nom}_input.sorted.bam",
         bai = config["tool"] + "/input/bams/SR_to_{nom}_input.sorted.bam.bai",
-        taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.taxified.out"
+        taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
     output:
         blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
     params:
@@ -80,13 +95,3 @@ rule blobtools_view_and_plot:
         blobtools plot -i {input.blob_results}
         mv {params.mv_prefix}* {params.mv_folder}
         """
-
-#blastn \
-# -task megablast \
-# -query "${ASSEMBLY}" \
-# -db "${BLASTDIR}/nt" \
-# -outfmt '6 qseqid staxids bitscore std' \
-# -max_target_seqs 10 \
-# -max_hsps 1 \
-# -num_threads "${THREADS}" \
-# -evalue 1e-5 > assem_to_nt.txt
