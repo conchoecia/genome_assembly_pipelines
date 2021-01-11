@@ -1,0 +1,96 @@
+"""
+This snakefile takes an input fasta file,
+  outputs scaffolds in the name and order as specified,
+  otherwise it sorts the scaffolds from longest to shortest,
+  then outputs a new fasta file with all of those
+  scaffolds renamed sca1, sca2, ... scaN
+
+This program uses a lot of RAM in favor of speed.
+"""
+import subprocess
+configfile: "config.yaml"
+config["tool"] = "GAP_reorder_assembly"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/assembly/{nom}_output.fasta",
+               nom=config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule fai_index_assemblies:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    output:
+        fai = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.fai")
+    shell:
+        """
+        samtools faidx {input.assem}
+        """
+
+rule get_sort_list:
+    """
+    sort the fai file to figure out the longest scaffolds
+    """
+    input:
+        fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai"
+    output:
+        sort_list = temp(config["tool"] + "/input/sort_list/{nom}_sort_list.txt")
+    threads: 1
+    shell:
+        """
+        sort -k2 -nr {input.fai} | cut -f1,2 > {output.sort_list}
+        """
+
+rule reorder_fasta:
+    """
+    this reorders the fasta files based on the length
+    """
+    input:
+        assem     = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        fai       = config["tool"] + "/input/assembly/{nom}_input.fasta.fai",
+        sort_list = config["tool"] + "/input/sort_list/{nom}_sort_list.txt"
+    output:
+        assem = config["tool"] + "/output/assembly/{nom}_output.fasta",
+    threads: 1
+    run:
+        from Bio import SeqIO
+
+        unprinted = {}
+        already_printed = set()
+        for record in SeqIO.parse(input.assem, "fasta"):
+            unprinted[record.id] = record
+        outhandle = open(output.assem, "w")
+        # now print out the specified scaffolds
+        for entrypair in config["scaf_to_name"]:
+            if not entrypair[0] in unprinted:
+                raise IOError(entrypair[0] + " not in dict.")
+            unprinted[entrypair[0]].id          = entrypair[1]
+            unprinted[entrypair[0]].description = entrypair[1]
+            SeqIO.write(unprinted[entrypair[0]], outhandle, 'fasta')
+            del unprinted[entrypair[0]]
+            already_printed.add(entrypair[0])
+        # now print out everything else
+        scacounter = 1
+        with open(input.sort_list, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    scaf   = line.split()[0]
+                    if scaf in already_printed:
+                        pass
+                    elif scaf not in unprinted:
+                        raise IOError(scaf + " should have been in unprinted.")
+                    else:
+                        newscaid = "sca{}".format(scacounter)
+                        unprinted[scaf].id          = newscaid
+                        unprinted[scaf].description = newscaid
+                        SeqIO.write(unprinted[scaf], outhandle, 'fasta')
+                        del unprinted[scaf]
+                        already_printed.add(scaf)
+                        scacounter += 1
