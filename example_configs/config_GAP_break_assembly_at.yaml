@@ -1,0 +1,12 @@
+assemblies:
+  your_assem_name: "/path/to/assembly/to/rename/reorder.fasta"
+
+# Define the breaks here. Doesn't matter if they're in order
+breaks:
+  scaf_name:
+    - 50098 # first break at 50,098 bp
+    - 2899009 # another break around 2.9 Mb
+    - 60750 # another break here
+  scaf2:
+    - 29348
+    - 32987
