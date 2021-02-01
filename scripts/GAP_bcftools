@@ -1,0 +1,69 @@
+"""
+This takes a bam file and runs bcftools. Does it on a per-scaffold
+ basis to speed things up.
+"""
+from Bio import SeqIO
+configfile: "config.yaml"
+
+config["tool"] = "GAP_bcftools"
+
+def get_chromosome_sizes(assembly_file):
+    """
+    gets all the chromosomes from the assembly
+     to help cleanup the snakefile
+    """
+    chroms = set()
+    with open(assembly_file) as handle:
+        for record in SeqIO.parse(handle, "fasta"):
+            chroms.add(record.id)
+
+config["scafs"] = get_chromosome_sizes(config["assembly"])
+
+rule all:
+    input:
+         expand(config["tool"] + "/input/bam/split/split.REF_{scaf}.bam",
+                scaf = config["scafs"])
+
+
+rule softlink_bam:
+    input:
+        bam = config["bam"]
+    output:
+        softlink = config["tool"] + "/input/bam/orig/input.bam",
+    threads: 1
+    shell:
+        """
+        ln -s {input.bam} {output.softlink}
+        """
+
+rule index_bam:
+    input:
+        bam = config["tool"] + "/input/bam/orig/input.bam",
+    output:
+        bai = config["tool"] + "/input/bam/orig/input.bam.bai",
+    threads: 1
+    shell:
+        """
+        samtools index {input.bam}
+        """
+
+# split bam files by chromosome
+rule split_bams:
+    input:
+        bam = config["tool"] + "/input/bam/orig/input.bam",
+        bai = config["tool"] + "/input/bam/orig/input.bam.bai",
+    output:
+        split = expand(config["tool"] + "/input/bam/split/split.REF_{scaf}.bam",
+                       scaf = config["scafs"])
+    params:
+        stub     = config["tool"] + "/input/bam/split/split"
+    shell:
+        """
+        bamtools split -in {input.bam} -reference -stub {params.stub}
+
+        for thisfile in {output.split}; do
+            if [ ! -f ${{thisfile}} ]; then
+                samtools view -Hb {input.bam} > ${{thisfile}}
+            fi
+        done
+        """
