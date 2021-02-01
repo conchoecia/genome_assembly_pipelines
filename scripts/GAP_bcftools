@@ -6,6 +6,7 @@ from Bio import SeqIO
 configfile: "config.yaml"
 
 config["tool"] = "GAP_bcftools"
+config["minDPeach"] = 10
 
 def get_chromosome_sizes(assembly_file):
     """
@@ -16,20 +17,22 @@ def get_chromosome_sizes(assembly_file):
     with open(assembly_file) as handle:
         for record in SeqIO.parse(handle, "fasta"):
             chroms.add(record.id)
+    return chroms
 
-config["scafs"] = get_chromosome_sizes(config["assembly"])
+if "scafs" not in config:
+    config["scafs"] = get_chromosome_sizes(config["assembly"])
 
 rule all:
     input:
-         expand(config["tool"] + "/input/bam/split/split.REF_{scaf}.bam",
-                scaf = config["scafs"])
+        expand(config["tool"] + "/output/vcf/merged/{bam}/{bam}.vcf",
+               bam = config["bams"]),
+        config["tool"] + "/output/vcf/all_merged/all_bams_merged.vcf"
 
-
-rule softlink_bam:
+rule softlink_bams:
     input:
-        bam = config["bam"]
+        bam = lambda wildcards: config["bams"][wildcards.bam]
     output:
-        softlink = config["tool"] + "/input/bam/orig/input.bam",
+        softlink = config["tool"] + "/input/bam/orig/{bam}/{bam}.input.bam",
     threads: 1
     shell:
         """
@@ -38,9 +41,9 @@ rule softlink_bam:
 
 rule index_bam:
     input:
-        bam = config["tool"] + "/input/bam/orig/input.bam",
+        bam = config["tool"] + "/input/bam/orig/{bam}/{bam}.input.bam",
     output:
-        bai = config["tool"] + "/input/bam/orig/input.bam.bai",
+        bai = config["tool"] + "/input/bam/orig/{bam}/{bam}.input.bam.bai"
     threads: 1
     shell:
         """
@@ -50,13 +53,13 @@ rule index_bam:
 # split bam files by chromosome
 rule split_bams:
     input:
-        bam = config["tool"] + "/input/bam/orig/input.bam",
-        bai = config["tool"] + "/input/bam/orig/input.bam.bai",
+        bam = config["tool"] + "/input/bam/orig/{bam}/{bam}.input.bam",
+        bai = config["tool"] + "/input/bam/orig/{bam}/{bam}.input.bam.bai"
     output:
-        split = expand(config["tool"] + "/input/bam/split/split.REF_{scaf}.bam",
+        split = expand(config["tool"] + "/input/bam/split/{{bam}}/{{bam}}.REF_{scaf}.bam",
                        scaf = config["scafs"])
     params:
-        stub     = config["tool"] + "/input/bam/split/split"
+        stub = lambda wildcards: config["tool"] + "/input/bam/split/{0}/{0}".format(wildcards.bam)
     shell:
         """
         bamtools split -in {input.bam} -reference -stub {params.stub}
@@ -67,3 +70,149 @@ rule split_bams:
             fi
         done
         """
+
+# split bam files by chromosome
+rule bcftools_call:
+    """Just call all the variants"""
+    input:
+        bam = config["tool"] + "/input/bam/split/{bam}/{bam}.REF_{scaf}.bam",
+        assem = config["assembly"]
+    output:
+        bcf =  config["tool"] + "/output/bcf/{bam}/{bam}.{scaf}.bcf"
+    threads: 1
+    shell:
+        """
+        bcftools mpileup -A -d 8000 -f {input.assem} {input.bam} | \
+            bcftools call -mv -Ob -o {output.bcf}
+        """
+
+rule bcf_to_vcf:
+    input:
+        bcf =  config["tool"] + "/output/bcf/{bam}/{bam}.{scaf}.bcf"
+    output:
+        vcf =  config["tool"] + "/output/vcf/raw/{bam}/{bam}.{scaf}.vcf"
+    threads: 1
+    shell:
+        """
+        bcftools view {input.bcf} > {output.vcf}
+        """
+
+rule filter_vcf:
+    """filters a VCF. Only keeps SNPs and each allele must have been seen at least
+       10 times on either strand. keeps header"""
+    input:
+        vcf =  config["tool"] + "/output/vcf/raw/{bam}/{bam}.{scaf}.vcf"
+    output:
+        filt =  config["tool"] + "/output/vcf/filt/{bam}/{bam}.{scaf}.vcf"
+    threads: 1
+    params:
+        minDPeach = config["minDPeach"]
+    run:
+        handle = open(input.vcf, "r")
+        outhandle = open(output.filt, "w")
+        for line in handle:
+            line=line.strip()
+            if line:
+                if line[0:2] == "##":
+                    print(line, file = outhandle)
+                else:
+                    # only get SNPs
+                    splitd=line.split("\t")
+                    if len(splitd[3]) == 1 and len(splitd[4]) == 1:
+                        # now make sure the DP4 looks good
+                        splitd = splitd[7].split(";")
+                        for entry in splitd:
+                            if "DP4=" in entry:
+                                counts = [int(x) for x in entry.replace("DP4=","").split(',')]
+                                keep = True
+                                for thiscount in counts:
+                                    if thiscount < params.minDPeach:
+                                        keep = False
+                                        break
+                                if keep:
+                                    print(line, file = outhandle)
+        outhandle.close()
+        handle.close()
+
+rule concat_filt_vcf:
+    input:
+        filt =  expand(config["tool"] + "/output/vcf/filt/{{bam}}/{{bam}}.{scaf}.vcf",
+                       scaf = config["scafs"])
+    output:
+        merged = config["tool"] + "/output/vcf/merged/{bam}/{bam}.vcf",
+    threads: 1
+    params:
+        minDPeach = config["minDPeach"]
+    run:
+        outhandle = open(output.merged, "w")
+        handle = open(input.filt[0], "r")
+        # first just print out the header
+        for line in handle:
+            line=line.strip()
+            if line:
+                if line[0:2] == "##":
+                    print(line, file = outhandle)
+        print("## this vcf file only contains SNPs that have DP of at least 10 for each allele", file = outhandle)
+        print("## while the commands for this vcf file insinuate that it only contains", file = outhandle)
+        print("##   variants for one scaffold, it actually contains variants for all of", file = outhandle)
+        print("##   the scaffolds in the \"##contg=...\" fields.", file = outhandle)
+        handle.close()
+        for thisfile in input.filt:
+            print("processing {}".format(thisfile))
+            handle = open(thisfile, "r")
+            # first just print out the header
+            for line in handle:
+                line=line.strip()
+                if line:
+                     if line[0:2] != "##":
+                         print(line, file = outhandle)
+            handle.close()
+        outhandle.close()
+
+rule mega_merge_vcf:
+    """
+    This merges the VCFs from all the bams into a single one-individual vcf.
+    Don't use this unless you're certain that the vcfs have mutually exclusive sequences.
+    """
+    input:
+        merged = expand(config["tool"] + "/output/vcf/merged/{bam}/{bam}.vcf",
+                        bam = config["bams"])
+    output:
+        merged = config["tool"] + "/output/vcf/all_merged/all_bams_merged.vcf"
+    threads: 1
+    run:
+        outhandle = open(output.merged, "w")
+        # first get a list of contigs that are in both
+        contig_set = set()
+        for thisfile in input.merged:
+            handle = open(thisfile, "r")
+            for line in handle:
+                line=line.strip()
+                if line:
+                     if line[0:12] == "##contig=<ID":
+                         contig_set.add(line)
+            handle.close()
+        # now print a header with cat'd contigs
+        with open(input.merged[1], "r") as handle:
+            for line in handle:
+                line=line.strip()
+                if line:
+                    if line.startswith("##"):
+                        if line.startswith("##reference="):
+                            print(line, file = outhandle)
+                            for thiscontig in contig_set:
+                                print(thiscontig, file = outhandle)
+                        if not line.startswith("##contig=<ID"):
+                            print(line, file = outhandle)
+        # now print out the variants
+        for thisfile in input.merged:
+            print("processing {}".format(thisfile))
+            handle = open(thisfile, "r")
+            # first just print out the header
+            for line in handle:
+                line=line.strip()
+                if line:
+                     if line[0:2] != "##":
+                         print(line, file = outhandle)
+            handle.close()
+        outhandle.close()
