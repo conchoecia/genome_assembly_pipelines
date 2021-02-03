@@ -113,7 +113,7 @@ rule filter_vcf:
         for line in handle:
             line=line.strip()
             if line:
-                if line[0:2] == "##":
+                if line.startswith("#"):
                     print(line, file = outhandle)
                 else:
                     # only get SNPs
@@ -150,12 +150,12 @@ rule concat_filt_vcf:
         for line in handle:
             line=line.strip()
             if line:
-                if line[0:2] == "##":
+                if line.startswith("#"):
                     print(line, file = outhandle)
-        print("## this vcf file only contains SNPs that have DP of at least 10 for each allele", file = outhandle)
-        print("## while the commands for this vcf file insinuate that it only contains", file = outhandle)
-        print("##   variants for one scaffold, it actually contains variants for all of", file = outhandle)
-        print("##   the scaffolds in the \"##contg=...\" fields.", file = outhandle)
+        #print("## this vcf file only contains SNPs that have DP of at least 10 for each allele", file = outhandle)
+        #print("## while the commands for this vcf file insinuate that it only contains", file = outhandle)
+        #print("##   variants for one scaffold, it actually contains variants for all of", file = outhandle)
+        #print("##   the scaffolds in the \"##contg=...\" fields.", file = outhandle)
         handle.close()
         for thisfile in input.filt:
             print("processing {}".format(thisfile))
@@ -164,7 +164,7 @@ rule concat_filt_vcf:
             for line in handle:
                 line=line.strip()
                 if line:
-                     if line[0:2] != "##":
+                     if not line.startswith("#"):
                          print(line, file = outhandle)
             handle.close()
         outhandle.close()
@@ -197,7 +197,7 @@ rule mega_merge_vcf:
             for line in handle:
                 line=line.strip()
                 if line:
-                    if line.startswith("##"):
+                    if line.startswith("#"):
                         if line.startswith("##reference="):
                             print(line, file = outhandle)
                             for thiscontig in contig_set:
@@ -212,7 +212,7 @@ rule mega_merge_vcf:
             for line in handle:
                 line=line.strip()
                 if line:
-                     if line[0:2] != "##":
+                     if not line.startswith("#"):
                          print(line, file = outhandle)
             handle.close()
         outhandle.close()
