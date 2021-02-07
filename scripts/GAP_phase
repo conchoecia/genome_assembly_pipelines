@@ -1,17 +1,16 @@
-# author: Peter Edge
-# 12/19/2016
-# email: pedge@eng.ucsd.edu
-# modified by DTS in Feb 2020 - dts@ucsc.edu
-
-# this is a snakemake Snakefile, written using snakemake 5.10.0
-
 """
 This snakemake file is used for phasing a genome given a set of input data.
 If some of the data types are missing, that is OK.
+Uses HAPCUT2.
+
+Script inspired by:
+# author: Peter Edge
+# 12/19/2016
+# email: pedge@eng.ucsd.edu
+
+Heavily modified by DTS in 2020-2021 dts@ucsc.edu.
+ - Written using snakemake 5.10.0
 """
-from Bio import SeqIO
-import os
-import subprocess
 
 configfile: "config.yaml"
 config["tool"] = "GAP_phase"
@@ -58,10 +57,10 @@ if config["HIC_R1"] == "" or config["HIC_R2"] == "":
         os.mknod(config["HIC_R2"])
 
 if config["longread_bam"] == "":
-    outstem = config["tool"] + "/input/bam"
+    outstem = config["tool"] + "/output/bams/temp"
     if not os.path.exists(outstem):
         os.makedirs(outstem)
-    config["longread_bam"] = outstem + "/longread.sorted.bam"
+    config["longread_bam"] = outstem + "/longreads_sorted.bam"
     if not os.path.exists(config["longread_bam"]):
         os.mknod(config["longread_bam"])
 
@@ -69,26 +68,21 @@ rule all:
     input:
         #expand(config["tool"] + "/output/vcf/orig/split/{chrom}.vcf",
         #            chrom=config["chroms"]),
-        expand(config["tool"] + "/output/bams/markeddups/{libtype}.metrics",
-               libtype = ["ill", "chi", "hic"])
+        expand(config["tool"] + "/output/bams/temp/{libtype}_sorted.bam",
+               libtype = ["ill", "chi", "hic", "longreads"]),
+        expand(config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai",
+               libtype = ["ill", "chi", "hic", "longreads"]),
+        expand(config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag",
+               chrom = config["chroms"]),
+        expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
+               chrom = config["chroms"]),
 
-        ##"data/hic.bam",
-        ##"data/chi.bam",
-        ##"data/ill.bam",
-        ### get the frag files
-        ##expand("data/hic/{chrom}.frag", chrom=config["chroms"]),
-        ##expand("data/longread/{chrom}.frag", chrom=config["chroms"]),
-        ##expand('output/{chrom}.hap',chrom=config["chroms"]),
-        ##expand('output/{chrom}.hap.phased.VCF', chrom=config["chroms"]),
-        #"final_output/complete_assembly.hap.gz",
-        #"final_output/complete_assembly.hap.phased.VCF.gz",
-        #"final_output/complete_assembly.hap.phased.VCF.gz.tbi",
-        #"final_output/hapcut_largest_blocks_per_sca.txt",
-        #"final_output/hapcut_largest_block_final_table.txt",
-        #"final_output/largest_blocks.hap.phased.VCF.gz",
-        #"final_output/largest_blocks.hap.phased.VCF.gz.tbi",
-        #expand("final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom=config["chroms"]),
-        #expand("final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi", chrom=config["chroms"])
+        config["tool"] + "/output/final_output/complete_assembly.hap.gz",
+        config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz",
+        config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt",
+        config["tool"] + "/output/final_output/hapcut_largest_block_final_table.txt",
+        config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
+        expand(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom = config["chroms"])
 
 ######################################################################
 #  Make a softlink of the assembly
@@ -151,7 +145,7 @@ rule make_longreads_bam_softlink:
     params:
         longreads = config["longread_bam"]
     output:
-        bam = config["tool"] + "/input/bam/longread.sorted.bam"
+        bam = config["tool"] + "/output/bams/temp/longreads_sorted.bam"
     shell:
         """
         ln -s {params.longreads} {output.bam}
@@ -298,6 +292,15 @@ rule index_genome:
     shell:
         'bwa index {input.ref}'
 
+rule index_genome_faidx:
+    input:
+        ref = config["tool"] + "/input/assembly/input.fasta",
+    output:
+        bwt = config["tool"] + "/input/assembly/input.fasta.fai"
+    threads: 1
+    shell:
+        'samtools faidx {input.ref}'
+
 # align HiC fastq file to reference
 rule align_HiC_fastq:
     input:
@@ -306,13 +309,15 @@ rule align_HiC_fastq:
         R1 = config["tool"] + "/input/reads/hic_R1.fastq.gz",
         R2 = config["tool"] + "/input/reads/hic_R2.fastq.gz"
     output:
-        hic_bam = temp(config["tool"] + "/output/bams/temp/hic_sorted.bam")
+        hic_bam = config["tool"] + "/output/bams/temp/hic_sorted.bam"
     threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/3)
     shell:
         """
         bwa mem -t {threads} -5SPM {input.ref} {input.R1} {input.R2} | \
-          samtools view -hb -@ {threads} | \
-          samtools sort -@ {threads} - > {output.hic_bam}
+          samtools view -hb -@ {params.sort_threads} | \
+          samtools sort -@ {params.sort_threads} - > {output.hic_bam}
         """
 
 rule align_Chicago_fastq:
@@ -322,13 +327,15 @@ rule align_Chicago_fastq:
         R1 = config["tool"] + "/input/reads/chi_R1.fastq.gz",
         R2 = config["tool"] + "/input/reads/chi_R2.fastq.gz"
     output:
-        chi_bam = temp(config["tool"] + "/output/bams/temp/chi_sorted.bam")
+        chi_bam = config["tool"] + "/output/bams/temp/chi_sorted.bam"
     threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/3)
     shell:
         """
         bwa mem -t {threads} -5SPM {input.ref} {input.R1} {input.R2} | \
-          samtools view -hb -@ {threads} | \
-          samtools sort -@ {threads} - > {output.chi_bam}
+          samtools view -hb -@ {params.sort_threads} | \
+          samtools sort -@ {params.sort_threads} - > {output.chi_bam}
         """
 
 rule align_Illumina_fastq:
@@ -338,450 +345,455 @@ rule align_Illumina_fastq:
         R1 = config["tool"] + "/input/reads/ill_R1.fastq.gz",
         R2 = config["tool"] + "/input/reads/ill_R2.fastq.gz"
     output:
-        ill_bam = temp(config["tool"] + "/output/bams/temp/ill_sorted.bam")
+        ill_bam = config["tool"] + "/output/bams/temp/ill_sorted.bam"
     threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/3)
     shell:
         """
         bwa mem -t {threads} {input.ref} {input.R1} {input.R2} | \
-          samtools view -hb -@ {threads} | \
-          samtools sort -@ {threads} - > {output.ill_bam}
+          samtools view -hb -@ {params.sort_threads} | \
+          samtools sort -@ {params.sort_threads} - > {output.ill_bam}
+        """
+
+rule index_bams:
+    input:
+        bam = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam"
+    output:
+        bai = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai"
+    threads: 1
+    shell:
+        """
+        samtools index {input.bam}
         """
 
 ######################################################################
-# Mark duplicates from the Illumina bam files
+# Split the chromosomes
 ######################################################################
 
-rule mark_duplicates:
+# SPLIT bam files by chromosome
+rule split_bams:
+    input:
+        bam = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam",
+        bai = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai"
+    output:
+        bams = expand(config["tool"] + "/output/bams/split/{{libtype}}.REF_{chrom}.bam",
+               chrom=config["chroms"])
+    params:
+        stub = config["tool"] + "/output/bams/split/{libtype}"
+    threads: 1
+    shell:
+        """
+        bamtools split -in {input.bam} -reference -stub {params.stub}
+
+        for thisfile in {output.bams}; do
+            if [ ! -f ${{thisfile}} ]; then
+                samtools view -Hb {input.bam} > ${{thisfile}}
+            fi
+        done
+        """
+
+rule mark_duplicates_in_split_bams:
     """
     This marks the duplicates for chicago, illumina, and hi-c
     """
     input:
-        bam = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam",
+        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
         picard = config["PICARD"]
     output:
-        bam = config["tool"] + "/output/bams/markeddups/{libtype}_sorted.markeddups.bam",
-        metrics = config["tool"] + "/output/bams/markeddups/{libtype}.metrics",
+        bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam",
+        metrics = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.metrics"
+    threads: 1
     shell:
         """
         java -jar {input.picard} MarkDuplicates READ_NAME_REGEX=null \
-            INPUT= {input.bam} OUTPUT={output.bam} \
+            INPUT={input.bam} OUTPUT={output.bam} \
             METRICS_FILE={output.metrics} \
             ASSUME_SORTED=true
         """
 
-#rule split_phased_into_individual_chromosomes:
-#    input:
-#        final_gz = "final_output/largest_blocks.hap.phased.VCF.gz",
-#        final_in = "final_output/largest_blocks.hap.phased.VCF.gz.tbi"
-#    output:
-#        chroms = temp("final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.VCF"),
-#        chromgz = "final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
-#        index = "final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi"
-#    threads: 1
-#    params:
-#        tchrom = lambda w: w.chrom
-#    shell:
-#        """
-#        bcftools filter -r {params.tchrom} {input.final_gz} > {output.chroms}
-#        # compress
-#        bgzip -c {output.chroms} > {output.chromgz}
-#        # index
-#        tabix -p vcf {output.chromgz}
-#        """
-#
-#rule make_table_of_final_output:
-#    """
-#    This makes a table of the results from phasing. Useful for plotting.
-#    The columns included are:
-#      - chrom (the name from the fasta header)
-#      - chrom_length (the sequence length)
-#      - largest_pb_start (1-based start index for the largest phase block)
-#      - largest_pb_stop  (1-based stop index for the largest phase block)
-#      - largest_pb_length (the size of the largest phase block)
-#      - largest_pb_num_var (the number of variants in the largest phase block)
-#      - largest_pb_num_phased (the number of phased variants in the largest phase block)
-#    """
-#    input:
-#        txt = "final_output/hapcut_largest_blocks_per_sca.txt",
-#        gzi = "final_output/largest_blocks.hap.phased.VCF.gz",
-#        chroms = expand("final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom = config["chroms"])
-#    output:
-#        txt = "final_output/hapcut_largest_block_final_table.txt"
-#    run:
-#        outtxt = open(output.txt, "w")
-#        print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
-#               "chrom",
-#               "chrom_length",
-#               "largest_pb_start",
-#               "largest_pb_stop",
-#               "largest_pb_length",
-#               "percent_of_chrom_in_largest_pb",
-#               "largest_pb_num_var",
-#               "largest_pb_num_phased",
-#               "percent_of_vars_phased"),
-#               file=outtxt)
-#        with open(input.txt, "r") as f:
-#            for line in f:
-#                line = line.strip()
-#                if line:
-#                    splitd = line.split("\t")
-#                    chrom = splitd[0]
-#                    chrom_length = chrom_to_length[chrom]
-#                    gzvcf = "final_output/phased_by_chromosome/largest_blocks.hap.phased.{}.vcf.gz".format(chrom)
-#                    find_start_command = "zcat {} | grep '{}' | grep -v '#' | head -1 | cut -f2".format(gzvcf, chrom)
-#                    find_stop_command = "zcat {} | grep '{}' | grep -v '#' | tail -1 | cut -f2".format(gzvcf, chrom)
-#                    out = subprocess.Popen(find_start_command,
-#                                           shell=True,
-#                                           stdout=subprocess.PIPE,
-#                                           stderr=subprocess.STDOUT)
-#                    stdout,stderr = out.communicate()
-#                    largest_pb_start = int(stdout.decode("utf-8").strip().replace("\n",""))
-#                    out = subprocess.Popen(find_stop_command,
-#                                           shell=True,
-#                                           stdout=subprocess.PIPE,
-#                                           stderr=subprocess.STDOUT)
-#                    stdout,stderr = out.communicate()
-#                    largest_pb_stop = int(stdout.decode("utf-8").strip().replace("\n",""))
-#                    #largest_pb_length_hapcut = int(splitd[2].split()[8])
-#                    largest_pb_length = largest_pb_stop - largest_pb_start + 1
-#                    largest_pb_num_var    = int(splitd[2].split()[4])
-#                    largest_pb_num_phased = int(splitd[2].split()[6])
-#                    percent_of_chrom_in_largest_pb = "{0:.4f}".format((largest_pb_length/chrom_length)*100)
-#                    percent_of_vars_phased = "{0:.2f}".format((largest_pb_num_phased/largest_pb_num_var)*100)
-#                    print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
-#                           chrom,
-#                           chrom_length,
-#                           largest_pb_start,
-#                           largest_pb_stop,
-#                           largest_pb_length,
-#                           percent_of_chrom_in_largest_pb,
-#                           largest_pb_num_var,
-#                           largest_pb_num_phased,
-#                           percent_of_vars_phased),
-#                           file=outtxt)
-#        outtxt.close()
-#
-#rule compress_final_output:
-#    input:
-#        final_vcf = "final_output/largest_blocks.hap.phased.VCF"
-#    output:
-#        final_gz = "final_output/largest_blocks.hap.phased.VCF.gz",
-#        final_in = "final_output/largest_blocks.hap.phased.VCF.gz.tbi"
-#    threads: 1
-#    shell:
-#        """
-#        # compress
-#        bgzip -c {input.final_vcf} > {output.final_gz}
-#        # index
-#        tabix -p vcf {output.final_gz}
-#        """
-#
-#rule hap_blocks_to_vcf:
-#    input:
-#        vcf = "final_output/complete_assembly.hap.phased.VCF",
-#        hap = "final_output/complete_assembly.hap",
-#        txt = "final_output/hapcut_largest_blocks_per_sca.txt"
-#    output:
-#        final_vcf = temp("final_output/largest_blocks.hap.phased.VCF")
-#    threads: 1
-#    run:
-#        # first get the headers that we want
-#        headers = set()
-#        with open(input.txt, "r") as f:
-#            for line in f:
-#                line = line.split("\"")[1]
-#                headers.add(line)
-#        # now get the sites that we will keep
-#        #  key is chr, set of sites
-#        keepers = {}
-#        with open(input.hap, "r") as f:
-#            capturing = False
-#            for line in f:
-#                line=line.replace('*',"").strip()
-#                if line:
-#                    splitd = line.split()
-#                    if splitd[0] == "BLOCK:":
-#                        if line in headers:
-#                            capturing = True
-#                        else:
-#                            capturing = False
-#                    else:
-#                        if capturing:
-#                            this_c = splitd[3]
-#                            this_s = int(splitd[4])
-#                            if this_c not in keepers:
-#                                keepers[this_c] = set()
-#                            keepers[this_c].add(this_s)
-#        # now get the sites that are in the phase blocks
-#        writeme = open(output.final_vcf, "w")
-#        with open(input.vcf, "r") as f:
-#            for line in f:
-#                line = line.strip()
-#                if line:
-#                    if line[0] == '#':
-#                        print(line, file = writeme)
-#                    else:
-#                        # not a comment
-#                        splitd = line.split()
-#                        this_c = splitd[0]
-#                        this_s = int(splitd[1])
-#                        if this_c in keepers:
-#                            if this_s in keepers[this_c]:
-#                                print(line, file = writeme)
-#        writeme.close()
-#
-#rule gzip_hapcut2_vcf:
-#    input:
-#        vcf = "final_output/complete_assembly.hap.phased.VCF"
-#    output:
-#        vcf = "final_output/complete_assembly.hap.phased.VCF.gz",
-#        tbi = "final_output/complete_assembly.hap.phased.VCF.gz.tbi",
-#    shell:
-#        """
-#        bgzip -c {input.vcf} > {output.vcf}
-#        # index
-#        tabix -p vcf {output.vcf}
-#        """
-#
-#rule gzip_complete_assembly_hap_file:
-#    input:
-#        hap = "final_output/complete_assembly.hap"
-#    output:
-#        gzipped = "final_output/complete_assembly.hap.gz"
-#    shell:
-#        """
-#        gzip {input.hap}
-#        """
-#
-#rule get_largest_hap_blocks:
-#    input:
-#        hap = "final_output/complete_assembly.hap",
-#        vcf = "final_output/complete_assembly.hap.phased.VCF"
-#    output:
-#        txt = "final_output/hapcut_largest_blocks_per_sca.txt"
-#    run:
-#        biggest_blocks = {}
-#        this_block_header = ""
-#        this_block_c = ""
-#        this_block_start = -1
-#        this_block_stop = -1
-#        with open(input.hap, "r") as f:
-#            for line in f:
-#                line = line.replace("*", "").strip()
-#                if line:
-#                    splitd = line.split()
-#                    if splitd[0] == "BLOCK:":
-#                        # we have just found a new block
-#                        if not this_block_header == "":
-#                            # not the first, add an entry to biggest_blocks
-#                            span = int(this_block_stop) - int(this_block_start) + 1
-#                            add_this = False
-#                            if this_block_c not in biggest_blocks:
-#                                add_this = True
-#                            else:
-#                                if span > biggest_blocks[this_block_c]["span"]:
-#                                    add_this = True
-#                            if add_this:
-#                                biggest_blocks[this_block_c] = {"name": this_block_header, "span": span}
-#                        this_block_start = -1
-#                        this_block_stop = -1
-#                        this_block_header = line
-#                    else:
-#                        if this_block_start == -1:
-#                            this_block_start = splitd[4]
-#                            this_block_stop = splitd[4]
-#                            this_block_c     = splitd[3]
-#                        else:
-#                            this_block_stop = splitd[4]
-#        # final parsing at the end
-#        add_this = False
-#        if this_block_c not in biggest_blocks:
-#            add_this = True
-#        else:
-#            if span > biggest_blocks[thisc]["span"]:
-#                add_this = True
-#        if add_this:
-#            biggest_blocks[this_block_c] = {"name": this_block_header, "span": span}
-#        with open(output.txt, "w") as f:
-#            for key in biggest_blocks:
-#                print("{}\t{}\t\"{}\"".format(
-#                      key,
-#                      biggest_blocks[key]["span"],
-#                      biggest_blocks[key]["name"]), file = f)
-#
-#rule sort_final_vcf:
-#    """
-#    I found a trick here to avoid grep crashing in case of a nonmatch
-#    https://unix.stackexchange.com/questions/330660
-#    """
-#    input:
-#        origvcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf"
-#        vcf = expand("output/{chrom}.hap.phased.VCF", chrom = config["chroms"]),
-#        hap = expand("output/{chrom}.hap", chrom = config["chroms"]),
-#    output:
-#        hap = temp("final_output/complete_assembly.hap"),
-#        vcf = temp("final_output/complete_assembly.hap.phased.VCF")
-#    shell:
-#        """
-#        set +e
-#
-#        cat {input.origvcf} | grep '##fileformat'  > temp.vcf
-#        cat {input.origvcf} | grep '##filedate'    >> temp.vcf
-#        cat {input.origvcf} | grep '##source'      >> temp.vcf
-#        cat {input.origvcf} | grep '##reference'   >> temp.vcf
-#        cat {input.origvcf} | grep '##commandline' >> temp.vcf
-#        cat {input.origvcf} | grep '##contig'      >> temp.vcf
-#        cat {input.origvcf} | grep '##INFO'        >> temp.vcf
-#        cat {input.origvcf} | grep '##FORMAT'      >> temp.vcf
-#        cat {input.origvcf} | grep '#CHROM'        >> temp.vcf
-#        echo '##SAMPLE=<ID=NONE>'        >> temp.vcf
-#
-#
-#        cat {input.vcf} >> temp.vcf
-#        cat {input.hap} > {output.hap}
-#        cat temp.vcf | awk '$1 ~ /^#/ {{print $0;next}} {{print $0 | "sort -k1,1 -k2,2n"}}' > {output.vcf}
-#        rm temp.vcf
-#        set -e
-#        """
-#
-## run HapCUT2 to assemble haplotypes from combined Hi-C + longread haplotype fragments
-#rule run_hapcut2_hic_longread:
-#    input:
-#        frag_file = 'data/all_datatypes/{chrom}.frag',
-#        vcf_file  = config["tool"] + "/output/vcf/orig/split/{chrom}.vcf"
-#    output: hap = 'output/{chrom}.hap',
-#            vcf = 'output/{chrom}.hap.phased.VCF'
-#    params:
-#        thischrom = lambda wildcards: wildcards.chrom
-#    threads: 1
-#    shell:
-#        """
-#        HAPCUT2 --fragments {input.frag_file} --vcf {input.vcf_file} \
-#            --output {output.hap} \
-#            --hic 1 \
-#            --htrans_data_outfile output/{params.thischrom}.htrans_model \
-#            --outvcf 1
-#        """
-#
-## then concatenate the Hi-C fragment file and longread fragment file
-#rule concatenate_hic_longread:
-#    input:  hic      = "data/hic/{chrom}.frag",
-#            longread = "data/longread/{chrom}.frag",
-#            chicago  = "data/chi/{chrom}.frag",
-#            ill      = "data/ill/{chrom}.frag"
-#    output: cat = "data/all_datatypes/{chrom}.frag"
-#    threads: 1
-#    shell:
-#        """
-#        cat {input.hic} {input.longread} {input.chicago} {input.ill} > {output.cat}
-#        """
-#
-## convert Hi-C bam files to haplotype fragment files
-#rule longread_extract_hairs:
-#    input:
-#        ref = config["reference"],
-#        bam = "data/longread_separated/longread.REF_{chrom}.bam",
-#        vcf  = "data/vcfdir/{chrom}.vcf"
-#    output:
-#        frag = 'data/longread/{chrom}.frag'
-#    threads: 1
-#    shell:
-#        """
-#        extractHAIRS --pacbio 1 --new_format 1 --indels 1 \
-#           --bam {input.bam} --ref {input.ref} --VCF {input.vcf} > {output.frag}
-#        """
-#
-## convert Hi-C bam files to haplotype fragment files
-#rule hic_extract_hairs:
-#    input:
-#        bam = "data/hic_separated/hic.REF_{chrom}.bam",
-#        vcf = "data/vcfdir/{chrom}.vcf"
-#    output:
-#        frag = "data/hic/{chrom}.frag"
-#    threads: 1
-#    shell:
-#        """
-#        extractHAIRS --hic 1 --new_format 1 \
-#           --indels 1 --bam {input.bam} --VCF {input.vcf} > {output.frag}
-#        """
-#
-#rule chi_extract_hairs:
-#    """
-#    The parameters for Chicago data were taken from:
-#      https://github.com/vibansal/HapCUT2/issues/13
-#    """
-#    input:
-#        ref = config["reference"],
-#        bam = "data/chi_separated/chi.REF_{chrom}.bam",
-#        vcf = "data/vcfdir/{chrom}.vcf"
-#    output:
-#        frag = "data/chi/{chrom}.frag"
-#    threads: 1
-#    shell:
-#        """
-#        extractHAIRS --maxIS 10000000 --new_format 1 \
-#           --indels 1 --ref {input.ref} \
-#           --bam {input.bam} --VCF {input.vcf} > {output.frag}
-#        """
-#
-#rule ill_extract_hairs:
-#    input:
-#        ref = config["reference"],
-#        bam = "data/ill_separated/ill.REF_{chrom}.bam",
-#        vcf = "data/vcfdir/{chrom}.vcf"
-#    output:
-#        frag = "data/ill/{chrom}.frag"
-#    threads: 1
-#    shell:
-#        """
-#        extractHAIRS --new_format 1 \
-#           --indels 1 --ref {input.ref} \
-#           --bam {input.bam} --VCF {input.vcf} > {output.frag}
-#        NGRE
-#        """
-#
-## SPLIT bam files by chromosome
-#rule split_bams:
-#    params: job_name = '{dataset}_bamsplit',
-#            stub     = 'data/{dataset}_separated/{dataset}',
-#    input:  bam = 'data/{dataset}.bam'
-#    output: expand('data/{{dataset}}_separated/{{dataset}}.REF_{chrom}.bam',chrom=config["chroms"])
-#    shell:
-#        """
-#        bamtools split -in {input} -reference -stub {params.stub}
-#
-#        for thisfile in {output}; do
-#            if [ ! -f ${{thisfile}} ]; then
-#                samtools view -Hb {input.bam} > ${{thisfile}}
-#            fi
-#        done
-#        """
-#
-#
-#rule mark_duplicates_chicago:
-#    params: job_name = 'mark_duplicates_chicago'
-#    input:  bam = 'data/temp/chi_sorted.bam',
-#            picard = config["PICARD"]
-#    output: bam = 'data/chi.bam',
-#            metrics = 'data/chi.metrics'
-#    shell:
-#        """
-#        java -jar {input.picard} MarkDuplicates READ_NAME_REGEX= null \
-#            INPUT= {input.bam} OUTPUT= {output.bam} \
-#            METRICS_FILE= {output.metrics} \
-#            ASSUME_SORTED= true
-#        """
-#
-#rule mark_duplicates_illumina:
-#    params: job_name = 'mark_duplicates_illumina'
-#    input:  bam = 'data/temp/ill_sorted.bam',
-#            picard = config["PICARD"]
-#    output: bam = 'data/ill.bam',
-#            metrics = 'data/ill.metrics'
-#    shell:
-#        """
-#        java -jar {input.picard} MarkDuplicates READ_NAME_REGEX= null \
-#            INPUT= {input.bam} OUTPUT= {output.bam} \
-#            METRICS_FILE= {output.metrics} \
-#            ASSUME_SORTED= true
-#        """
+rule index_markeddup_bams:
+    input:
+        bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam",
+    output:
+        bai = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam.bai",
+    threads: 1
+    shell:
+        """
+        samtools index {input.bam}
+        """
+
+######################################################################
+# Extract the hairs from the different data types
+######################################################################
+
+# convert Hi-C bam files to haplotype fragment files
+rule extract_hairs:
+    input:
+        ref = config["tool"] + "/input/assembly/input.fasta",
+        bwt = config["tool"] + "/input/assembly/input.fasta.bwt",
+        fai = config["tool"] + "/input/assembly/input.fasta.fai",
+        bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam",
+        bai = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam.bai",
+        vcf = config["tool"] + "/output/vcf/orig/split/{chrom}.vcf"
+    output:
+        frag = config["tool"] + "/output/hapcut2_evidence/per-datatype/{libtype}.{chrom}.frag"
+    threads: 1
+    params:
+        fragtype = lambda wildcards: wildcards.libtype
+    shell:
+        """
+        if [ "{params.fragtype}" == "longreads" ]; then
+            extractHAIRS --pacbio 1 --new_format 1 --indels 1 \
+               --bam {input.bam} --ref {input.ref} --VCF {input.vcf} > {output.frag}
+        elif [ "{params.fragtype}" == "hic" ]; then
+            extractHAIRS --hic 1 --new_format 1 \
+               --indels 1 --bam {input.bam} --VCF {input.vcf} > {output.frag}
+        elif [ "{params.fragtype}" == "chi" ]; then
+            extractHAIRS --maxIS 10000000 --new_format 1 \
+               --indels 1 --ref {input.ref} \
+               --bam {input.bam} --VCF {input.vcf} > {output.frag}
+        elif [ "{params.fragtype}" == "ill" ]; then
+            extractHAIRS --new_format 1 \
+               --indels 1 --ref {input.ref} \
+               --bam {input.bam} --VCF {input.vcf} > {output.frag}
+        fi
+        """
+
+rule concatenate_HAPCUT2_evidence:
+    input:
+        frags = expand(config["tool"] + "/output/hapcut2_evidence/per-datatype/{libtype}.{{chrom}}.frag",
+                       libtype = ["ill", "chi", "hic", "longreads"])
+    output:
+        cat = config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag"
+    threads: 1
+    shell:
+        """
+        cat {input.frags} > {output.cat}
+        """
+
+######################################################################
+# Run HAPCUT2 - once per scaffold
+######################################################################
+
+# run HapCUT2 to assemble haplotypes from combined Hi-C + longread haplotype fragments
+rule run_hapcut2_hic_longread:
+    input:
+        frag = config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag",
+        vcf  = config["tool"] + "/output/vcf/orig/split/{chrom}.vcf"
+    output:
+        hap   = config["tool"] + "/output/hapcut2_results/{chrom}.hap",
+        vcf   = config["tool"] + "/output/hapcut2_results/{chrom}.hap.phased.VCF"
+    params:
+        thischrom = lambda wildcards: wildcards.chrom,
+        model = config["tool"] + "/output/hapcut2_results/{chrom}.htrans_model"
+    threads: 1
+    shell:
+        """
+        HAPCUT2 --fragments {input.frag} --vcf {input.vcf} \
+            --output {output.hap} \
+            --hic 1 \
+            --htrans_data_outfile {params.model} \
+            --outvcf 1
+        """
+
+######################################################################
+# Once we have the HAPCUT2 output, put it in a useful format
+######################################################################
+
+rule sort_final_vcf:
+    """
+    This combines the vcf and hap files from hapcut2
+
+    I found a trick here to avoid grep crashing in case of a nonmatch
+    https://unix.stackexchange.com/questions/330660
+    """
+    input:
+        origvcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf",
+        vcf = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap.phased.VCF",
+                     chrom = config["chroms"]),
+        hap = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
+                     chrom = config["chroms"]),
+    output:
+        hap = temp(config["tool"] + "/output/final_output/complete_assembly.hap"),
+        vcf = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf")
+    threads: 1
+    shell:
+        """
+        set +e
+
+        cat {input.origvcf} | grep '##fileformat'  > temp.vcf
+        cat {input.origvcf} | grep '##filedate'    >> temp.vcf
+        cat {input.origvcf} | grep '##source'      >> temp.vcf
+        cat {input.origvcf} | grep '##reference'   >> temp.vcf
+        cat {input.origvcf} | grep '##commandline' >> temp.vcf
+        cat {input.origvcf} | grep '##contig'      >> temp.vcf
+        cat {input.origvcf} | grep '##INFO'        >> temp.vcf
+        cat {input.origvcf} | grep '##FORMAT'      >> temp.vcf
+        cat {input.origvcf} | grep '#CHROM'        >> temp.vcf
+        echo '##SAMPLE=<ID=NONE>'        >> temp.vcf
+
+        cat {input.vcf} >> temp.vcf
+        cat {input.hap} > {output.hap}
+        cat temp.vcf | awk '$1 ~ /^#/ {{print $0;next}} {{print $0 | "sort -k1,1 -k2,2n"}}' > {output.vcf}
+        rm temp.vcf
+        set -e
+        """
+
+rule get_largest_hap_blocks:
+    input:
+        hap = config["tool"] + "/output/final_output/complete_assembly.hap",
+        vcf = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf"
+    output:
+        txt = config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt"
+    run:
+        biggest_blocks = {}
+        this_block_header = ""
+        this_block_c = ""
+        this_block_start = -1
+        this_block_stop = -1
+        with open(input.hap, "r") as f:
+            for line in f:
+                line = line.replace("*", "").strip()
+                if line:
+                    splitd = line.split()
+                    if splitd[0] == "BLOCK:":
+                        # we have just found a new block
+                        if not this_block_header == "":
+                            # not the first, add an entry to biggest_blocks
+                            span = int(this_block_stop) - int(this_block_start) + 1
+                            add_this = False
+                            if this_block_c not in biggest_blocks:
+                                add_this = True
+                            else:
+                                if span > biggest_blocks[this_block_c]["span"]:
+                                    add_this = True
+                            if add_this:
+                                biggest_blocks[this_block_c] = {"name": this_block_header, "span": span}
+                        this_block_start = -1
+                        this_block_stop = -1
+                        this_block_header = line
+                    else:
+                        if this_block_start == -1:
+                            this_block_start = splitd[4]
+                            this_block_stop = splitd[4]
+                            this_block_c     = splitd[3]
+                        else:
+                            this_block_stop = splitd[4]
+        # final parsing at the end
+        add_this = False
+        if this_block_c not in biggest_blocks:
+            add_this = True
+        else:
+            if span > biggest_blocks[this_block_c]["span"]:
+                add_this = True
+        if add_this:
+            biggest_blocks[this_block_c] = {"name": this_block_header, "span": span}
+        with open(output.txt, "w") as f:
+            for key in biggest_blocks:
+                print("{}\t{}\t\"{}\"".format(
+                      key,
+                      biggest_blocks[key]["span"],
+                      biggest_blocks[key]["name"]), file = f)
+
+rule hap_blocks_to_vcf:
+    """
+    This converts the haplotype blocks to a vcf
+    """
+    input:
+        hap = config["tool"] + "/output/final_output/complete_assembly.hap",
+        vcf = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf",
+        txt = config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt"
+    output:
+        final_vcf = temp(config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf")
+    threads: 1
+    run:
+        # first get the headers that we want
+        headers = set()
+        with open(input.txt, "r") as f:
+            for line in f:
+                line = line.split("\"")[1]
+                headers.add(line)
+        # now get the sites that we will keep
+        #  key is chr, set of sites
+        keepers = {}
+        with open(input.hap, "r") as f:
+            capturing = False
+            for line in f:
+                line=line.replace('*',"").strip()
+                if line:
+                    splitd = line.split()
+                    if splitd[0] == "BLOCK:":
+                        if line in headers:
+                            capturing = True
+                        else:
+                            capturing = False
+                    else:
+                        if capturing:
+                            this_c = splitd[3]
+                            this_s = int(splitd[4])
+                            if this_c not in keepers:
+                                keepers[this_c] = set()
+                            keepers[this_c].add(this_s)
+        # now get the sites that are in the phase blocks
+        writeme = open(output.final_vcf, "w")
+        with open(input.vcf, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    if line[0] == '#':
+                        print(line, file = writeme)
+                    else:
+                        # not a comment
+                        splitd = line.split()
+                        this_c = splitd[0]
+                        this_s = int(splitd[1])
+                        if this_c in keepers:
+                            if this_s in keepers[this_c]:
+                                print(line, file = writeme)
+        writeme.close()
+
+######################################################################
+#   Compress the output
+######################################################################
+rule compress_final_output:
+    input:
+        final_vcf = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf"
+    output:
+        final_gz = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
+        final_in = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz.tbi"
+    threads: 1
+    shell:
+        """
+        # compress
+        bgzip -c {input.final_vcf} > {output.final_gz}
+        # index
+        tabix -p vcf {output.final_gz}
+        """
+
+rule gzip_hapcut2_vcf:
+    input:
+        vcf = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf"
+    output:
+        vcf = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz",
+        tbi = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz.tbi"
+    shell:
+        """
+        bgzip -c {input.vcf} > {output.vcf}
+        # index
+        tabix -p vcf {output.vcf}
+        """
+
+rule gzip_complete_assembly_hap_file:
+    input:
+        hap = config["tool"] + "/output/final_output/complete_assembly.hap"
+    output:
+        gzipped = config["tool"] + "/output/final_output/complete_assembly.hap.gz"
+    shell:
+        """
+        gzip {input.hap}
+        """
+
+########################################################################
+#    Now split this into different chromosomes and make the final table
+########################################################################
+
+rule split_phased_into_individual_chromosomes:
+    input:
+        final_gz = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
+        final_in = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz.tbi"
+    output:
+        chroms = temp(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf"),
+        chromgz = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
+        index = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi"
+    threads: 1
+    params:
+        tchrom = lambda w: w.chrom
+    shell:
+        """
+        bcftools filter -r {params.tchrom} {input.final_gz} > {output.chroms}
+        # compress
+        bgzip -c {output.chroms} > {output.chromgz}
+        # index
+        tabix -p vcf {output.chromgz}
+        """
+
+rule make_table_of_final_output:
+    """
+    This makes a table of the results from phasing. Useful for plotting.
+    The columns included are:
+      - chrom (the name from the fasta header)
+      - chrom_length (the sequence length)
+      - largest_pb_start (1-based start index for the largest phase block)
+      - largest_pb_stop  (1-based stop index for the largest phase block)
+      - largest_pb_length (the size of the largest phase block)
+      - largest_pb_num_var (the number of variants in the largest phase block)
+      - largest_pb_num_phased (the number of phased variants in the largest phase block)
+    """
+    input:
+        txt = config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt",
+        gzi = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
+        chroms = expand(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom = config["chroms"]),
+        ref = config["tool"] + "/input/assembly/input.fasta"
+    output:
+        txt = config["tool"] + "/output/final_output/hapcut_largest_block_final_table.txt"
+    run:
+        # get chrom sizes
+        from Bio import SeqIO
+        chrom_to_length = {}
+        with open(input.ref, "rU") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                chrom_to_length[record.id] = len(record.seq)
+
+        outtxt = open(output.txt, "w")
+        print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
+               "chrom",
+               "chrom_length",
+               "largest_pb_start",
+               "largest_pb_stop",
+               "largest_pb_length",
+               "percent_of_chrom_in_largest_pb",
+               "largest_pb_num_var",
+               "largest_pb_num_phased",
+               "percent_of_vars_phased"),
+               file=outtxt)
+        with open(input.txt, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    chrom = splitd[0]
+                    chrom_length = chrom_to_length[chrom]
+                    gzvcf = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{}.vcf.gz".format(chrom)
+                    find_start_command = "zcat {} | grep '{}' | grep -v '#' | head -1 | cut -f2".format(gzvcf, chrom)
+                    find_stop_command = "zcat {} | grep '{}' | grep -v '#' | tail -1 | cut -f2".format(gzvcf, chrom)
+                    out = subprocess.Popen(find_start_command,
+                                           shell=True,
+                                           stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT)
+                    stdout,stderr = out.communicate()
+                    largest_pb_start = int(stdout.decode("utf-8").strip().replace("\n",""))
+                    out = subprocess.Popen(find_stop_command,
+                                           shell=True,
+                                           stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT)
+                    stdout,stderr = out.communicate()
+                    largest_pb_stop = int(stdout.decode("utf-8").strip().replace("\n",""))
+                    #largest_pb_length_hapcut = int(splitd[2].split()[8])
+                    largest_pb_length = largest_pb_stop - largest_pb_start + 1
+                    largest_pb_num_var    = int(splitd[2].split()[4])
+                    largest_pb_num_phased = int(splitd[2].split()[6])
+                    percent_of_chrom_in_largest_pb = "{0:.4f}".format((largest_pb_length/chrom_length)*100)
+                    percent_of_vars_phased = "{0:.2f}".format((largest_pb_num_phased/largest_pb_num_var)*100)
+                    print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
+                           chrom,
+                           chrom_length,
+                           largest_pb_start,
+                           largest_pb_stop,
+                           largest_pb_length,
+                           percent_of_chrom_in_largest_pb,
+                           largest_pb_num_var,
+                           largest_pb_num_phased,
+                           percent_of_vars_phased),
+                           file=outtxt)
+        outtxt.close()
