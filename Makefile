@@ -3,7 +3,16 @@ FSD=src/fstats/
 
 all: bin/fasta_stats dependencies/SALSA/run_pipeline.py \
      dependencies/SALSA/break_contigs_start \
-     bin/pilon-1.23.jar dependencies/pairix/bin/pairix
+     bin/pilon-1.23.jar dependencies/pairix/bin/pairix \
+     bin/fqjt bin/minlen_pair
+
+bin/fqjt: src/fq-jt.c
+	mkdir -p bin
+	gcc -gdwarf-2 -g src/fq-jt.c -lz -o bin/fqjt
+
+bin/minlen_pair: src/minlen_pair.c src/kseq.h
+	mkdir -p bin
+	gcc src/minlen_pair.c -lz -o bin/minlen_pair
 
 bin/fasta_stats: ${FSD}fasta_stats.cc ${FSD}itoa.cc ${FSD}open_compressed.h
 	mkdir -p bin
