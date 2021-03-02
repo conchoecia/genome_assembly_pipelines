@@ -1,0 +1,2 @@
+assemblies:
+  your_assem_name: "/path/to/assembly/to/rename/reorder.fasta"
