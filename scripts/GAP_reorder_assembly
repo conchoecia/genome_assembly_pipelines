@@ -37,7 +37,7 @@ rule fai_index_assemblies:
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta"
     output:
-        fai = temp(config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai")
+        fai = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai"
     shell:
         """
         samtools faidx {input.assem}
@@ -57,6 +57,7 @@ rule get_sort_list:
         sort -k2 -nr {input.fai} | cut -f1,2 > {output.sort_list}
         """
 
+# uses a lot of ram, but OK for pesky headers
 rule reorder_fasta:
     """
     this reorders the fasta files based on the length
@@ -66,19 +67,21 @@ rule reorder_fasta:
         fai = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai",
         sort_list = config["tool"] + "/input/sort_list/{nom}_sort_list.txt"
     output:
-        assem = config["tool"] + "/output/assembly/{nom}_output.fasta"
+        assem = config["tool"] + "/output/assembly/{nom}_output.fasta",
     threads: 1
     run:
-        first = True
+        from Bio import SeqIO
+
+        unprinted = {}
+        for record in SeqIO.parse(input.assem, "fasta"):
+            unprinted[record.id] = record
+        outhandle = open(output.assem, "w")
+        # now print out everything else
         with open(input.sort_list, "r") as f:
             for line in f:
                 line = line.strip()
                 if line:
                     scaf   = line.split()[0]
-                    if first:
-                        this_cmd = "samtools faidx {} {} > {}".format(input.assem, scaf, output.assem)
-                        subprocess.run(this_cmd, shell = True)
-                        first = False
-                    else:
-                        this_cmd = "samtools faidx {} {} >> {}".format(input.assem, scaf, output.assem)
-                        subprocess.run(this_cmd, shell = True)
+                    SeqIO.write(unprinted[scaf], outhandle, 'fasta')
+                    del unprinted[scaf]
+        outhandle.close()
