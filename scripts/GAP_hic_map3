@@ -32,7 +32,11 @@ rule all:
 
         #final files
         # chromsize
-        expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt", nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
+               nom = config["assemblies"]),
+        # gaps
+        expand(config["tool"] + "/output/{nom}/{nom}_gaps.bed",
+               nom = config["assemblies"]),
         # get the diagnostic png before doing anything else
         expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.cool.png",
                nom = config["assemblies"], binsize=config["binsize"]),
@@ -84,6 +88,43 @@ rule index_ref:
         """
         bwa index {input.assem}
         """
+
+rule gaps_from_assembly:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    output:
+        gapbed = config["tool"] + "/output/{nom}/{nom}_gaps.bed"
+    threads: 1
+    run:
+        # this block of code from https://www.biostars.org/p/133742/
+        import sys
+        #import the SeqIO module from Biopython
+        outhandle = open(output.gapbed, "w")
+        with open(input.assem, mode="r") as fasta_handle:
+            for record in SeqIO.parse(fasta_handle, "fasta"):
+                start_pos=0
+                counter=0
+                gap=False
+                gap_length = 0
+                for char in record.seq:
+                    if char == 'N':
+                        if gap_length == 0:
+                            start_pos=counter
+                            gap_length = 1
+                            gap = True
+                        else:
+                            gap_length += 1
+                    else:
+                        if gap:
+                            print("{}\t{}\t{}".format(
+                                record.id,
+                                start_pos,
+                                start_pos + gap_length),
+                                  file = outhandle)
+                            gap_length = 0
+                            gap = False
+                    counter += 1
+        outhandle.close()
 
 rule map_hic_to_ref:
     input:
