@@ -37,6 +37,8 @@ rule all:
         # gaps
         expand(config["tool"] + "/output/{nom}/{nom}_gaps.bed",
                nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_gaps.beddb",
+               nom = config["assemblies"]),
         # get the diagnostic png before doing anything else
         expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.cool.png",
                nom = config["assemblies"], binsize=config["binsize"]),
@@ -116,7 +118,7 @@ rule gaps_from_assembly:
                             gap_length += 1
                     else:
                         if gap:
-                            print("{}\t{}\t{}".format(
+                            print("{} {} {}".format(
                                 record.id,
                                 start_pos,
                                 start_pos + gap_length),
@@ -125,6 +127,23 @@ rule gaps_from_assembly:
                             gap = False
                     counter += 1
         outhandle.close()
+
+rule make_beddb:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        gapbed = config["tool"] + "/output/{nom}/{nom}_gaps.bed",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        beddb = config["tool"] + "/output/{nom}/{nom}_gaps.beddb"
+    threads: 1
+    shell:
+        """
+        clodius aggregate bedfile \
+          --chromsizes-filename {input.cs} \
+          --delimiter " " {input.gapbed} \
+          --assembly {input.assem} \
+          --output-file {output.beddb}
+        """
 
 rule map_hic_to_ref:
     input:
