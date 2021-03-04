@@ -1,0 +1,1106 @@
+"""
+This makes a Hi-C map for a diploid assembly.
+  Essentially it just filters out read pairs for which there is not
+  at least one haplotype-specific read.
+
+As input, takes these file:
+  - Deduped dedup.filt.pairs.gz file from GAP_hic_map3 output
+  - A phased and gzipped VCF file that only contains the largest haplotype block.
+     This file is output by GAP_phase
+  - A Hi-C bam file that has been haplotagged by calling whatshap haplotag
+  - A diploid reference genome
+
+example whatshap haplotag command:
+"""
+
+from Bio import SeqIO
+import os
+import gzip
+import io
+from subprocess import call
+
+minchromsize = 1000000
+configfile: "config.yaml"
+config["tool"] = "GAP_hic_map3_phased"
+
+def get_chromosome_sizes(assembly_file, minsize):
+    """
+    returns a set of chromosomes to keep
+    """
+    chroms = []
+    with open(assembly_file) as handle:
+        for record in SeqIO.parse(handle, "fasta"):
+            if len(record.seq) >= minsize:
+                chroms.append(record.id)
+    return chroms
+
+if "chroms" not in config:
+    config["chroms"] = []
+    from Bio import SeqIO
+    with open(config["assembly"], "rU") as handle:
+        for record in SeqIO.parse(handle, "fasta"):
+            if len(record.seq) >= config["minscafsize"]:
+                config["chroms"].append(record.id)
+
+# we don't want this block anymore.
+# need custom processing
+#if "bamdirectory" in config:
+#    targetdir = config["tool"] + "/input/bams/split/"
+#    if not os.path.exists(targetdir):
+#        os.makedirs(targetdir)
+#    bamfiles = [f for f in os.listdir(config["bamdirectory"])
+#                 if (os.path.isfile(os.path.join(config["bamdirectory"], f))
+#                     and f.endswith(".bam") and f.startswith("hic.") )]
+#    for thisfile in bamfiles:
+#        thissca = thisfile.split(".")[1].split("_")[1]
+#        if thissca in config["chroms"]:
+#            src = os.path.abspath(os.path.join(config["bamdirectory"], thisfile))
+#            dest = os.path.abspath(os.path.join(targetdir, thisfile))
+#            if not os.path.exists(dest):
+#                os.symlink(src, dest)
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/pairs/phased/{stringency}.phased.dedup.filt.pairs.phasestats",
+               chrom=config["chroms"], stringency = ["single", "double"]),
+
+        # chromsize
+        expand(config["tool"] + "/output/chromsize.txt",
+               stringency = ["single", "double"]),
+        # get the diagnostic png before doing anything else
+        expand(config["tool"] + "/output/{stringency}/{stringency}.{binsize}.cool.png",
+               stringency = ["single", "double"], binsize=config["binsize"]),
+        # balanced cool
+        expand(config["tool"] + "/output/{stringency}/{stringency}_balanced.{binsize}.cool",
+               stringency = ["single", "double"], binsize=config["binsize"]),
+        # mcool from balanced
+        expand(config["tool"] + "/output/{stringency}/{stringency}_balanced.{binsize}.mcool",
+               stringency = ["single", "double"], binsize=config["binsize"]),
+        ## plots of AB compartmentalization
+        #expand(config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf", stringency = config["assemblies"], binsize = [x for x in config["binsize"] if int(x) >= 50000])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{stringency}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+
+rule softlink_assem:
+    input:
+        assem = os.path.abspath(config["assembly"])
+    output:
+        assem = config["tool"] + "/input/assembly/input.fasta"
+    threads: 1
+    shell:
+        "ln -s {input.assem} {output.assem}"
+
+rule index_assembly:
+    input:
+       assem  = config["tool"] + "/input/assembly/input.fasta",
+    output:
+        amb   = config["tool"] + "/input/assembly/input.fasta.amb",
+        ann   = config["tool"] + "/input/assembly/input.fasta.ann",
+        bwt   = config["tool"] + "/input/assembly/input.fasta.bwt",
+        pac   = config["tool"] + "/input/assembly/input.fasta.pac",
+    threads: 1
+    shell:
+        """
+        bwa index -a is {input.assem}
+        """
+
+rule fai_assembly:
+    input:
+        assem  = config["tool"] + "/input/assembly/input.fasta",
+    output:
+        fai   = config["tool"] + "/input/assembly/input.fasta.fai",
+    threads: 1
+    shell:
+        """
+        samtools faidx {input.assem}
+        """
+
+rule chrom_size:
+    """
+    make a file with the chromosome sizes
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/input.fasta"
+    output:
+        cs = config["tool"] + "/output/chromsize.txt"
+    threads: 1
+    shell:
+        """
+        bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
+        """
+
+rule softlink_gzipped_vcf:
+    input:
+        vcf = os.path.abspath(config["gzipped_vcf"])
+    output:
+        vcf = config["tool"] + "/input/vcf/input.vcf.gz"
+    threads: 1
+    shell:
+        "ln -s {input.vcf} {output.vcf}"
+
+rule index_vcf:
+    input:
+        vcf = os.path.abspath(config["gzipped_vcf"])
+    output:
+        tbi = config["tool"] + "/input/vcf/input.vcf.gz.tbi"
+    threads: 1
+    params:
+        vcfpos = config["gzipped_vcf"]
+    shell:
+        """
+        tabix -f -p vcf {input.vcf}
+        ln -s {params.vcfpos}.tbi {output.tbi}
+        """
+
+rule softlink_hic_reads:
+    input:
+        read1 = config["HICF"],
+        read2 = config["HICR"]
+    output:
+        read1 = temp(config["tool"] + "/input/reads/raw/hic.f.fastq.gz"),
+        read2 = temp(config["tool"] + "/input/reads/raw/hic.r.fastq.gz")
+    threads: 1
+    shell:
+        """
+        ln -s {input.read1} {output.read1}
+        ln -s {input.read2} {output.read2}
+        """
+
+rule trim_pairs:
+    input:
+        read1 = config["tool"] + "/input/reads/raw/hic.f.fastq.gz",
+        read2 = config["tool"] + "/input/reads/raw/hic.r.fastq.gz",
+        trim_jar = os.path.join(filepath, "../dependencies/trimmomatic/trimmomatic-0.35.jar"),
+        adapterfile = os.path.join(filepath, "../dependencies/trimmomatic/adapters/TruSeq3-PE-2.fa")
+    output:
+        f_paired =  temp(config["tool"] + "/input/reads/trimmed/hic.f.trim.fastq.gz"),
+        r_paired =  temp(config["tool"] + "/input/reads/trimmed/hic.r.trim.fastq.gz"),
+        f_unp    =  temp(config["tool"] + "/input/temp/unpaired/hic.f.unpaired.fastq.gz"),
+        r_unp    =  temp(config["tool"] + "/input/temp/unpaired/hic.r.unpaired.fastq.gz"),
+    threads: 7 if workflow.cores > 7 else workflow.cores
+    run:
+        #print("lol here is adapter path")
+        #print(adapter_path)
+        shell("""java -jar {} PE \
+              -phred33 -threads {} \
+              {} {} \
+              {} \
+              {} \
+              {} \
+              {} \
+              ILLUMINACLIP:{}:2:30:10:1:TRUE \
+              SLIDINGWINDOW:4:15 MINLEN:36""".format(
+                  input.trim_jar,
+                  threads,
+                  input.read1, input.read2,
+                  output.f_paired,
+                  output.f_unp,
+                  output.r_paired,
+                  output.r_unp,
+                  input.adapterfile))
+
+rule trim_prox:
+    input:
+        readfile =  config["tool"] + "/input/reads/trimmed/hic.{readir}.trim.fastq.gz",
+        adapterfile = os.path.join(filepath, "../dependencies/trimmomatic/adapters/TruSeq3-PE-2.fa"),
+        fqjt = os.path.join(filepath, "../bin/fqjt")
+    output:
+        final =  temp(config["tool"] + "/input/reads/prox_trim/hic.{readir}.trim.prox.fastq.gz")
+    threads:
+        1
+    run:
+        assert (len(config["ligationseq"]) % 2) == 0
+        ligseq = config["ligationseq"].upper()
+        callstring = "./{} -f {} -t {} -l {} | gzip > {}".format(
+            input.fqjt, input.readfile, ligseq, int(len(ligseq)/2), output.final)
+        call(callstring, shell=True)
+
+rule trimmomatic_prox_remove_short_seqs:
+    input:
+        f_file =  config["tool"] + "/input/reads/prox_trim/hic.f.trim.prox.fastq.gz",
+        r_file =  config["tool"] + "/input/reads/prox_trim/hic.r.trim.prox.fastq.gz",
+        minlen_pair = os.path.join(filepath, "../bin/minlen_pair")
+    output:
+        f_paired =  config["tool"] + "/input/reads/prox_trim_final/hic.f.trim.prox.final.fastq.gz",
+        r_paired =  config["tool"] + "/input/reads/prox_trim_final/hic.r.trim.prox.final.fastq.gz",
+    threads: 1
+    params:
+        minlen = 36
+    run:
+        callstring = """./{} {} {} {} {} {}""".format(
+            input.minlen_pair, params.minlen,
+            input.f_file, input.r_file,
+            output.f_paired, output.r_paired)
+        call(callstring, shell=True)
+
+rule bwa_aln:
+    input:
+        reads =  config["tool"] + "/input/reads/prox_trim_final/hic.{readir}.trim.prox.final.fastq.gz",
+        assem = config["tool"] + "/input/assembly/input.fasta",
+        amb   = config["tool"] + "/input/assembly/input.fasta.amb",
+        ann   = config["tool"] + "/input/assembly/input.fasta.ann",
+        bwt   = config["tool"] + "/input/assembly/input.fasta.bwt",
+        pac   = config["tool"] + "/input/assembly/input.fasta.pac"
+    output:
+        sai =  config["tool"] + "/output/bam/sai/hic.{readir}.toassem.sai",
+    params:
+        index_prefix = lambda wildcards: wildcards.readir
+    threads: workflow.cores
+    shell:
+        """
+        bwa aln -0 -t {threads} {input.assem} {input.reads}   > {output.sai}
+        """
+
+rule sort_and_filter_sai:
+    input:
+        sai =  config["tool"] + "/output/bam/sai/hic.{readir}.toassem.sai",
+        assem = config["tool"] + "/input/assembly/input.fasta",
+        reads =  config["tool"] + "/input/reads/prox_trim_final/hic.{readir}.trim.prox.final.fastq.gz"
+    output:
+        bam =  config["tool"] + "/output/bam/filtbam/hic.{readir}.filt.sort.bam",
+    threads: max(int(workflow.cores / 2) - 1, 1)
+    shell:
+        """
+        # get rid of unmapped, not primary alignment,
+        #  read fails platform, read is PCR duplicate, supplementary alignment
+        bwa samse {input.assem} {input.sai} {input.reads} | \
+          samtools view -hb -@ {threads} -F 3844 -q 30 - | \
+          samtools sort -@ {threads} - > {output.bam}
+        """
+
+rule merge_bams_sort_by_name:
+    """
+    to make a correctly paired bam for pairtools parse, we need to fix mates
+    """
+    input:
+        readsf =   config["tool"] + "/output/bam/filtbam/hic.f.filt.sort.bam",
+        readsr =   config["tool"] + "/output/bam/filtbam/hic.r.filt.sort.bam"
+    output:
+        both     = config["tool"] + "/output/bam/pairbam/hic.both.unpaired.unsorted.bam",
+        bothsort = config["tool"] + "/output/bam/pairbam/hic.both.unpaired.namesort.bam"
+    threads: max(int(workflow.cores / 2) - 1, 1)
+    shell:
+        """
+        samtools merge {output.both} {input.readsf} {input.readsr}
+        samtools view -@ {threads} -hb {output.both} | \
+          samtools sort -n -@ {threads} - > {output.bothsort}
+        """
+
+rule fix_hic_mates:
+    """
+    fix the hic mates so we can proceed with the pairs file generation
+    """
+    input:
+        bothsort = config["tool"] + "/output/bam/pairbam/hic.both.unpaired.namesort.bam",
+    output:
+        paired = config["tool"] + "/output/bam/pairbam/hic.both.paired.namesort.bam"
+    threads: workflow.cores - 1
+    shell:
+        """
+        samtools fixmate -r -m -@ {threads} {input.bothsort} {output.paired}
+        """
+
+rule only_get_mated_reads:
+    """
+    filter the bam file down to only get reads with proper mates
+    """
+    input:
+        paired = config["tool"] + "/output/bam/pairbam/hic.both.paired.namesort.bam"
+    output:
+        mated = config["tool"] + "/output/bam/pairbam/hic.both.paired.mated.namesort.bam"
+    threads: workflow.cores - 1
+    shell:
+        """
+        samtools view -hb -@ {threads} -F 12 {input.paired} > {output.mated}
+        """
+
+rule fix_bam_flags_to_sam:
+    input:
+        mated = config["tool"] + "/output/bam/pairbam/hic.both.paired.mated.namesort.bam"
+    output:
+        sam = config["tool"] + "/output/bam/pairbam/hic.both.paired.mated.namesort.flagfix.sam"
+    threads: 1
+    run:
+        outhandle = open(output.sam, "w")
+        import subprocess
+        # now parse the bam file to figure out which reads are phased
+        cmd = "samtools view {}".format(input.mated)
+        # count how many times each read occurs
+
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell = True)
+        read_counter = {}
+        counter = 0
+        for line in iter(process.stdout.readline, b''):
+            if counter % 10000 == 0:
+                print("  processed {} bam lines. Counting read occurrences.     \r".format(counter),
+                      end = "\r")
+            counter += 1
+            line = line.decode().strip()
+            if line:
+                splitd = line.split("\t")
+                if splitd[0] not in read_counter:
+                    read_counter[splitd[0]] = 1
+                else:
+                    read_counter[splitd[0]] += 1
+        print()
+
+        print("Found {} unique reads".format(len(read_counter)))
+        # only keep the reads that occur at least twice.
+        #  - In reality there shouldn't be anything more frequent
+        dellist = [x for x in read_counter if read_counter[x] < 2]
+        for entry in dellist:
+            del read_counter[entry]
+        print("Deleting {} reads that we only observed once".format(len(dellist)))
+        print("In total there are {} good pairs".format(len(read_counter)))
+
+        cmd = "samtools view -h {}".format(input.mated)
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell = True)
+        read_check = {}
+        counter = 0
+        for line in iter(process.stdout.readline, b''):
+            if counter % 10000 == 0:
+                print("  processed {} bam lines.     \r".format(counter),
+                      end = "\r")
+            counter += 1
+            line = line.decode().strip()
+            if line:
+                if line.startswith("@"):
+                    print(line, file = outhandle)
+                else:
+                    splitd = line.split("\t")
+                    if splitd[0] in read_counter: # only keep things that are paired
+                        if splitd[0] not in read_check:
+                            # haven't seen this read yet
+                            splitd[1] = str(int(splitd[1]) + 64) # first in pair
+                            read_check[splitd[0]] = 1
+                            print("\t".join(splitd), file = outhandle)
+                        elif read_check[splitd[0]] == 1:
+                            # we have seen this read once
+                            splitd[1] = str(int(splitd[1]) + 128) # second in pair
+                            read_check[splitd[0]] = 2
+                            print("\t".join(splitd), file = outhandle)
+                        else:
+                            # we don't want it if it has been seen more than two times.
+                            pass
+        print()
+        outhandle.close()
+
+rule reflagged_sam_to_bam:
+    input:
+        sam = config["tool"] + "/output/bam/pairbam/hic.both.paired.mated.namesort.flagfix.sam"
+    output:
+        bam = config["tool"] + "/output/bam/pairbam/hic.both.paired.mated.namesort.flagfix.bam"
+    threads: 1
+    shell:
+        """
+        samtools view -hb {input.sam} > {output.bam}
+        """
+
+rule hic_make_pairsam:
+    """
+    # BAM to pairs: annotate reads, create a pairsam file
+    """
+    input:
+        bam = config["tool"] + "/output/bam/pairbam/hic.both.paired.mated.namesort.flagfix.bam",
+        cs = config["tool"] + "/output/chromsize.txt"
+    output:
+        ps = config["tool"] + "/output/temp/pairsam/hic.pairsam.gz",
+        stats = config["tool"] + "/output/pairsam/hic_parsed.pairsam.stats"
+    threads: 1
+    shell:
+        """
+        samtools view -h {input.bam} | \
+          pairtools parse --output-stats {output.stats} \
+          -c {input.cs} -o {output.ps}
+        """
+
+rule hic_sort_pairsam:
+    """
+    Sorting pairs by chromosome1-chromosome2-position1-position2
+    <n_proc> = number of processors to be used
+    """
+    input:
+        ps = config["tool"] + "/output/temp/pairsam/hic.pairsam.gz"
+    output:
+        pps = config["tool"] + "/output/temp/pairsam/sorted/hic_parsed_sorted.pairsam.gz"
+    threads:
+        workflow.cores - 1
+    shell:
+        """
+        pairtools sort --nproc {threads} -o {output.pps} {input.ps} --tmpdir=./
+        """
+
+rule hic_dedup:
+    """
+    # NOTE: this step needs to write a lot of tmp files,
+      and by default your tmp directory is in your home directory,
+      which can fill up. To avoid that, do this before running the sort command:
+
+     # Marking duplicates
+     # <n_proc> = number of processors to be used
+    """
+    input:
+        pps = config["tool"] + "/output/temp/pairsam/sorted/hic_parsed_sorted.pairsam.gz"
+    output:
+        dpps = config["tool"] + "/output/temp/dedupe/hic_parsed_sorted_dedupe.pairsam.gz",
+        stats = config["tool"] + "/output/pairsam/hic_parsed_sorted_dedupe.pairsam.stats"
+    threads:
+        workflow.cores - 1
+    shell:
+        """
+        mkdir -p tempdir
+        export TMPDIR=tempdir
+        pairtools dedup --nproc-in {threads} \
+          --output-stats {output.stats} \
+          --mark-dups -o {output.dpps} {input.pps}
+        rm -rf tempdir
+        """
+
+rule hic_filter:
+    input:
+        dpps = config["tool"] + "/output/temp/dedupe/hic_parsed_sorted_dedupe.pairsam.gz",
+    output:
+        filt = config["tool"] + "/output/temp/filt/hic_parsed_sorted_dedupe_filt.pairsam.gz"
+    threads:
+        1
+    shell:
+        """
+        pairtools select  '(pair_type == "UU") or (pair_type == "UR") or (pair_type == "RU")' \
+          -o {output.filt} {input.dpps}
+        """
+
+rule generate_final_pairs:
+    """
+    generate the final output from a pairsam to a pairs file
+    """
+    input:
+        filt = config["tool"] + "/output/temp/filt/hic_parsed_sorted_dedupe_filt.pairsam.gz"
+    output:
+        final = config["tool"] + "/output/pairs/hic.dedup.filt.pairs.gz"
+    threads:
+        1
+    shell:
+        """
+        pairtools split --output-pairs {output.final} {input.filt}
+        """
+
+rule index_pairs:
+    """
+    indexing output. the *.pairs.gz suffix is important to parse the file correctly!
+    """
+    input:
+        pairs = config["tool"] + "/output/pairs/hic.dedup.filt.pairs.gz"
+    output:
+        index = config["tool"] + "/output/pairs/hic.dedup.filt.pairs.gz.px2"
+    threads:
+        1
+    shell:
+        """
+        pairix -f {input.pairs}
+        """
+
+rule haplotag_bams:
+    input:
+        bam =   config["tool"] + "/output/bam/filtbam/hic.{readir}.filt.sort.bam",
+        vcf = config["tool"] + "/input/vcf/input.vcf.gz",
+        tbi = config["tool"] + "/input/vcf/input.vcf.gz.tbi",
+        assem = config["tool"] + "/input/assembly/input.fasta",
+        fai   = config["tool"] + "/input/assembly/input.fasta.fai"
+    output:
+        haplotagged =   config["tool"] + "/output/bam/filtbam/haplotag/hic.{readir}.filt.sort.haplotag.bam",
+    threads: 1
+    shell:
+        """
+        whatshap haplotag --ignore-read-groups \
+                -o {output.haplotagged} \
+                --reference {input.assem} \
+                {input.vcf} \
+                {input.bam}
+        """
+
+rule merge_haplotagged:
+    input:
+        haplotagged =   expand(config["tool"] + "/output/bam/filtbam/haplotag/hic.{readir}.filt.sort.haplotag.bam",
+                               readir = ["f", "r"])
+    output:
+        merged =   config["tool"] + "/output/bam/filtbam/haplotag/merge/hic.merged.filt.sort.haplotag.bam"
+    threads: 1
+    shell:
+        """
+        samtools merge {output.merged} {input.haplotagged}
+        """
+
+rule index_merge_haplotagged:
+    input:
+        merged = config["tool"] + "/output/bam/filtbam/haplotag/merge/hic.merged.filt.sort.haplotag.bam"
+    output:
+        bai    = config["tool"] + "/output/bam/filtbam/haplotag/merge/hic.merged.filt.sort.haplotag.bam.bai"
+    threads: 1
+    shell:
+        """
+        samtools index {input.merged}
+        """
+
+# SPLIT the Hi-C bam files by chromosome
+rule split_bam:
+    input:
+        bam = config["tool"] + "/output/bam/filtbam/haplotag/merge/hic.merged.filt.sort.haplotag.bam",
+        bai = config["tool"] + "/output/bam/filtbam/haplotag/merge/hic.merged.filt.sort.haplotag.bam.bai"
+    output:
+        bams = expand(config["tool"] + "/input/bams/split/hic.REF_{chrom}.bam",
+               chrom=config["chroms"])
+    params:
+        stub = config["tool"] + "/input/bams/split/hic"
+    threads: 1
+    shell:
+        """
+        bamtools split -in {input.bam} -reference -stub {params.stub}
+
+        for thisfile in {output.bams}; do
+            if [ ! -f ${{thisfile}} ]; then
+                samtools view -Hb {input.bam} > ${{thisfile}}
+            fi
+        done
+        """
+
+rule index_split_bams:
+    input:
+        bam = config["tool"] + "/input/bams/split/hic.REF_{chrom}.bam"
+    output:
+        bai = config["tool"] + "/input/bams/split/hic.REF_{chrom}.bam.bai"
+    threads: 1
+    shell:
+        "samtools index {input.bam}"
+
+rule filter_pairs_file:
+    input:
+        bam = config["tool"] + "/input/bams/split/hic.REF_{chrom}.bam",
+        bai = config["tool"] + "/input/bams/split/hic.REF_{chrom}.bam.bai",
+        vcf = config["tool"] + "/input/vcf/input.vcf.gz"
+    output:
+        keep   = config["tool"] + "/output/read_filt/{chrom}.keepreads.single.list",
+        double = config["tool"] + "/output/read_filt/{chrom}.keepreads.double.list",
+        purge = config["tool"] + "/output/read_filt/{chrom}.purgereads.list"
+    threads: 1
+    run:
+        # open the vcf to get the haplotype to save for each scaffold
+        persca_counter = {}
+        with io.TextIOWrapper(io.BufferedReader(gzip.open(input.vcf))) as f:
+            for line in f:
+                if not line.startswith("#"):
+                    if "1|0" in line or "0|1" in line:
+                        splitd = line.split("\t")
+                        sca = splitd[0]
+                        hap = splitd[9].split(":")[0]
+                        #print("sca {}, hap {}".format(sca, hap))
+                        if sca not in persca_counter:
+                            persca_counter[sca] = {}
+                        if hap not in persca_counter[sca]:
+                            persca_counter[sca][hap] = 0
+                        persca_counter[sca][hap] += 1
+        print("persca_counter")
+        print(persca_counter)
+        print()
+        # now get the haplotype for each scaffold
+        sca_to_hap = {}
+        for key in persca_counter:
+            maxval = ""
+            maxcount = 0
+            for subkey in persca_counter[key]:
+                if persca_counter[key][subkey] > maxcount:
+                    maxval = subkey
+                    maxcount = persca_counter[key][subkey]
+            if maxval == "1|0":
+                sca_to_hap[key] = 2
+            elif maxval == "0|1":
+                sca_to_hap[key] = 1
+            else:
+                raise IOError("We should never get this error")
+        print(sca_to_hap)
+        print()
+        # read sets
+        read_matches_hap = {}
+        read_doesnt_match_hap = {}
+
+        import subprocess
+        # now parse the bam file to figure out which reads are phased
+        cmd = "samtools view -F 2316 {}".format(input.bam)
+        counter = 0
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell = True)
+        for line in iter(process.stdout.readline, b''):
+            counter += 1
+            if counter % 1000 == 0:
+                print("  {:.0f}% of {} alignments phaseable. [{}, {}]             \r".format(
+                    (len(read_matches_hap)/counter)*100,
+                    counter, len(read_matches_hap), len(read_doesnt_match_hap)),
+                      end = "\r")
+            line = line.decode().strip()
+            if line and "HP:i:" in line:
+                splitd = line.split("\t")
+                readname = splitd[0]
+                sca = splitd[2]
+                HP = int([x for x in splitd if "HP:i:" in x][0].replace("HP:i:",""))
+                if sca_to_hap[sca] == HP:
+                    if readname not in read_matches_hap:
+                        read_matches_hap[readname] = 0
+                    read_matches_hap[readname] += 1
+                elif sca_to_hap[sca] != HP:
+                    if readname not in read_doesnt_match_hap:
+                        read_doesnt_match_hap[readname] = 0
+                    read_doesnt_match_hap[readname] += 1
+                else:
+                    raise IOError("We should never get here")
+        # make sure the bam results were legal
+        for key in read_matches_hap:
+            if read_matches_hap[key] > 2:
+                raise IOError("We saw a read more than two times.")
+
+        print()
+        # now subtract the reads that don't match haplotypes
+        keep_these_reads_single = [ x for x in read_matches_hap
+                                    if x not in read_doesnt_match_hap ]
+        keep_these_reads_double = [ x for x in read_matches_hap
+                                    if (x not in read_doesnt_match_hap
+                                        and read_matches_hap[x] == 2) ]
+        # save the reads
+        with open(output.keep, "w") as f:
+            for thisread in keep_these_reads_single:
+                print(thisread, file = f)
+        with open(output.double, "w") as f:
+            for thisread in keep_these_reads_double:
+                print(thisread, file = f)
+        with open(output.purge, "w") as f:
+            for thisread in read_doesnt_match_hap:
+                print(thisread, file = f)
+
+rule generate_read_phased_pairfile:
+    """
+    For the dataset that requires only one of the mates to be phased,
+     generate the final set of acceptable reads, output some stats about
+     what % of data were usable, and generate the filtered pairs file.
+    """
+    input:
+        keep  = expand(config["tool"]+"/output/read_filt/{chrom}.keepreads.{{stringency}}.list",
+               chrom=config["chroms"]),
+        purge = expand(config["tool"]+"/output/read_filt/{chrom}.purgereads.list",
+               chrom=config["chroms"]),
+        pairs = config["tool"] + "/output/pairs/hic.dedup.filt.pairs.gz"
+    output:
+        pairs = config["tool"] + "/output/pairs/phased/{stringency}.phased.dedup.filt.pairs",
+        stats = config["tool"] + "/output/pairs/phased/{stringency}.phased.dedup.filt.pairs.phasestats"
+    threads: 1
+    run:
+        # get the read pairs to keep
+        keep_these_reads = set()
+        purge_these_reads = set()
+        print("checking the reads to keep")
+        for thisfile in input.keep:
+            inhandle = open(thisfile, "r")
+            for line in inhandle:
+                line=line.strip()
+                if line:
+                    keep_these_reads.add(line)
+            inhandle.close()
+        print("checking the reads to purge")
+        for thisfile in input.purge:
+            inhandle = open(thisfile, "r")
+            for line in inhandle:
+                line=line.strip()
+                if line:
+                    purge_these_reads.add(line)
+            inhandle.close()
+        keep_these_reads = keep_these_reads - purge_these_reads
+
+        outhandle = open(output.pairs, "w")
+        num_pairs_considered = 0
+        num_pairs_kept       = 0
+        num_pairs_badphase   = 0
+        num_pairs_ignored    = 0
+        # now filter the pairs file
+        print("checking the pairs file")
+        with io.TextIOWrapper(io.BufferedReader(gzip.open(input.pairs))) as f:
+            for line in f:
+                if num_pairs_considered % 1000 == 0:
+                    print("  parsed {} lines in file     \r".format(
+                          num_pairs_considered), end = "\r")
+                line = line.strip()
+                if line:
+                    if line.startswith("#"):
+                        print(line, file = outhandle)
+                    else:
+                        splitd = line.split("\t")
+                        num_pairs_considered += 1
+                        if splitd[0] in keep_these_reads:
+                            print(line, file=outhandle)
+                            num_pairs_kept += 1
+                        elif splitd[0] in purge_these_reads:
+                            num_pairs_badphase += 1
+                        else:
+                            num_pairs_ignored  += 1
+        print()
+        outhandle.close()
+
+        outhandle = open(output.stats, "w")
+        print("Total number of read pairs OK from phased BAM: {}".format(
+            len(keep_these_reads)), file = outhandle)
+        print("Total number of read pairs bad from phased BAM: {}".format(
+            len(purge_these_reads)), file = outhandle)
+        print("Total number of read pairs considered in pairs file: {}".format(
+            num_pairs_considered), file = outhandle)
+        print("Total number of read pairs in BAM OK in phase: {}".format(
+            num_pairs_kept), file = outhandle)
+        print("  - {}/{} = {:.2f}%".format(
+            num_pairs_kept, num_pairs_considered,
+            100*(num_pairs_kept / num_pairs_considered)), file = outhandle)
+        print("Total number of read pairs in BAM bad in phase: {}".format(
+            num_pairs_badphase), file = outhandle)
+        print("  - {}/{} = {:.2f}%".format(
+            num_pairs_badphase, num_pairs_considered,
+            100*(num_pairs_badphase / num_pairs_considered)), file = outhandle)
+        print("Total number of read pairs ignored: {}".format(
+            num_pairs_ignored), file = outhandle)
+        print("  - {}/{} = {:.2f}%".format(
+            num_pairs_ignored, num_pairs_considered,
+            100*(num_pairs_ignored / num_pairs_considered)), file = outhandle)
+        outhandle.close()
+
+rule gzip_pairs:
+    input:
+        pairs = config["tool"] + "/output/pairs/phased/{stringency}.phased.dedup.filt.pairs",
+    output:
+        pairs = config["tool"] + "/output/pairs/phased/{stringency}.phased.dedup.filt.pairs.gz",
+    threads: 1
+    shell:
+        """
+        bgzip -f -c {input.pairs} > {output.pairs}
+        """
+
+rule index_pairs_after_filtering:
+    """
+    indexing output. the *.pairs.gz suffix is important to parse the file correctly!
+    """
+    input:
+        pairs = config["tool"] + "/output/pairs/phased/{stringency}.phased.dedup.filt.pairs.gz"
+    output:
+        index = config["tool"] + "/output/pairs/phased/{stringency}.phased.dedup.filt.pairs.gz.px2"
+    threads:
+        1
+    shell:
+        """
+        pairix -f {input.pairs}
+        """
+
+rule make_bins_individual:
+    """
+    This makes the matrix and bins everything
+    i.e. binsize: 5000 (high resolution), 500000 (lower resolution)
+    """
+    input:
+        final = config["tool"] + "/output/pairs/phased/{stringency}.phased.dedup.filt.pairs.gz",
+        index = config["tool"] + "/output/pairs/phased/{stringency}.phased.dedup.filt.pairs.gz.px2",
+        cs = config["tool"] + "/output/chromsize.txt"
+    output:
+        cool = config["tool"] + "/output/{stringency}/{stringency}.{binsize}.cool"
+    threads: 1
+    params:
+        bs = lambda wildcards: wildcards.binsize,
+        stringency = lambda wildcards: wildcards.stringency,
+        outname = lambda wildcards: "{tool}/output/{stringency}/{stringency}.{binsize}.cool".format(
+            tool=config["tool"], stringency = wildcards.stringency, binsize = wildcards.binsize )
+    shell:
+        """
+        cooler cload pairix {input.cs}:{params.bs} {input.final} {params.outname}
+        """
+
+rule diagnostic_plot:
+    """
+    This generates a diagnostic plot of the bin distribution to pick the z-score cutoffs
+    """
+    input:
+        cool = config["tool"] + "/output/{stringency}/{stringency}.{binsize}.cool"
+    output:
+        png = config["tool"] + "/output/{stringency}/{stringency}.{binsize}.cool.png"
+    shell:
+        """
+        hicCorrectMatrix diagnostic_plot -m {input.cool} -o {output.png}
+        """
+
+rule cutoff_matrix:
+    """
+    Balances the matrix using the z-score cutoffs. Removes bins that are too dense or sparse
+    """
+    input:
+        png = config["tool"] + "/output/{stringency}/{stringency}.{binsize}.cool.png",
+        cool = config["tool"] + "/output/{stringency}/{stringency}.{binsize}.cool"
+    output:
+        balanced = config["tool"] + "/output/{stringency}/{stringency}_balanced.{binsize}.cool"
+    params:
+        zmin = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmin"],
+        zmax = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmax"],
+        binsize = lambda wildcards: wildcards.binsize
+    shell:
+        """
+        if [ "{params.zmin}" -eq "0" ]; then
+            echo "Set the {params.binsize} zmin to something other than 0";
+            exit;
+        fi
+        if [ "{params.zmin}" -eq "0" ]; then
+            echo "Set the {params.binsize} zmax to something other than 0";
+            exit;
+        fi
+        hicCorrectMatrix correct -m {input.cool} \
+             --filterThreshold {params.zmin} {params.zmax} \
+             -o {output.balanced}
+        """
+
+#rule old_balance_matrix:
+#    """
+#    ## Matrix normalization/ balancing
+#    #cooler balance res.<binsize>.cool
+#    ## if any problems with creating output add "--force" option
+#    # this only works with --cis-only. Otherwise it drops a ton of bins
+#    """
+#    input:
+#        cool = config["tool"] + "/output/{stringency}/{stringency}.{binsize}.cool"
+#    output:
+#        cool = config["tool"] + "/output/{stringency}/{stringency}_balanced.{binsize}.cool"
+#    shell:
+#        """
+#        cp {input.cool} {output.cool}
+#        cooler balance --force {output.cool}
+#        """
+
+rule zoomify_matrix:
+    """
+    ## Aggregation (for HiGlass view) - This generates a *.mcool file from the balanced cool file
+    """
+    input:
+        cool = config["tool"] + "/output/{stringency}/{stringency}_balanced.{binsize}.cool"
+    output:
+        mcool = config["tool"] + "/output/{stringency}/{stringency}_balanced.{binsize}.mcool"
+    shell:
+        """
+        cooler zoomify -o {output.mcool} {input.cool}
+        """
+
+# Filter out the small chromosomes for further analyses/balancing/et cet
+rule only_chromosomes:
+    input:
+        cool = config["tool"] + "/output/{stringency}/{stringency}_balanced.{binsize}.cool",
+        assem = config["tool"] + "/input/assembly/input.fasta"
+    output:
+        onlychr = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.cool"
+    params:
+        mc = minchromsize
+        #chr_string = lambda wildcards: ' '.join(get_chromosome_sizes(
+        #                      config["tool"] + "/input/assembly/{}_input.fasta".format(wildcards.stringency), 
+        #                      minchromsize))
+    shell:
+        """
+        CHROMS=$(bioawk -cfastx '{{if (length($seq) >= {params.mc}) {{printf("%s ", $name)}} }}' {input.assem})
+        >&2 echo "keeping ${{CHROMS}}"
+        hicAdjustMatrix --chromosomes ${{CHROMS}} \
+             -m {input.cool} \
+             --outFileName {output.onlychr} \
+             --action keep
+        """
+
+# Now compute the obs-exp using lieberman-aiden
+rule obs_expected_lieb:
+    input:
+        onlychr = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.cool"
+    output:
+        obsexp = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.obsexplieb.cool"
+    shell:
+        """
+        hicTransform -m {input.onlychr} \
+             --outFileName {output.obsexp} \
+             --method obs_exp_lieberman
+        """
+
+# Now compute the Pearson matrix of the obs-exp. Plotting this shows A-B compartments
+rule pearson_matrix:
+    input:
+        obsexp = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.obsexplieb.cool"
+    output:
+        pearson = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.obsexplieb.pearson.cool"
+    shell:
+        """
+        hicTransform -m {input.obsexp} \
+             --outFileName {output.pearson} \
+             --method pearson
+        """
+
+# Calculates the obs/exp of the matrix
+rule PCA_of_matrix:
+    """
+    this makes a bigwig file of the PCAs of the balanced cooler files
+    """
+    input:
+        onlychr = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.cool"
+    output:
+        pca1 = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.pca1.bw",
+        pca2 = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.pca2.bw"
+    threads: 1
+    shell:
+        """
+        hicPCA -m {input.cool} -o {output.pca1} {output.pca2} --format bigwig
+        """
+
+rule plot_matrices:
+    input:
+        pearson = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.obsexplieb.pearson.cool",
+        pca1 = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.pca1.bw"
+    output:
+        pdf = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.ABplot.pdf"
+    threads: 1
+    shell:
+        """
+        hicPlotMatrix --colorMap RdBu -m {input.pearson} --outFileName {output.pdf} --perChr --bigwig {input.pca1}
+        """
+
+rule convert_pearson_to_gi:
+    """
+    converts the pearson correlation matrix to a gi file. This is easier to work with than a cooler file.
+    """
+    input:
+        pearson = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.obsexplieb.pearson.cool"
+    output:
+        gi = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.obsexplieb.pearson.gi.tsv"
+    params:
+        gi = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.obsexplieb.pearson.gi"
+    shell:
+        """
+        hicConvertFormat -m {input.pearson} \
+           --outFileName {params.gi} \
+           --inputFormat cool \
+           --outputFormat ginteractions
+        """
+
+rule plot_matrices_custom:
+    """
+    This plots the AB compartments using a custom script.
+    I think the results are much nicer than the package that is included in HiCExplorer
+    """
+    input:
+        gi = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.obsexplieb.pearson.gi.tsv"
+    output:
+        pdf = config["tool"] + "/output/{stringency}/ABcompartments/{stringency}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf"
+    run:
+        import ast
+        import pandas as pd
+        import seaborn as sns; sns.set()
+        import matplotlib
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+        from matplotlib.backends.backend_pdf import PdfPages
+        from matplotlib.ticker import StrMethodFormatter, NullFormatter
+        import numpy as np
+
+        # set seaborn stuff
+        #sns.set(rc={'text.usetex' : True})
+        sns.set_style("ticks", {'font.family': ['sans-serif'],
+                                    'font.sans-serif': ['Helvetica'],
+                                    'grid.color': '.95'})
+
+        # Preserve the vertical order of embedded images:
+        matplotlib.rcParams['image.composite_image'] = False
+        matplotlib.rcParams['pdf.fonttype'] = 42
+        matplotlib.rcParams['ps.fonttype'] = 42
+
+        # plot all the whole chromosome interactions
+        filepath = input.gi
+
+        # set up the pdf to which we will save everything
+        outfile = output.pdf
+        pp = PdfPages(outfile)
+
+        dfs = []
+        columns = [["source", "sstart", "sstop",
+                      "target", "tstart", "tstop",
+                      "counts"],
+                   ["target", "tstart", "tstop",
+                   "source", "sstart", "sstop",
+                   "counts"]]
+
+        for i in range(2):
+            df = pd.read_csv(filepath, header=None, sep='\t')
+            df.columns = columns[i]
+            #df["distance"] = df["tstart"] - df["sstart"]
+            #expected = df.groupby(["distance"]).mean().reset_index()
+            #expected["expected"] = expected["counts"]
+            #expected = expected[["distance", "expected"]]
+            #df = df.merge(expected, left_on='distance', right_on='distance')
+            #df["log_obs_exp"] = np.log2(df["counts"]/df["expected"])
+            #df["source"] = df.apply(lambda row: ''.join(i for i in row["source"] if i.isdigit()), axis =1)
+            #df["target"] = df.apply(lambda row: ''.join(i for i in row["target"] if i.isdigit()), axis =1)
+            #df["source"] = df.apply(lambda row: ''.join(row["source"].str.replace("Chr", "").replace("chr", "").replace("c",""), axis =1))
+            #df["target"] = df.apply(lambda row: ''.join(row["target"].str.replace("Chr", "").replace("chr", "").replace("c",""), axis =1))
+            #df["source"] = df.apply(lambda row: row["source"].str.replace("Chr", ""), axis =1)
+            #df["target"] = df.apply(lambda row: row["target"].str.replace("Chr", ""), axis =1)   
+            for deletethis in ["Chr", "chr", "c"]:
+                df["source"] = df["source"].str.replace(deletethis, "")
+                df["target"] = df["target"].str.replace(deletethis, "")
+            dfs.append(df)
+
+        concat = pd.concat(dfs).reset_index()
+        concat = concat[[x for x in concat.columns if x != "index"]]
+
+        #first, just read in the the dataframe to get all of the chromosomes
+        chroms = list(concat["target"].unique())
+
+        directorypath = output.pdf.replace(".pdf", "")
+        if not os.path.exists(directorypath):
+            os.mkdir(directorypath)
+
+        for middle in ["dark", "light"]:
+            for thischrom in chroms:
+                missing_rows = []
+                onechrom = concat.loc[concat["source"] == concat["target"], ]
+                onechrom = onechrom.loc[onechrom["source"] == thischrom, ]
+                #figure out the interval
+                interval = (onechrom["sstop"] - onechrom["sstart"]).value_counts().idxmax()
+                minstart = onechrom["sstart"].min()
+                maxstart = onechrom["sstart"].max()
+                #now go through and find missing rows
+                has_these_starts_set = set(onechrom["sstart"].unique())
+                should_have_all_these_starts_set = set(np.arange(minstart,maxstart+interval,interval))
+                needs_these_rows = sorted(list(should_have_all_these_starts_set.difference(has_these_starts_set)))
+                #manually add the rows to the missing_rows_list
+                for i in range(len(needs_these_rows)):
+                    for j in range(len(needs_these_rows)):
+                        missing_rows.append({"source": thischrom,
+                                             "sstart": needs_these_rows[i],
+                                             "sstop":  needs_these_rows[i] + interval,
+                                             "target": thischrom,
+                                             "tstart": needs_these_rows[j],
+                                             "tstop":  needs_these_rows[j] + interval,
+                                             "counts": np.nan
+                                            })
+                tempdf = pd.DataFrame.from_dict(missing_rows)
+                plot_concat = pd.concat([onechrom, tempdf]).reset_index(drop=True)
+                plot_concat["tstart"] = plot_concat["tstart"]/1000000
+                plot_concat["sstart"] = plot_concat["sstart"]/1000000
+                result = plot_concat.pivot_table(index='tstart',
+                                        columns='sstart',
+                                        values='counts', dropna=False)
+                #result.columns.name = None
+                ax = sns.heatmap(result,
+                                 cmap = sns.diverging_palette(256, 0, n=100, center=middle), 
+                                 square=True,
+                                 mask=result.isnull(),
+                                 linewidths=0.0)
+                ax.set_title("Hi-C Obs/Exp Pearson - Chr {}".format(thischrom))
+                ax.set_ylabel("Position (Mb)")
+                ax.set_xlabel("Position (Mb)")
+                fig = ax.get_figure()
+                fig.tight_layout()
+                pngpath = directorypath + "/plot_of_{}.{}.{}.png".format(thischrom, interval, middle)
+                print("Saving the file: {}".format(pngpath))
+                fig.savefig(pngpath, dpi=300)
+                pp.savefig()
+                fig.clear()
+        pp.close()
