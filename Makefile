@@ -3,12 +3,16 @@ FSD=src/fstats/
 
 all: bin/fasta_stats dependencies/SALSA/run_pipeline.py \
      dependencies/SALSA/break_contigs_start \
+     bin/bbmap/reformat.sh \
      bin/pilon-1.23.jar dependencies/pairix/bin/pairix \
      bin/fqjt bin/minlen_pair
 
 bin/fqjt: src/fq-jt.c
 	mkdir -p bin
 	gcc -gdwarf-2 -g src/fq-jt.c -lz -o bin/fqjt
+
+bin/bbmap/reformat.sh: dependencies/bbtools/BBMap_38.90.tar.gz
+	tar -C bin/ -zxvf dependencies/bbtools/BBMap_38.90.tar.gz
 
 bin/minlen_pair: src/minlen_pair.c src/kseq.h
 	mkdir -p bin
