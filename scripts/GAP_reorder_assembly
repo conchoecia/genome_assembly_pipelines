@@ -67,7 +67,7 @@ rule reorder_fasta:
         fai = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai",
         sort_list = config["tool"] + "/input/sort_list/{nom}_sort_list.txt"
     output:
-        assem = config["tool"] + "/output/assembly/{nom}_output.fasta",
+        assem = temp(config["tool"] + "/output/assembly/{nom}_output.temp.fasta"),
     threads: 1
     run:
         from Bio import SeqIO
@@ -85,3 +85,14 @@ rule reorder_fasta:
                     SeqIO.write(unprinted[scaf], outhandle, 'fasta')
                     del unprinted[scaf]
         outhandle.close()
+
+rule reformat_fasta:
+    input:
+        assem = config["tool"] + "/output/assembly/{nom}_output.temp.fasta",
+        reformat = os.path.join(filepath, "../bin/bbmap/reformat.sh")
+    output:
+        assem = config["tool"] + "/output/assembly/{nom}_output.fasta",
+    shell:
+        """
+        bash {input.reformat} in={input.assem} out={output.assem} fastawrap=60
+        """
