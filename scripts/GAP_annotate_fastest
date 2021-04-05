@@ -1,0 +1,461 @@
+"""
+This fastest version of the annotate script doesn't run STAR and doesn't run prothint. Nor augustus.
+"""
+
+import copy
+import sys
+from Bio import SeqIO
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+
+configfile: "config.yaml"
+config["tool"] = "GAP_annotate_longreads"
+
+rule all:
+    input:
+        #expand(config["tool"] + "/workspace/{pre}_av{ver}_fromTxome.gff3",
+        #       pre = config["PREFIX"], ver = config["VERSION"]),
+        #expand(config["tool"] + "/workspace/{pre}_av{ver}_fromTxome.chrom",
+        #       pre = config["PREFIX"], ver = config["VERSION"]),
+        #expand(config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.fasta",
+        #       pre = config["PREFIX"], ver = config["VERSION"]),
+        #expand(config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.pep",
+        #       pre = config["PREFIX"], ver = config["VERSION"]),
+        expand(config["tool"] + "/output/{pre}_av{ver}.tar.gz",
+               pre = config["PREFIX"], ver = config["VERSION"]),
+
+rule check_input_fasta:
+    """
+    make sure that the reference sequences don't have ';' chars
+    """
+    input:
+        assem = config["REF"]
+    output:
+        refok = config["tool"] + "/workspace/{pre}_av{ver}_refOK.txt"
+    threads: 1
+    run:
+        from Bio import SeqIO
+        broken = False
+        badlist = [";", "|"]
+        badchars = set()
+        badids = []
+        with open(input.assem) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                for thischar in badlist:
+                    if thischar in record.id:
+                        broken = True
+                        badchars.add(thischar)
+                        badids.append(record.id)
+        if broken:
+            print("The following sequences have illegal characters {} in the header.".format(
+            "".join([" '{}' ".format(x) for x in badchars])))
+            for entry in badids:
+                print(" - {}".format(entry))
+            sys.exit()
+        else:
+            print("The input genome assembly headers are fine!")
+            with open(output.refok, "w") as f:
+                print("reference OK", file = f)
+
+rule minimap2_txome_to_genome:
+    input:
+        assem = config["REF"],
+        txome = config["TXOME"],
+        refok = config["tool"] + "/workspace/{pre}_av{ver}_refOK.txt"
+    output:
+        bam = config["tool"] + "/workspace/{pre}_av{ver}_txome_to_ref.filtered.sorted.bam"
+    threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/5)
+    shell:
+        """
+        minimap2 -t {threads} -ax splice {input.assem} {input.txome} | \
+           samtools view -F 4 -q 10 -hb -@ {params.sort_threads} - | \
+           samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule minimap2_long_to_genome:
+    input:
+        assem = config["REF"],
+        txome = config["LONGREADS"],
+        refok = config["tool"] + "/workspace/{pre}_av{ver}_refOK.txt"
+    output:
+        bam = config["tool"] + "/workspace/{pre}_av{ver}_long_to_ref.filtered.sorted.bam"
+    threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/5)
+    shell:
+        """
+        minimap2 -t {threads} -ax splice:hq {input.assem} {input.txome} | \
+           samtools view -F 4 -q 10 -hb -@ {params.sort_threads} - | \
+           samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule merge_longreads_and_transcriptome_bams:
+    input:
+        txomebam = config["tool"] + "/workspace/{pre}_av{ver}_txome_to_ref.filtered.sorted.bam",
+        longbam = config["tool"] + "/workspace/{pre}_av{ver}_long_to_ref.filtered.sorted.bam"
+    output:
+        bam = config["tool"] + "/workspace/{pre}_av{ver}_txome_and_long_to_ref.sorted.bam"
+    threads: workflow.cores - 1
+    shell:
+        """
+        samtools merge {output.bam} {input.txomebam} {input.longbam}
+        """
+
+rule remove_duplicate_merged_bam_entries:
+    """
+    In case the long reads and txome are the same, rmdups
+    """
+    input:
+        bam = config["tool"] + "/workspace/{pre}_av{ver}_txome_and_long_to_ref.sorted.bam"
+    output:
+        filt = config["tool"] + "/workspace/{pre}_av{ver}_txome_and_long_to_ref.sorted.filt.bam"
+    threads: workflow.cores - 1
+    shell:
+        """
+        samtools rmdup -s {input.bam} {output.filt}
+        """
+
+rule run_pinfish_bam2gff:
+    """
+    Runs pinfish on the long reads. It is fine if the long reads passed to the
+     config file is actually just the transcriptome.
+    """
+    input:
+        bam = config["tool"] + "/workspace/{pre}_av{ver}_txome_and_long_to_ref.sorted.filt.bam",
+        pinfish_dir = config["PINFISHDIR"]
+    output:
+        gtf = config["tool"] + "/workspace/{pre}_av{ver}_txome_and_long_bam_to_ref.gff"
+    params:
+        pinfish_dir = config["PINFISHDIR"]
+    threads:
+        workflow.cores
+    shell:
+        """
+        {params.pinfish_dir}/spliced_bam2gff/spliced_bam2gff -t {threads} \
+          -s -M {input.bam} > {output.gtf}
+        """
+
+rule run_stringtie_merge:
+    input:
+        stringtieprg = config["STRINGTIE"],
+        pinfish = config["tool"] + "/workspace/{pre}_av{ver}_txome_and_long_bam_to_ref.gff"
+    output:
+        gtf = config["tool"] + "/workspace/{pre}_av{ver}_pinfish_merged_by_stringtie.gtf"
+    params:
+        label = "{}.av{}".format(config["PREFIX"], config["VERSION"])
+    shell:
+        """
+        {input.stringtieprg} --merge {input.pinfish} \
+             -o {output.gtf} -l {params.label}
+        """
+
+rule transcripts_from_gtf:
+    input:
+        gtf = config["tool"] + "/workspace/{pre}_av{ver}_pinfish_merged_by_stringtie.gtf",
+        ref = config["REF"]
+    output:
+        fasta = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_gtf_and_ref.fasta"
+    shell:
+        """
+        gffread -w {output.fasta} -g {input.ref} {input.gtf}
+        """
+
+rule translatable_transcripts_from_txome:
+    """
+    We only care about transcripts that have a sensible translation from prottrans.py
+    - So we translate, then we'll filter and find the IDs that are OK
+    """
+    input:
+        txome = config["TXOME"],
+        ptp = os.path.join(filepath, "prottrans.py")
+    output:
+        OK_list = config["tool"] + "/workspace/{pre}_av{ver}_translatable_txome_transcripts.txt",
+    shell:
+        """
+        python2 {input.ptp} -r -a 50 {input.txome} | \
+          grep '>' | rev | cut -d '_' -f2- | rev | \
+          sed 's/>//g' | \
+          sort | uniq > {output.OK_list}
+        """
+
+rule get_translatable_txome:
+    """
+    Use the list of translatable seqs to filter the txome
+    """
+    input:
+        txome = config["TXOME"],
+        OK_list = config["tool"] + "/workspace/{pre}_av{ver}_translatable_txome_transcripts.txt",
+    output:
+        txtxome = config["tool"] + "/workspace/{pre}_av{ver}_translatable_txome.fasta"
+    threads: 1
+    shell:
+        """
+        seqtk subseq {input.txome} {input.OK_list} > {output.txtxome}
+        """
+
+rule map_transcripts_to_transcriptome:
+    """
+    map the new transcripts to the transcriptome. Only get the best mapping loc
+     for each genome transcript.
+    """
+    input:
+        fasta = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_gtf_and_ref.fasta",
+        txtxome = config["tool"] + "/workspace/{pre}_av{ver}_translatable_txome.fasta",
+    output:
+        bam = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_to_txome.sorted.bam"
+    threads:
+        workflow.cores
+    params:
+        sort_threads = int(workflow.cores/5)
+    shell:
+        """
+        minimap2 -t {threads} -ax asm20 {input.txtxome} {input.fasta} | \
+           samtools view -F 2308 -q 10 -hb -@ {params.sort_threads} - | \
+           samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule keep_txome_transcripts_matching_with_genome:
+    """
+    Get a list of the translatable transcripts that were hits in the annotation.
+    """
+    input:
+        bam = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_to_txome.sorted.bam"
+    output:
+        txt = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_to_txome.keeplist"
+    shell:
+        """
+        samtools view {input.bam} | cut -f3 | sort | uniq > {output.txt}
+        """
+
+rule extract_translatable_txome_seqs_to_hits_fasta:
+    input:
+        txt = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_to_txome.keeplist",
+        txtxome = config["tool"] + "/workspace/{pre}_av{ver}_translatable_txome.fasta"
+    output:
+        txome_hits = config["tool"] + "/workspace/{pre}_av{ver}_hits.fasta",
+    shell:
+        """
+        seqtk subseq {input.txtxome} {input.txt} > {output.txome_hits}
+        """
+
+rule minimap2_map_txome_select_seqs_to_genome:
+    input:
+        assem = config["REF"],
+        txome = config["tool"] + "/workspace/{pre}_av{ver}_hits.fasta",
+        refok = config["tool"] + "/workspace/{pre}_av{ver}_refOK.txt"
+    output:
+        bam = config["tool"] + "/workspace/{pre}_av{ver}_txomeHits_to_ref.filtered.sorted.bam"
+    threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/5)
+    shell:
+        """
+        minimap2 -t {threads} -ax splice:hq {input.assem} {input.txome} | \
+           samtools view -F 2308 -q 10 -hb -@ {params.sort_threads} - | \
+           samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule run_pinfish_on_txome_hits:
+    """
+    Runs pinfish on the long reads. It is fine if the long reads passed to the
+     config file is actually just the transcriptome.
+    """
+    input:
+        bam = config["tool"] + "/workspace/{pre}_av{ver}_txomeHits_to_ref.filtered.sorted.bam",
+        pinfish_dir = config["PINFISHDIR"]
+    output:
+        gtf = config["tool"] + "/workspace/{pre}_av{ver}_txomeHits_to_ref.gff"
+    params:
+        pinfish_dir = config["PINFISHDIR"]
+    threads:
+        workflow.cores
+    shell:
+        """
+        {params.pinfish_dir}/spliced_bam2gff/spliced_bam2gff -t {threads} \
+          -s -M {input.bam} > {output.gtf}
+        """
+
+rule transcript_to_new_name:
+    """
+    orders the transcripts based on their occurrence in the gff.
+     first col is seq name
+     second col is the new name
+
+    also makes a legal gff3 and a legal chrom
+    chrom is prot\tscaf\tdirec\tstart\tstop
+    """
+    input:
+        gtf = config["tool"] + "/workspace/{pre}_av{ver}_txomeHits_to_ref.gff"
+    output:
+        tx_to_new = config["tool"] + "/workspace/{pre}_av{ver}_tx_to_new.txt",
+        gff = config["tool"] + "/workspace/{pre}_av{ver}_fromTxome.gff3",
+        chrom = config["tool"] + "/workspace/{pre}_av{ver}_fromTxome.chrom"
+    params:
+        pre = lambda wildcards: wildcards.pre,
+        ver = lambda wildcards: wildcards.ver
+    threads: 1
+    run:
+        # first make the lookup table for transcript to new_name
+        #  and save the lookup table to a file
+        transcript_to_new = {}
+        sca_counter = {}
+        handle = open(input.gtf, "r")
+        outhandle = open(output.tx_to_new, "w")
+        for line in handle:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                splitd = line.split("\t")
+                if splitd[2] == "mRNA":
+                    sca    = splitd[0]
+                    seq    = splitd[8].split(" ")[1].replace("\"", "").replace(";", "")
+                    if sca not in sca_counter:
+                        sca_counter[sca] = 1
+                    tnum = sca_counter[sca]
+                    sca_counter[sca] += 1 # increment for the next encounter
+                    new_tx = "{}.av{}.{}.t{}".format(params.pre, params.ver, sca, tnum)
+                    transcript_to_new[seq] = new_tx
+                    print("{}\t{}".format(seq, new_tx), file = outhandle)
+        handle.close()
+        outhandle.close()
+
+        # now parse the file again with the info we have now and make a legal GFF3
+        handle = open(input.gtf, "r")
+        outhandle = open(output.gff, "w")
+        outchrom = open(output.chrom, "w")
+        for line in handle:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                splitd = line.split("\t")
+                sca    = splitd[0]
+                seq    = splitd[8].split(" ")[1].replace("\"", "").replace(";", "")
+                newseq = transcript_to_new[seq]
+                source = "{}.av{}".format(params.pre, params.ver)
+                start  = splitd[3]
+                stop   = splitd[4]
+                direc  = splitd[6]
+                if splitd[2] == "mRNA":
+                    # here we print both the gene and transcript line, and chrom 
+                    gene_line = "{}\t{}\tgene\t{}\t{}.\t{}\t.\tID={nseq};Name={nseq}".format(
+                        sca, source, start, stop, direc, nseq = newseq)
+                    print(gene_line, file = outhandle)
+                    trans_line = "{}\t{}\ttranscript\t{}\t{}.\t{}\t.\tID={nseq};Parent={nseq};source_program=pinfish;source_ID={oseq}".format(
+                        sca, source, start, stop, direc, nseq = newseq, oseq = seq)
+                    print(trans_line, file = outhandle)
+                    chrom_line = "{}\t{}\t{}\t{}\t{}".format(newseq, sca, direc, start, stop)
+                    print(chrom_line, file = outchrom)
+                elif splitd[2] == "exon":
+                    # exon lines are pretty much the same as gff2
+                    exon_line = "{}\t{}\texon\t{}\t{}.\t{}\t.\tParent={nseq}".format(
+                        sca, source, start, stop, direc, nseq = newseq)
+                    print(exon_line, file = outhandle)
+        handle.close()
+        outhandle.close()
+        outchrom.close()
+
+rule rename_transcripts:
+    input:
+        tx_to_new = config["tool"] + "/workspace/{pre}_av{ver}_tx_to_new.txt",
+        hits = config["tool"] + "/workspace/{pre}_av{ver}_hits.fasta",
+    output:
+        hits = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.fasta",
+    threads: 1
+    run:
+        old_to_new = {}
+        with open(input.tx_to_new, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    old_to_new[splitd[0]] = splitd[1]
+        outhandle = open(output.hits, "w")
+        from Bio import SeqIO
+        with open(input.hits) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                if record.id in old_to_new:
+                    tempname = record.id
+                    record.id = old_to_new[tempname]
+                    SeqIO.write(record, outhandle, "fasta")
+        outhandle.close()
+
+rule translate_prots:
+    input:
+        fasta = config["tool"] + "/workspace/{pre}_av{ver}_hits.fasta",
+        ptp = os.path.join(filepath, "prottrans.py")
+    output:
+        final_peps = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.temp.pep",
+    shell:
+        """
+        python2 {input.ptp} -r -a 50 {input.fasta} > {output.final_peps}
+        """
+
+rule get_isoform1_from_prots:
+    """
+    each prot should only have one isoform
+    """
+    input:
+        final_peps = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.temp.pep",
+        tx_to_new = config["tool"] + "/workspace/{pre}_av{ver}_tx_to_new.txt",
+    output:
+        final_peps = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.pep"
+    threads: 1
+    run:
+        old_to_new = {}
+        with open(input.tx_to_new, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    old_to_new[splitd[0]] = splitd[1]
+
+        seen_yet = set()
+        outhandle = open(output.final_peps, "w")
+        from Bio import SeqIO
+        with open(input.final_peps) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                seqname = record.id[0:-2]
+                if seqname not in seen_yet and seqname in old_to_new:
+                    seen_yet.add(seqname)
+                    record.id = old_to_new[seqname]
+                    SeqIO.write(record, outhandle, "fasta")
+        outhandle.close()
+
+rule collate_final_output:
+    input:
+        final_peps = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.pep",
+        hits = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.fasta",
+        gff = config["tool"] + "/workspace/{pre}_av{ver}_fromTxome.gff3",
+        chrom = config["tool"] + "/workspace/{pre}_av{ver}_fromTxome.chrom",
+        assem = config["REF"]
+    output:
+        pep   = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.pep",
+        trans = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.transcripts.fasta",
+        gff   = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.gff",
+        chrom = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.chrom",
+        assem = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.assembly.fasta"
+    threads: 1
+    shell:
+        """
+        cp {input.final_peps}  {output.pep}
+        cp {input.hits}        {output.trans}
+        cp {input.gff}         {output.gff}
+        cp {input.chrom}       {output.chrom}
+        cp {input.assem}       {output.assem}
+        """
+
+rule compress_the_final_distribution:
+    input:
+        pep   = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.pep",
+        trans = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.transcripts.fasta",
+        gff   = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.gff",
+        chrom = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.chrom",
+        assem = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.assembly.fasta"
+    output:
+        tar = config["tool"] + "/output/{pre}_av{ver}.tar.gz"
+    params:
+        indir = lambda wildcards: config["tool"] + "/output/{}_av{}/".format(
+            wildcards.pre, wildcards.ver)
+    shell:
+        """
+        tar -czvf {output.tar} {params.indir}
+        """
