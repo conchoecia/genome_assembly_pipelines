@@ -6,9 +6,8 @@ assemblies:
 #  below. See the instructions here: https://github.com/marbl/SALSA#restriction-enzyme-input
 junctions: "GATC,AATT"
 
-# We'll use the long reads to QC the completeness of the assembly before
-#  and after running salsa2
-long_reads: "/the/long/reads/are/here.fasta.gz"
+# the number of rounds that the scaffolding will go through
+rounds: 20
 
 # The libraries can be either Chicago or Hi-C. Only run one type at a time.
 libraries:

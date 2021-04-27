@@ -54,7 +54,7 @@ rule SALSA_index:
         1
     shell:
         """
-        bwa index -a is {input.assem}
+        bwa index {input.assem}
         """
 
 rule SALSA_map:
@@ -77,7 +77,7 @@ rule SALSA_map:
         """
         bwa mem -5SPM -t {threads} {input.assem} \
                  {input.f} {input.r} | \
-                 samtools view -hb -@ {threads} - | \
+                 samtools view -hb -F 2308 -@ {threads} - | \
                  samtools sort -@ {threads} - > {output.bam}
         """
 
@@ -133,6 +133,7 @@ rule SALSA_salsa:
         final = "GAP_salsa/output/{nom}/scaffolds_FINAL.fasta"
     params:
         out = lambda w: "GAP_salsa/output/{}".format(w.nom),
+        rounds = config["rounds"],
         rest_site = config["junctions"].upper()
     shell:
         """
@@ -144,6 +145,7 @@ rule SALSA_salsa:
           -b {input.bed} \
           -m no \
           -p yes \
+          -i {params.rounds} \
           -e {params.rest_site} \
           -o {params.out}
         conda deactivate
