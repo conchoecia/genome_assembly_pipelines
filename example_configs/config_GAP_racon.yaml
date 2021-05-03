@@ -1,0 +1,19 @@
+# Author dts 2020
+# dts@ucsc.edu
+# dschultz@mbari.org
+#
+# This config file is for the script `GAP_racon`
+#  https://github.com/conchoecia/genome_assembly_pipelines
+
+assemblies:
+  code_name_for_this_assembly: "/path/to/assembly.fasta"
+
+longreads:
+  lib1:
+  - /path/to/lib1.fastq.gz
+  lib2:
+  - /path/to/lib2.fastq.gz
+  lib3:
+  - /path/to/lib3.fastq.gz
+  lib4:
+  - /path/to/lib4.fastq.gz

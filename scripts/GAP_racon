@@ -1,0 +1,40 @@
+"""
+This snakefile performs racon polishing on a genome.
+"""
+from Bio import SeqIO
+minchromsize = 1000000
+configfile: "config.yaml"
+
+config["tool"] = "GAP_racon"
+
+rule all:
+    input:
+        expand(config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam",
+               nom = config["assemblies"], lib = config["longreads"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule map_longreads_to_ref:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        reads  = lambda wildcards: config["longreads"][wildcards.lib],
+    output:
+        bam   = config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam"
+    params:
+        sort_threads = max(1, int(workflow.cores/5))
+    threads:
+        workflow.cores
+    shell:
+        """
+        mkdir ./tmp
+        minimap2 -ax asm20 --split-prefix ./tmp/temp_name -t {threads} \
+            {input.assem} {input.reads} | \
+            samtools view -hb -F 2308 -@ {params.sort_threads} - | \
+            samtools sort -@ {params.sort_threads} - > {output.bam}
+        rm -rf ./tmp
+        """
