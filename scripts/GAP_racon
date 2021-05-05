@@ -9,8 +9,10 @@ config["tool"] = "GAP_racon"
 
 rule all:
     input:
-        expand(config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam",
-               nom = config["assemblies"], lib = config["longreads"])
+        expand(config["tool"] + "/input/bams/{nom}_to_ref.all.sam",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/input/reads/{nom}.all.fastq.gz",
+               nom = config["assemblies"]),
 
 # make softlinks of the input files
 # files end up here:
@@ -19,12 +21,23 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 include: softlinks_rule_path
 
+rule cat_reads:
+    input:
+        reads  = [config["longreads"][x] for x in config["longreads"]]
+    output:
+        reads  = config["tool"] + "/input/reads/{nom}.all.fastq.gz"
+    threads: 1
+    shell:
+        """
+        cat {input.reads} > {output.reads}
+        """
+
 rule map_longreads_to_ref:
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        reads  = lambda wildcards: config["longreads"][wildcards.lib],
+        reads  = config["tool"] + "/input/reads/{nom}.all.fastq.gz"
     output:
-        bam   = config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam"
+        sam = config["tool"] + "/input/bams/{nom}_to_ref.all.sam"
     params:
         sort_threads = max(1, int(workflow.cores/5))
     threads:
@@ -35,6 +48,7 @@ rule map_longreads_to_ref:
         minimap2 -ax asm20 --split-prefix ./tmp/temp_name -t {threads} \
             {input.assem} {input.reads} | \
             samtools view -hb -F 2308 -@ {params.sort_threads} - | \
-            samtools sort -@ {params.sort_threads} - > {output.bam}
+            samtools sort -@ {params.sort_threads} | \
+            samtools view -h - > {output.sam}
         rm -rf ./tmp
         """
