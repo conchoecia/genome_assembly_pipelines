@@ -52,3 +52,19 @@ rule map_longreads_to_ref:
             samtools view -h - > {output.sam}
         rm -rf ./tmp
         """
+
+rule racon:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        reads  = config["tool"] + "/input/reads/{nom}.all.fastq.gz",
+        sam = config["tool"] + "/input/bams/{nom}_to_ref.all.sam"
+    output:
+        assem = config["tool"] + "/output/assembly/{nom}_racon.fasta",
+    threads:
+        workflow.cores
+    shell:
+        """
+        racon -t {threads} {input.reads} \
+          {input.sam} \
+          {input.assem} > {output.assem}
+        """
