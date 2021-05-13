@@ -1,0 +1,8 @@
+# this is the config file for config_GAP_invert_regions
+
+assemblies:
+  your_assem_prefix: "/path/to/your/assem/here.fasta"
+
+invert_these:
+  - "sca1:1-500000"
+  - "sca2:1-2500"

@@ -1,0 +1,72 @@
+"""
+This snakefile file takes an assembly that is diploid and chromosome-scale,
+ and:
+  - splits the assemblies into parts A and B based on how the user defines them
+  - Uses a Hi-C reads pairs file to determine if the remaining scaffolds
+    are in A or B
+  - Splits the input read pairs into parts A and B so that they can be used later for assembly
+"""
+
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
+import copy
+import gzip
+import operator
+import pandas as pd
+import sys
+
+minchromsize = 1000000
+configfile: "config.yaml"
+
+config["tool"] = "GAP_invert_regions"
+
+rule all:
+    input:
+        # inverted assembly
+        expand(config["tool"] + "/output/assembly/{nom}_inversions.fasta",
+               nom = config["assemblies"]),
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule invert_specified_regions:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        assem = config["tool"] + "/output/assembly/{nom}_inversions.fasta",
+    threads: 1
+    run:
+        # key is the scaffold, the entry is the inversion start stop
+        inversion_map = {}
+        for entry in config["invert_these"]:
+            scaf = entry.split(":")[0]
+            start = int(entry.split(":")[1].split("-")[0])
+            stop  = int(entry.split(":")[1].split("-")[1])
+            if scaf not in inversion_map:
+                inversion_map[scaf] = []
+            inversion_map[scaf].append([start, stop])
+
+        print("working on inversions in the assembly")
+        # now generate a split assembly
+        out_handle = open(output.assem, "w")
+        for record in SeqIO.parse(input.assem, "fasta"):
+            print("Checking {}".format(record.id))
+            if record.id in inversion_map:
+                reccopy = copy.copy(record)
+                for start,stop in inversion_map[record.id]:
+                    print("  - Inverting the region between {} and {}".format(start, stop))
+                    ptA = record[0:start].seq
+                    ptB = record[start:stop+1].reverse_complement().seq
+                    ptC = record[stop:].seq
+                    reccopy = SeqRecord(Seq("").join([ptA, ptB, ptC]),
+                                        id = record.id)
+                    reccopy.id = record.id
+                SeqIO.write(reccopy, out_handle, "fasta")
+            else:
+                SeqIO.write(record, out_handle, "fasta")
+        out_handle.close()
