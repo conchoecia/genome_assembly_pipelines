@@ -16,6 +16,9 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 configfile: "config.yaml"
 config["tool"] = "GAP_annotate_fastest"
 
+if "LONGREADS" not in config:
+    config["LONGREADS"] = config["TXOME"]
+
 rule all:
     input:
         expand(config["tool"] + "/workspace/{pre}_av{ver}_translatable_txome_transcripts.txt",
