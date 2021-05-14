@@ -1,5 +1,11 @@
 """
-This fastest version of the annotate script doesn't run STAR and doesn't run prothint. Nor augustus.
+This fastest version of the annotate script doesn't run STAR and doesn't run prothint.
+Nor augustus.
+
+The longreads and the transcriptome can be the same thing if you don't have long
+ RNA-seq reads.
+
+Requires TransDecoder.LongOrfs
 """
 
 import copy
@@ -8,10 +14,14 @@ from Bio import SeqIO
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 
 configfile: "config.yaml"
-config["tool"] = "GAP_annotate_longreads"
+config["tool"] = "GAP_annotate_fastest"
 
 rule all:
     input:
+        expand(config["tool"] + "/workspace/{pre}_av{ver}_translatable_txome_transcripts.txt",
+               pre = config["PREFIX"], ver = config["VERSION"]),
+        expand(config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.temp.pep",
+               pre = config["PREFIX"], ver = config["VERSION"]),
         #expand(config["tool"] + "/workspace/{pre}_av{ver}_fromTxome.gff3",
         #       pre = config["PREFIX"], ver = config["VERSION"]),
         #expand(config["tool"] + "/workspace/{pre}_av{ver}_fromTxome.chrom",
@@ -163,20 +173,28 @@ rule transcripts_from_gtf:
 
 rule translatable_transcripts_from_txome:
     """
-    We only care about transcripts that have a sensible translation from prottrans.py
+    We only care about transcripts that have a sensible translation from TransDecoder.LongOrfs 
     - So we translate, then we'll filter and find the IDs that are OK
+    - The intent of this script is to be fast, so we do not check to see which
+      which proteins seem real or not based on blast
     """
     input:
-        txome = config["TXOME"],
-        ptp = os.path.join(filepath, "prottrans.py")
+        txome = config["TXOME"]
     output:
         OK_list = config["tool"] + "/workspace/{pre}_av{ver}_translatable_txome_transcripts.txt",
+    threads: 1
+    params:
+        fasta_name = config["TXOME"].split("/")[-1] + ".transdecoder_dir/longest_orfs.pep"
     shell:
         """
-        python2 {input.ptp} -r -a 50 {input.txome} | \
-          grep '>' | rev | cut -d '_' -f2- | rev | \
-          sed 's/>//g' | \
-          sort | uniq > {output.OK_list}
+        mkdir temp
+        cd temp
+        TransDecoder.LongOrfs -m 50 -S -t {input.txome}
+        grep '>' {params.fasta_name} | \
+          rev | cut -d ' ' -f1 | cut -d ':' -f2- | rev | \
+          sort | uniq > ../{output.OK_list}
+        cd ..
+        rm -rf temp
         """
 
 rule get_translatable_txome:
@@ -384,9 +402,20 @@ rule translate_prots:
         ptp = os.path.join(filepath, "prottrans.py")
     output:
         final_peps = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.temp.pep",
+        final_cds = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.temp.cds",
+    threads: 1
+    params:
+        pep_name = lambda wildcards: "{pre}_av{ver}_hits.fasta".format(pre = wildcards.pre, ver = wildcards.ver) + ".transdecoder_dir/longest_orfs.pep",
+        cds_name = lambda wildcards: "{pre}_av{ver}_hits.fasta".format(pre = wildcards.pre, ver = wildcards.ver) + ".transdecoder_dir/longest_orfs.cds",
     shell:
         """
-        python2 {input.ptp} -r -a 50 {input.fasta} > {output.final_peps}
+        mkdir temp
+        cd temp
+        TransDecoder.LongOrfs -m 50 -S -t ../{input.fasta}
+        cp {params.pep_name} ../{output.final_peps}
+        cp {params.cds_name} ../{output.final_cds}
+        cd ..
+        rm -rf temp
         """
 
 rule get_isoform1_from_prots:
@@ -395,9 +424,11 @@ rule get_isoform1_from_prots:
     """
     input:
         final_peps = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.temp.pep",
+        final_cds = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.temp.cds",
         tx_to_new = config["tool"] + "/workspace/{pre}_av{ver}_tx_to_new.txt",
     output:
-        final_peps = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.pep"
+        final_peps = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.pep",
+        final_cds = config["tool"] + "/workspace/{pre}_av{ver}_cds_from_txome.fasta"
     threads: 1
     run:
         old_to_new = {}
@@ -409,13 +440,23 @@ rule get_isoform1_from_prots:
                     old_to_new[splitd[0]] = splitd[1]
 
         seen_yet = set()
+        keep_these = set()
         outhandle = open(output.final_peps, "w")
         from Bio import SeqIO
         with open(input.final_peps) as handle:
             for record in SeqIO.parse(handle, "fasta"):
-                seqname = record.id[0:-2]
+                seqname = record.id.split(".p")[0]
                 if seqname not in seen_yet and seqname in old_to_new:
                     seen_yet.add(seqname)
+                    keep_these.add(record.id)
+                    record.id = old_to_new[seqname]
+                    SeqIO.write(record, outhandle, "fasta")
+        outhandle.close()
+
+        outhandle = open(output.final_cds, "w")
+        with open(input.final_cds) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                if record.id in keep_these:
                     record.id = old_to_new[seqname]
                     SeqIO.write(record, outhandle, "fasta")
         outhandle.close()
@@ -425,12 +466,14 @@ rule collate_final_output:
         final_peps = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.pep",
         hits = config["tool"] + "/workspace/{pre}_av{ver}_transcripts_from_txome.fasta",
         gff = config["tool"] + "/workspace/{pre}_av{ver}_fromTxome.gff3",
+        cds = config["tool"] + "/workspace/{pre}_av{ver}_cds_from_txome.fasta",
         chrom = config["tool"] + "/workspace/{pre}_av{ver}_fromTxome.chrom",
         assem = config["REF"]
     output:
         pep   = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.pep",
         trans = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.transcripts.fasta",
         gff   = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.gff",
+        cds   = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.cds.fasta",
         chrom = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.chrom",
         assem = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.assembly.fasta"
     threads: 1
@@ -439,6 +482,7 @@ rule collate_final_output:
         cp {input.final_peps}  {output.pep}
         cp {input.hits}        {output.trans}
         cp {input.gff}         {output.gff}
+        cp {input.cds}         {output.cds}
         cp {input.chrom}       {output.chrom}
         cp {input.assem}       {output.assem}
         """
@@ -448,6 +492,7 @@ rule compress_the_final_distribution:
         pep   = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.pep",
         trans = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.transcripts.fasta",
         gff   = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.gff",
+        cds   = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.cds.fasta",
         chrom = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.chrom",
         assem = config["tool"] + "/output/{pre}_av{ver}/{pre}_av{ver}.assembly.fasta"
     output:
