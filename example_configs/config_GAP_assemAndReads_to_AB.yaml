@@ -21,8 +21,8 @@ pairsgz: "/path/to/dedeup.filt.pairs.gz"
 
 HiC:
   Lib1:
-    - "/path/to/HiC_Lib1_R1.fastq.gz"
-    - "/path/to/HiC_Lib1_R2.fastq.gz"
+    read1: "/path/to/HiC_Lib1_R1.fastq.gz"
+    read2: "/path/to/HiC_Lib1_R2.fastq.gz"
   AnotherHiCLib:
-    - "/path/to/AnotherHiCLib_R1.fastq.gz"
-    - "/path/to/AnotherHiCLib_R2.fastq.gz"
+    read1: "/path/to/AnotherHiCLib_R1.fastq.gz"
+    read2: "/path/to/AnotherHiCLib_R2.fastq.gz"

@@ -24,27 +24,26 @@ rule all:
         # which non-marked scaffolds on which
         expand(config["tool"] + "/output/assembly/{nom}_{side}_scaffolds.txt",
                nom = config["assemblies"], side = ["A", "B"]),
-        expand(config["tool"] + "/output/assembly/{nom}_B_scaffolds.txt",
-               nom = config["assemblies"]),
-        # split reads
-        expand(config["tool"] + "/output/reads/{nom}_A_readslist.txt",
-               nom = config["assemblies"]),
-        expand(config["tool"] + "/output/reads/{nom}_B_readslist.txt",
-               nom = config["assemblies"]),
-        # get the hap-specific reads
-        expand(config["tool"] + "/output/reads/{nom}_A_R1.fastq.gz",
-               nom = config["assemblies"]),
-        expand(config["tool"] + "/output/reads/{nom}_A_R2.fastq.gz",
-               nom = config["assemblies"]),
-        expand(config["tool"] + "/output/reads/{nom}_B_R1.fastq.gz",
-               nom = config["assemblies"]),
-        expand(config["tool"] + "/output/reads/{nom}_B_R2.fastq.gz",
-               nom = config["assemblies"]),
         # split assembly
-        expand(config["tool"] + "/output/assembly/{nom}_A.fasta",
+        expand(config["tool"] + "/output/assembly/{nom}_{side}.fasta",
+               nom = config["assemblies"], side = ["A", "B"]),
+        # split reads
+        expand(config["tool"] + "/output/reads/hap_specific/{nom}_{side}_readslist.txt",
+               nom = config["assemblies"], side = ["A", "B"]),
+        # get the hap-specific reads
+        expand(config["tool"] + "/output/reads/hap_specific/{nom}_{side}_{lib}_{readdir}.fastq.gz",
+               nom = config["assemblies"], side = ["A", "B"],
+               lib = config["HiC"], readdir = ["R1", "R2"]),
+        # get the more selective list of reads
+        expand(config["tool"] + "/output/reads/{nom}_allReadIds.txt",
                nom = config["assemblies"]),
-        expand(config["tool"] + "/output/assembly/{nom}_B.fasta",
-               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/reads/{nom}_ReadIds_notIn{side}.txt",
+               nom = config["assemblies"], side = ["A", "B"]),
+        # get the more inclusive set of reads
+        expand(config["tool"] + "/output/reads/notIn/{nom}_notIn{side}_{lib}_{readdir}.fastq.gz",
+               nom = config["assemblies"], side = ["A", "B"],
+               lib = config["HiC"], readdir = ["R1", "R2"]),
+
 
 # make softlinks of the input files
 # files end up here:
@@ -73,8 +72,8 @@ rule determine_which_reads_scaffolds_A_B:
         cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
     output:
-        A_readlist = config["tool"] + "/output/reads/{nom}_A_readslist.txt",
-        B_readlist = config["tool"] + "/output/reads/{nom}_B_readslist.txt",
+        A_readlist = config["tool"] + "/output/reads/hap_specific/{nom}_A_readslist.txt",
+        B_readlist = config["tool"] + "/output/reads/hap_specific/{nom}_B_readslist.txt",
         A_scaffolds = config["tool"] + "/output/assembly/{nom}_A_scaffolds.txt",
         B_scaffolds = config["tool"] + "/output/assembly/{nom}_B_scaffolds.txt",
         A_fasta = config["tool"] + "/output/assembly/{nom}_A.fasta",
@@ -288,4 +287,88 @@ rule determine_which_reads_scaffolds_A_B:
         A_handle.close()
         B_handle.close()
 
+def flatten(list_of_lists):
+    return [val for sublist in list_of_lists for val in sublist]
+
+# this rule needs to be rewritten to be more dynamic
 rule get_hap_specific_reads:
+    input:
+        readlist = config["tool"] + "/output/reads/hap_specific/{nom}_{side}_readslist.txt",
+        reads = lambda wildcards: config["HiC"][wildcards.lib][wildcards.readdir]
+    output:
+        reads = config["tool"] + "/output/reads/hap_specific/{nom}_{side}_{lib}_{readdir}.fastq.gz"
+    threads: 1
+    shell:
+        """
+        seqtk subseq {input.reads} {input.readlist} | gzip > {output.reads}
+        """
+
+rule get_more_inclusive_read_lists:
+    input:
+        R1s = [config["HiC"][lib]["R1"] for lib in config["HiC"]],
+        A_readlist = config["tool"] + "/output/reads/hap_specific/{nom}_A_readslist.txt",
+        B_readlist = config["tool"] + "/output/reads/hap_specific/{nom}_B_readslist.txt"
+    output:
+        allreadlist = config["tool"] + "/output/reads/{nom}_allReadIds.txt",
+        notInA = config["tool"] + "/output/reads/{nom}_ReadIds_notInA.txt",
+        notInB = config["tool"] + "/output/reads/{nom}_ReadIds_notInB.txt"
+    threads: 1
+    run:
+        A_reads = set()
+        B_reads = set()
+        all_reads = set()
+        # add the A_reads
+        print("Getting the known A reads")
+        with open(input.A_readlist, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    A_reads.add(line)
+                    all_reads.add(line)
+        # add the B_reads
+        print("Getting the known B reads")
+        with open(input.B_readlist, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    B_reads.add(line)
+                    all_reads.add(line)
+        # now go through all the reads
+        print("Going through the fastq files.")
+        counter = 0
+        for thisfile in input.R1s:
+            print("  - analyzing {}".format(thisfile))
+            with gzip.open(thisfile, "rt") as handle:
+                for record in SeqIO.parse(handle, "fastq"):
+                    counter += 1
+                    if counter % 10000 == 0:
+                        print("  Analyzed {} reads.  ".format(counter), end = "\r")
+                    all_reads.add(record.id)
+            print()
+        print("  Analyzed {} reads.  ".format(counter))
+        # write all thes reads to a file
+        all_handle = open(output.allreadlist, "w")
+        A_handle = open(output.notInA, "w")
+        B_handle = open(output.notInB, "w")
+        print("Printing the reads to new files.")
+        for entry in all_reads:
+            # print to all reads file
+            print(entry, file = all_handle)
+            # print to not in A file
+            if entry not in A_reads:
+                print(entry, file = A_handle)
+            if entry not in B_reads:
+                print(entry, file = B_handle)
+
+
+rule get_reads_notInAorB:
+    input:
+        readlist = config["tool"] + "/output/reads/{nom}_ReadIds_notIn{side}.txt",
+        reads    = lambda wildcards: config["HiC"][wildcards.lib][wildcards.readdir]
+    output:
+        reads = config["tool"] + "/output/reads/notIn/{nom}_notIn{side}_{lib}_{readdir}.fastq.gz"
+    threads: 1
+    shell:
+        """
+        seqtk subseq {input.reads} {input.readlist} | gzip > {output.reads}
+        """
