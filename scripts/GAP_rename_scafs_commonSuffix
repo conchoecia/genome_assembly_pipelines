@@ -1,0 +1,57 @@
+"""
+This snakefile takes an input fasta file and makes sure that all of the
+ scaffolds end with a common suffix. The suffix will be delimited from
+ the sequence name with a '_' character.
+"""
+import subprocess
+configfile: "config.yaml"
+config["tool"] = "GAP_rename_scafs_commonSuffix"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/assembly/{nom}_output.fasta",
+               nom=config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule make_a_renamed_file:
+    """
+    The fasta headers might have some weird characters, so just make a temp
+    assembly that we will rename
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    output:
+        assem = config["tool"] + "/output/assembly/{nom}_output.fasta"
+    params:
+        suffix = config["suffix"]
+    threads: 1
+    run:
+        output_handle = open(output.assem, "w")
+        with open(input.assem, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    if line[0] == ">":
+                        scaf = line[1:]
+                        newscaf = ""
+                        if "_" not in scaf:
+                            # we just add the suffix and move on
+                            newscaf = ">{}_{}".format(scaf, params.suffix)
+                        else:
+                            # _ is in the scaf name. We check if the last entry is suffix
+                            lastsplit = scaf.split("_")[-1]
+                            if lastsplit == params.suffix:
+                                # we don't need to add anything.
+                                newscaf = ">{}".format(scaf)
+                            else:
+                                newscaf = ">{}_{}".format(scaf, params.suffix)
+                        print(newscaf, file = output_handle)
+                    else:
+                        print(line, file = output_handle)
+        output_handle.close()

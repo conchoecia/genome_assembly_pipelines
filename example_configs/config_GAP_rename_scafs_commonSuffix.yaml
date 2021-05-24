@@ -1,0 +1,5 @@
+assemblies:
+  your_assem_name: "/path/to/assembly/to/rename/reorder.fasta"
+ 
+# The suffix preferably will not have '_' characters to avoid confusion
+suffix: "whateverYourSuffixIs"
