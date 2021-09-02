@@ -1,0 +1,6 @@
+"""
+changes all gaps to 100bp of Ns
+"""
+
+assemblies:
+  random_gaps: "/bigdata/user/darrin/boli_genome/assembly_versions/v0.2/purge_duplicates_cleanup/boli_v3_final.fasta"

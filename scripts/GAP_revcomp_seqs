@@ -1,0 +1,42 @@
+"""
+This snakefile opens a fasta file and reverse complements select sequences,
+otherwise it doesn't do anything.
+
+"""
+configfile: "config.yaml"
+config["tool"] = "GAP_revcomp_seqs"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/{nom}.fasta", nom = config["assemblies"]),
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule revcomp_seqs:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    output:
+        fasta = config["tool"] + "/output/{nom}.fasta"
+    threads: 1
+    run:
+        from Bio import SeqIO
+
+        out_handle = open(output.fasta, "w")
+        with open(input.assem, "rU") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                revcomp = False
+                if record.id in config["rc"]:
+                    desc    = record.description
+                    seqid   = record.id
+                    thisrec = record.reverse_complement()
+                    thisrec.id = "{}".format(seqid)
+                    thisrec.description = desc
+                    SeqIO.write(thisrec, out_handle, "fasta")
+                else:
+                    SeqIO.write(record, out_handle, "fasta")
+        out_handle.close()
