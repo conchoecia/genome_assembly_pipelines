@@ -1,0 +1,81 @@
+"""
+This takes a contamination file from an NCBI genome upload and
+  removes the contaminating sequences/regions.
+"""
+import subprocess
+configfile: "config.yaml"
+config["tool"] = "GAP_NCBI_contamination"
+
+
+if "contamination_file" not in config:
+    raise IOError("You must have the field contamination_file in the config")
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/{nom}_output.fasta",
+               nom=config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule trim_contamination:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        contam_file = config["contamination_file"]
+    output:
+        assem = config["tool"] + "/output/{nom}_output.fasta"
+    run:
+        from Bio import SeqIO
+        from Bio.SeqRecord import SeqRecord
+        from Bio.Seq import Seq
+
+        # read the contamination file
+        trim_regions = {}
+        collecting = False
+        with open(input.contam_file, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    if collecting:
+                        fields = line.split("\t")
+                        chrom = fields[0]
+                        startstop = fields[2]
+                        start = int(startstop.split("..")[0])
+                        stop  = int(startstop.split("..")[1])
+                        if chrom not in trim_regions:
+                            trim_regions[chrom] = set()
+                            for i in range(start, stop + 1):
+                                trim_regions[chrom].add(i)
+                    elif line == "Sequence name, length, span(s), apparent source":
+                        collecting = True
+
+        # now read in the next sequences and trim out the bad parts
+        outhandle = open(output.assem, "w")
+        with open(input.assem, "rU") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                #Turn all gaps into size 100
+                if record.id not in trim_regions:
+                    SeqIO.write(record, outhandle, "fasta")
+                else:
+                    inN    = False
+                    newseq = ""
+                    for i in range(len(record.seq)):
+                        pos = i+1
+                        if pos not in trim_regions[record.id]:
+                            thischar = record.seq[i]
+                            if thischar.upper() != "N":
+                                newseq += thischar
+                                inN = False
+                            else:
+                                if not inN:
+                                    newseq += "".join(["N"]*100)
+                                else:
+                                    pass
+                                inN = True
+                    sr = SeqRecord(Seq(newseq), record.id, '', '')
+                    SeqIO.write(sr, outhandle, "fasta")
+        outhandle.close()

@@ -1,0 +1,9 @@
+#
+# This script trims sequences in the NCBI Contamination.txt file from genome assembly submission.
+#
+
+assemblies:
+  your_name: "/path_to_your_assembly.fasta"
+
+# This is the contamination file from NCBI
+contamination_file: "Contamination.txt"
