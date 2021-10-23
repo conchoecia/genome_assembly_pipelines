@@ -190,7 +190,7 @@ rule translatable_transcripts_from_txome:
         fasta_name = config["TXOME"].split("/")[-1] + ".transdecoder_dir/longest_orfs.pep"
     shell:
         """
-        mkdir temp
+        mkdir -p temp
         cd temp
         TransDecoder.LongOrfs -m 50 -S -t {input.txome}
         grep '>' {params.fasta_name} | \
