@@ -37,6 +37,9 @@ rule all:
         config["tool"] + "/output/braker_combined/braker_prot_dna.chrom",
         # finish the annotation
         expand(config["tool"] + "/output/{prefix}.annotation.tar.gz",
+               prefix = config["PREFIX"]),
+        # DNA-only annotation
+        expand(config["tool"] + "/output/{prefix}.annotation.DNAonly.tar.gz",
                prefix = config["PREFIX"])
 
 rule minimap2_txome_to_genome:
@@ -409,6 +412,60 @@ rule compress_the_final_distribution:
         tar = config["tool"] + "/output/{prefix}.annotation.tar.gz"
     params:
         outdir = config["tool"] + "/output/final_files/"
+    shell:
+        """
+        tar -czvf {output.tar} {params.outdir}
+        """
+
+# make a second version of the annotation just using the DNA information
+rule generate_DNA_annot_chrom_file:
+    input:
+        gtf  = config["tool"] + "/output/braker_dna/augustus.hints.gtf"
+    output:
+        chrom = config["tool"] + "/output/braker_dna/braker.chrom"
+    shell:
+        """
+        cat {input.gtf} | \
+          awk '{{if ($3 == "transcript"){{print($0)}} }}' | \
+          awk '{{printf("%s\\t%s\\t%s\\t%s\\t%s\\n", $9, $1, $7, $4, $5)}}' > {output.chrom}
+        """
+
+rule cp_DNA_things_to_final:
+    """
+    if gff ever gets to working...
+    #cat {input.gtf} | \
+    #  gtf2gff.pl --printExon --printUTR --gff3 \
+    #     --includeStopInCDS --out {output.gff}
+    """
+    input:
+        assem = config["REF"],
+        gtf   = config["tool"] + "/output/braker_dna/augustus.hints.gtf",
+        pep   = config["tool"] + "/output/braker_dna/augustus.hints.aa",
+        chrom = config["tool"] + "/output/braker_dna/braker.chrom"
+    output:
+        assem = config["tool"] + "/output/final_DNA_annot/{prefix}.fasta",
+        gtf   = config["tool"] + "/output/final_DNA_annot/{prefix}.gtf",
+        #gff   = config["tool"] + "/output/final_DNA_annot/{prefix}.gff",
+        pep   = config["tool"] + "/output/final_DNA_annot/{prefix}.pep",
+        chrom = config["tool"] + "/output/final_DNA_annot/{prefix}.chrom"
+    shell:
+        """
+        cp {input.assem} {output.assem}
+        cp {input.gtf}   {output.gtf}
+        cp {input.pep}   {output.pep}
+        cp {input.chrom} {output.chrom}
+        """
+rule compress_DNA_annotation:
+    input:
+        assem = config["tool"] + "/output/final_DNA_annot/{prefix}.fasta",
+        gtf   = config["tool"] + "/output/final_DNA_annot/{prefix}.gtf",
+        #gff   = config["tool"] + "/output/final_DNA_annot/{prefix}.gff",
+        pep   = config["tool"] + "/output/final_DNA_annot/{prefix}.pep",
+        chrom = config["tool"] + "/output/final_DNA_annot/{prefix}.chrom"
+    output:
+        tar = config["tool"] + "/output/{prefix}.annotation.DNAonly.tar.gz"
+    params:
+        outdir = config["tool"] + "/output/final_DNA_annot/"
     shell:
         """
         tar -czvf {output.tar} {params.outdir}
