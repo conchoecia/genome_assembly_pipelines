@@ -272,7 +272,9 @@ rule run_braker_DNA:
         other_txomes = expand(config["tool"] + "/output/bams/other_transcriptome_bams/{othertxome}_to_ref.sorted.bam", othertxome = config["other_transcriptomes"])
     output:
         braker_gtf = config["tool"] + "/output/braker_dna/braker.gtf",
-        hints      = config["tool"] + "/output/braker_dna/hintsfile.gff"
+        hints      = config["tool"] + "/output/braker_dna/hintsfile.gff",
+        aug  = config["tool"] + "/output/braker_dna/augustus.hints.gtf",
+        aa   = config["tool"] + "/output/braker_dna/augustus.hints.aa"
     params:
         prefix  = config["PREFIX"] + "_dna",
         outdir  = config["tool"] + "/output/",
