@@ -1,0 +1,415 @@
+"""
+Runs BRAKER using the following as evidence:
+  - Transcriptome of species in question
+  - long RNA-seq reads of species
+  - short, paired RNA-seq reads of species
+  - Proteins of closely related species
+  - Transcriptomes of closely related species
+"""
+
+import copy
+import sys
+from Bio import SeqIO
+configfile: "config.yaml"
+
+config["tool"] = "GAP_annotate_BRAKER"
+
+rule all:
+    input:
+        config["tool"] + "/output/bams/txome_to_ref.filtered.sorted.bam",
+        config["tool"] + "/output/bams/long_to_ref.filtered.sorted.bam",
+        config["tool"] + "/input/reads/rna.f.fq.gz",
+        # run STAR, even if the RNAF and RNAR files are empty
+        config["tool"] + "/output/STAR_dir/genomeParameters.txt",
+        config["tool"] + "/output/STAR_dir/STAR_results_Aligned.out.bam",
+        config["tool"] + "/output/STAR_dir/STAR_results_Aligned.out.sorted.bam",
+        # run prothint on the proteins in the config
+        config["tool"] + "/output/prothint/prothint_augustus.gff",
+        # run braker on just the prots
+        config["tool"] + "/output/braker_prot/braker.gtf",
+        # map the other transcriptomes to the genome
+        expand(config["tool"] + "/output/bams/other_transcriptome_bams/{othertxome}_to_ref.sorted.bam", othertxome = config["other_transcriptomes"]),
+        # run braker on the DNA and RNA-based evidence
+        config["tool"] + "/output/braker_combined/braker_prot_dna.gtf",
+        # translate
+        config["tool"] + "/output/braker_combined/braker_prot_dna.aa",
+        # make chrom file
+        config["tool"] + "/output/braker_combined/braker_prot_dna.chrom",
+        # finish the annotation
+        expand(config["tool"] + "/output/{prefix}.annotation.tar.gz",
+               prefix = config["PREFIX"])
+
+rule minimap2_txome_to_genome:
+    input:
+        assem = config["REF"],
+        txome = config["TXOME"]
+    output:
+        bam = config["tool"] + "/output/bams/txome_to_ref.filtered.sorted.bam"
+    threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/5)
+    shell:
+        """
+        minimap2 -t {threads} -ax splice {input.assem} {input.txome} | \
+           samtools view -F 4 -q 10 -hb -@ {params.sort_threads} - | \
+           samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule minimap2_long_to_genome:
+    input:
+        assem = config["REF"],
+        txome = config["LONGREADS"]
+    output:
+        bam = config["tool"] + "/output/bams/long_to_ref.filtered.sorted.bam"
+    threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/5)
+    shell:
+        """
+        minimap2 -t {threads} -ax splice:hq {input.assem} {input.txome} | \
+           samtools view -F 4 -q 10 -hb -@ {params.sort_threads} - | \
+           samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule illumina_read_softlinks:
+    """
+    make a softlink to the short Illumina RNA-seq reads.
+    If they don't exist just make a fake file
+    """
+    output:
+        rnaf = config["tool"] + "/input/reads/rna.f.fq.gz",
+        rnar = config["tool"] + "/input/reads/rna.r.fq.gz"
+    run:
+        make_fakes = False
+        if ("RNAF" in config) and ("RNAR" in config):
+            if os.path.exists(config["RNAF"]) and os.path.exists(config["RNAR"]):
+                os.symlink(config["RNAF"], output.rnaf)
+                os.symlink(config["RNAR"], output.rnar)
+            else:
+                make_fakes = True
+        else:
+            make_fakes = True
+
+        if make_fakes:
+            import gzip
+            for thisfile in [output.rnaf, output.rnar]:
+                with open(thisfile.replace(".gz", ""), "w") as f:
+                    print("", file = f)
+                f_out = gzip.open(thisfile, 'wb')
+                f_out.writelines("")
+                f_out.close()
+                os.remove(thisfile.replace(".gz", ""))
+
+rule star_setup:
+    """
+    This makes a directory to put all the files for
+      STAR, and it sets up the genome to prepare for an alignment
+    """
+    input:
+        STAR  = config["STARPATH"],
+        assem = config["REF"]
+    params:
+        outdir = config["tool"] + "/output/STAR_dir"
+    output:
+        chrLength =     config["tool"] + "/output/STAR_dir/chrLength.txt",
+        chrNameLength = config["tool"] + "/output/STAR_dir/chrNameLength.txt",
+        chrName =       config["tool"] + "/output/STAR_dir/chrName.txt",
+        chrStart =      config["tool"] + "/output/STAR_dir/chrStart.txt",
+        Genome =        config["tool"] + "/output/STAR_dir/Genome",
+        GP =            config["tool"] + "/output/STAR_dir/genomeParameters.txt",
+        SA =            config["tool"] + "/output/STAR_dir/SA",
+        SAindex =       config["tool"] + "/output/STAR_dir/SAindex",
+    threads: workflow.cores - 1
+    shell:
+        """
+        mkdir -p {params.outdir}
+        {input.STAR} --runThreadN {threads} \
+          --runMode genomeGenerate \
+          --genomeDir {params.outdir} \
+          --genomeFastaFiles {input.assem} \
+          --genomeSAindexNbases 12
+        """
+
+rule star_map:
+    """
+    perform spliced mapping of the short reads to the genome
+    """
+    input:
+        STAR  = config["STARPATH"],
+        assem = config["REF"],
+        RNAF = config["tool"] + "/input/reads/rna.f.fq.gz",
+        RNAR = config["tool"] + "/input/reads/rna.r.fq.gz",
+        chrLength =     config["tool"] + "/output/STAR_dir/chrLength.txt",
+        chrNameLength = config["tool"] + "/output/STAR_dir/chrNameLength.txt",
+        chrName =       config["tool"] + "/output/STAR_dir/chrName.txt",
+        chrStart =      config["tool"] + "/output/STAR_dir/chrStart.txt",
+        Genome =        config["tool"] + "/output/STAR_dir/Genome",
+        GP =            config["tool"] + "/output/STAR_dir/genomeParameters.txt",
+        SA =            config["tool"] + "/output/STAR_dir/SA",
+        SAindex =       config["tool"] + "/output/STAR_dir/SAindex",
+    output:
+        bam =       config["tool"] + "/output/STAR_dir/STAR_results_Aligned.out.bam",
+        log =       config["tool"] + "/output/STAR_dir/STAR_results_Log.final.out",
+        logtemp =   config["tool"] + "/output/STAR_dir/STAR_results_Log.out",
+        prog =      config["tool"] + "/output/STAR_dir/STAR_results_Log.progress.out",
+        results =   config["tool"] + "/output/STAR_dir/STAR_results_SJ.out.tab",
+    params:
+        outdir =    config["tool"] + "/output/STAR_dir",
+        outprefix = config["tool"] + "/output/STAR_dir/STAR_results_"
+    threads: workflow.cores - 1
+    shell:
+        """
+        {input.STAR} --genomeDir {params.outdir} \
+          --runThreadN {threads} \
+          --readFilesIn {input.RNAF} {input.RNAR} \
+          --readFilesCommand zcat \
+          --outFileNamePrefix {params.outprefix} \
+          --outSAMtype BAM Unsorted \
+          --outSAMattributes Standard
+        """
+
+rule star_sort_the_bam_file:
+    """
+    just sort the bam file.
+     when star tries to sort it often crashes
+    """
+    input:
+        bam = config["tool"] + "/output/STAR_dir/STAR_results_Aligned.out.bam"
+    output:
+        sort_bam = config["tool"] + "/output/STAR_dir/STAR_results_Aligned.out.sorted.bam",
+    threads: workflow.cores -1
+    shell:
+        """
+        samtools view -hb -@ {threads} {input.bam} | \
+          samtools sort -@ {threads} - > {output.sort_bam}
+        """
+
+rule run_prothint_on_assembly:
+    input:
+        protlist = [config["other_proteins"][x] for x in config["other_proteins"]],
+        assem = config["REF"],
+        prothint = config["PROTHINTPATH"]
+    output:
+        prothintaug = config["tool"] + "/output/prothint/prothint_augustus.gff",
+        prothint =    config["tool"] + "/output/prothint/prothint.gff",
+        catdprots = temp("catdprots.pep")
+    params:
+        workdir = config["tool"] + "/output/prothint",
+        num_hints = 25
+    threads: workflow.cores - 1
+    shell:
+        """
+        cat {input.protlist} | \
+           bioawk -cfastx 'BEGIN{{counter=1}} {{printf(">protnum_%d\\n%s\\n", counter, $seq); counter = counter + 1}}' | \
+           sed 's/[X*.BZJ]//g' > {output.catdprots}
+        {input.prothint} {input.assem} {output.catdprots} \
+           --workdir {params.workdir} --threads {threads} \
+           --maxProteinsPerSeed {params.num_hints}
+        """
+
+rule map_other_transcriptomes_to_reference:
+    """
+    Highly unlikely that transcripts from other species
+     will map to the genome, but mapping them anyway as
+     another source of evidence to find genes.
+    """
+    input:
+        assem = config["REF"],
+        transcriptome = lambda wildcards: config["other_transcriptomes"][wildcards.othertxome]
+    output:
+        txome_bam = config["tool"] + "/output/bams/other_transcriptome_bams/{othertxome}_to_ref.sorted.bam"
+    threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/5)
+    shell:
+        """
+        minimap2 -t {threads} -ax splice {input.assem} {input.transcriptome} | \
+           samtools view -F 4 -q 5 -hb -@ {params.sort_threads} - | \
+           samtools sort -@ {params.sort_threads} - > {output.txome_bam}
+        """
+
+rule run_braker_PROT:
+    input:
+        assem    = config["REF"],
+        prothint = config["tool"] + "/output/prothint/prothint_augustus.gff"
+    output:
+        braker_gtf = config["tool"] + "/output/braker_prot/braker.gtf",
+        hints      = config["tool"] + "/output/braker_prot/hintsfile.gff"
+    params:
+        prefix  = config["PREFIX"] + "_prot",
+        outdir  = config["tool"] + "/output/",
+        working_dir = os.path.abspath("./braker_prot")
+    threads: min(47, workflow.cores - 1)
+    shell:
+        """
+        SPECIESDIR=$(which augustus | \
+                     awk -F'/' -v OFS='/' 'NF-=1' | \
+                     awk '{{printf("%s/../config/species/{params.prefix}", $0)}}' )
+        echo "removing ${{SPECIESDIR}}"
+        rm -rf ${{SPECIESDIR}}
+        braker.pl --species={params.prefix} --cores={threads} \
+           --augustus_args="--singlestrand=true" \
+           --workingdir={params.working_dir} \
+           --genome={input.assem} \
+           --hints={input.prothint}
+        rsync -r {params.working_dir} {params.outdir}
+        """
+
+rule run_braker_DNA:
+    """
+    The recommended way to run BRAKER now is to run BRAKER once with just prots
+     then run it once with DNA evidence. Then cat those files together and use
+     their new transcript selector
+    """
+    input:
+        assem     = config["REF"],
+        txome_bam = config["tool"] + "/output/bams/txome_to_ref.filtered.sorted.bam",
+        long_bam  = config["tool"] + "/output/bams/long_to_ref.filtered.sorted.bam",
+        short_bam = config["tool"] + "/output/STAR_dir/STAR_results_Aligned.out.sorted.bam",
+        other_txomes = expand(config["tool"] + "/output/bams/other_transcriptome_bams/{othertxome}_to_ref.sorted.bam", othertxome = config["other_transcriptomes"])
+    output:
+        braker_gtf = config["tool"] + "/output/braker_dna/braker.gtf",
+        hints      = config["tool"] + "/output/braker_dna/hintsfile.gff"
+    params:
+        prefix  = config["PREFIX"] + "_dna",
+        outdir  = config["tool"] + "/output/",
+        working_dir = os.path.abspath("./braker_dna"),
+        bamsarg = ",".join(expand(config["tool"] + "/output/bams/other_transcriptome_bams/{othertxome}_to_ref.sorted.bam",
+                                  othertxome = config["other_transcriptomes"])) + "," + \
+                                  config["tool"] + "/output/bams/txome_to_ref.filtered.sorted.bam" + "," + \
+                                  config["tool"] + "/output/bams/long_to_ref.filtered.sorted.bam" + "," + \
+                                  config["tool"] + "/output/STAR_dir/STAR_results_Aligned.out.sorted.bam"
+    threads: min(47, workflow.cores - 1)
+    shell:
+        """
+        SPECIESDIR=$(which augustus | \
+                     awk -F'/' -v OFS='/' 'NF-=1' | \
+                     awk '{{printf("%s/../config/species/{params.prefix}", $0)}}' )
+        echo "removing ${{SPECIESDIR}}"
+        rm -rf ${{SPECIESDIR}}
+        braker.pl --species={params.prefix} --cores={threads} \
+           --augustus_args="--singlestrand=true" \
+           --workingdir={params.working_dir} \
+           --genome={input.assem} \
+           --bam={params.bamsarg}
+        rsync -r {params.working_dir} {params.outdir}
+        """
+
+rule TSEBRA_config:
+    output:
+        cfg = config["tool"] + "/output/braker_combined/TSEBRA.cfg"
+    shell:
+        """
+        echo "# src weights" > {output.cfg}
+        echo "P 0.1" >> {output.cfg}
+        echo "E 10" >> {output.cfg}
+        echo "C 5" >> {output.cfg}
+        echo "M 1" >> {output.cfg}
+        echo "# Low evidence support" >> {output.cfg}
+        echo "intron_support 0.2" >> {output.cfg}
+        echo "stasto_support 1" >> {output.cfg}
+        echo "# Feature differences" >> {output.cfg}
+        echo "e_1 0" >> {output.cfg}
+        echo "e_2 0.5" >> {output.cfg}
+        echo "e_3 25" >> {output.cfg}
+        echo "e_4 10" >> {output.cfg}
+        """
+
+rule TSEBRA_fix_ids:
+    """
+    part of the TSEBRA pipelin
+    """
+    input:
+        prot = config["tool"] + "/output/braker_prot/braker.gtf",
+        dna  = config["tool"] + "/output/braker_dna/braker.gtf"
+    output:
+        prot = config["tool"] + "/output/braker_combined/braker_prot_fixed.gtf",
+        dna  = config["tool"] + "/output/braker_combined/braker_dna_fixed.gtf"
+    shell:
+        """
+        fix_gtf_ids.py --gtf {input.prot} --out {output.prot}
+        fix_gtf_ids.py --gtf {input.dna}  --out {output.dna}
+        """
+
+rule combine_fixed_TSEBRA:
+    """
+    combined the fixed transcripts with tsebra
+    """
+    input:
+        prot = config["tool"] + "/output/braker_combined/braker_prot_fixed.gtf",
+        dna  = config["tool"] + "/output/braker_combined/braker_dna_fixed.gtf",
+        cfg = config["tool"] + "/output/braker_combined/TSEBRA.cfg",
+        hints_prot = config["tool"] + "/output/braker_prot/hintsfile.gff",
+        hints_dna  = config["tool"] + "/output/braker_dna/hintsfile.gff"
+    output:
+        combined = config["tool"] + "/output/braker_combined/braker_prot_dna.gtf"
+    shell:
+        """
+        tsebra.py -g {input.prot},{input.dna} -c {input.cfg} \
+            -e {input.hints_prot},{input.hints_dna} \
+            -o {output.combined}
+        """
+
+rule translate_TSEBRA:
+    input:
+        assem     = config["REF"],
+        combined = config["tool"] + "/output/braker_combined/braker_prot_dna.gtf"
+    output:
+        prot = config["tool"] + "/output/braker_combined/braker_prot_dna.aa"
+    shell:
+        """
+        gtf2aa.pl {input.assem} {input.combined} {output.prot}
+        """
+
+rule generate_chrom_file:
+    input:
+        combined = config["tool"] + "/output/braker_combined/braker_prot_dna.gtf"
+    output:
+        chrom = config["tool"] + "/output/braker_combined/braker_prot_dna.chrom"
+    shell:
+        """
+        cat {input.combined} | \
+          awk '{{if ($3 == "transcript"){{print($0)}} }}' | \
+          awk '{{printf("%s\\t%s\\t%s\\t%s\\t%s\\n", $9, $1, $7, $4, $5)}}' > {output.chrom}
+        """
+
+rule cp_things_to_final:
+    """
+    if gff ever gets to working...
+    #cat {input.gtf} | \
+    #  gtf2gff.pl --printExon --printUTR --gff3 \
+    #     --includeStopInCDS --out {output.gff}
+    """
+    input:
+        assem = config["REF"],
+        gtf   = config["tool"] + "/output/braker_combined/braker_prot_dna.gtf",
+        pep   = config["tool"] + "/output/braker_combined/braker_prot_dna.aa",
+        chrom = config["tool"] + "/output/braker_combined/braker_prot_dna.chrom"
+    output:
+        assem = config["tool"] + "/output/final_files/{prefix}.fasta",
+        gtf   = config["tool"] + "/output/final_files/{prefix}.gtf",
+        #gff   = config["tool"] + "/output/final_files/{prefix}.gff",
+        pep   = config["tool"] + "/output/final_files/{prefix}.pep",
+        chrom = config["tool"] + "/output/final_files/{prefix}.chrom"
+    shell:
+        """
+        cp {input.assem} {output.assem}
+        cp {input.gtf}   {output.gtf}
+        cp {input.pep}   {output.pep}
+        cp {input.chrom} {output.chrom}
+        """
+rule compress_the_final_distribution:
+    input:
+        assem = config["tool"] + "/output/final_files/{prefix}.fasta",
+        gtf   = config["tool"] + "/output/final_files/{prefix}.gtf",
+        #gff   = config["tool"] + "/output/final_files/{prefix}.gff",
+        pep   = config["tool"] + "/output/final_files/{prefix}.pep",
+        chrom = config["tool"] + "/output/final_files/{prefix}.chrom"
+    output:
+        tar = config["tool"] + "/output/{prefix}.annotation.tar.gz"
+    params:
+        outdir = config["tool"] + "/output/final_files/"
+    shell:
+        """
+        tar -czvf {output.tar} {params.outdir}
+        """
