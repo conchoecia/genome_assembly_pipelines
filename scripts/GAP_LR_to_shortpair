@@ -1,0 +1,198 @@
+"""
+This snakefile turns long reads into short read pairs.
+Useful for generating faux shotgun reads to run HiRise.
+"""
+import gzip
+from Bio import SeqIO
+import copy
+import os
+
+configfile: "config.yaml"
+
+if "LR" not in config:
+    raise IOError("LR must be in the config.yaml")
+
+config["tool"] = "GAP_LR_to_shortpair"
+
+# First we determine the number of reads to get the number of files
+#  that we will generate. This will help parallelize the program.
+config["number_of_reads"] = 0
+
+config["all_reads"] = "all_read_ids.txt"
+if not os.path.exists(config["all_reads"]):
+    outhandle = open(config["all_reads"], "w")
+    for thisLR in config["LR"]:
+        print ("  - analyzing {}".format(thisLR.split("/")[-1]))
+        with open(thisLR, 'rb') as f, gzip.open(f, 'rt') as file:
+            for line in file:
+                line = line.strip()
+                if line:
+                    if config["number_of_reads"] % 4 == 0:
+                        print(line[1::], file = outhandle)
+                    if config["number_of_reads"] % 400 == 0:
+                        print("  Found {} reads    ".format(int(config["number_of_reads"]/4)), end = "\r")
+                    config["number_of_reads"] += 1
+    outhandle.close()
+    config["number_of_reads"] = int(config["number_of_reads"]/4)
+else:
+    with open(config["all_reads"], "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                config["number_of_reads"] += 1
+
+num_reads_per_file = 20000
+config["number_of_analyses"] = config["number_of_reads"]/num_reads_per_file
+
+# add an extra file if there is some leftover
+if config["number_of_analyses"] % int(config["number_of_analyses"]) > 0:
+    config["number_of_analyses"] = int(config["number_of_analyses"]) + 1
+else:
+    config["number_of_analyses"] = int(config["number_of_analyses"])
+
+print("Number of reads is: {}".format(config["number_of_reads"]))
+print("Number of files is: {}".format(config["number_of_analyses"]))
+
+
+rule all:
+    input:
+        # get the temporary reads
+        expand(config["tool"] + "/temp/subreads/LR_reads_{index}.fastq.gz",
+                            index = list(range(1,config["number_of_analyses"]+1))),
+        # split the reads
+        expand(config["tool"] + "/temp/shorts/LR_reads_{index}_R1.fastq.gz",
+               index = list(range(1,config["number_of_analyses"]+1))),
+        config["tool"] + "/temp/shorts_final/frag_reads_R1.fastq.gz",
+        config["tool"] + "/temp/shorts_final/frag_reads_R2.fastq.gz"
+
+rule temp_cat_all_LR:
+    input:
+        reads    = config["LR"]
+    output:
+        allreads = config["tool"] + "/temp/reads/all_reads.fastq.gz"
+    shell:
+        """
+        cat {input.reads} > {output.allreads}
+        """
+
+rule split_reads_to_files:
+    input:
+        reads_list = config["all_reads"]
+    output:
+        reads_file = expand(config["tool"] + "/temp/lists/reads_{index}.txt",
+                            index = list(range(1,config["number_of_analyses"]+1)))
+    params:
+        num_reads_per_file = num_reads_per_file,
+        file_prefix = config["tool"] + "/temp/lists/reads_",
+        file_suffix = ".txt"
+    threads: 1
+    run:
+        file_counter = 1
+        counter = 0
+        with open(input.reads_list, "r") as f:
+            for line in f:
+                if counter == 0:
+                    outfile = "{}{}{}".format(params.file_prefix,
+                                                     file_counter,
+                                                     params.file_suffix)
+                    print("outhandle now {}".format(outfile))
+                    outhandle = open(outfile, "w")
+                line = line.strip()
+                if line:
+                    print(line, file = outhandle)
+                    counter += 1
+                    if counter == params.num_reads_per_file:
+                        outhandle.close()
+                        counter = 0
+                        file_counter += 1
+                        print("file count now {}".format(file_counter))
+
+        outhandle.close()
+
+rule get_subread_file:
+    input:
+        allreads = config["tool"] + "/temp/reads/all_reads.fastq.gz",
+        readlist = config["tool"] + "/temp/lists/reads_{index}.txt"
+    output:
+        subreads = config["tool"] + "/temp/subreads/LR_reads_{index}.fastq.gz"
+    threads: 1
+    shell:
+        """
+        seqtk subseq {input.allreads} {input.readlist} | gzip > {output.subreads}
+        """
+
+rule split_reads:
+    input:
+        subreads = config["tool"] + "/temp/subreads/LR_reads_{index}.fastq.gz"
+    output:
+        R1 = config["tool"] + "/temp/shorts/LR_reads_{index}_R1.fastq.gz",
+        R2 = config["tool"] + "/temp/shorts/LR_reads_{index}_R2.fastq.gz"
+    threads: 1
+    params:
+        index = lambda wildcards: wildcards.index,
+        num_reads_per_file = num_reads_per_file,
+    run:
+        outR1 = gzip.open(output.R1, 'wt')
+        outR2 = gzip.open(output.R2, 'wt')
+
+        # open the fastq file
+        counter = 0
+        with gzip.open(input.subreads, "rt") as handle:
+            for record in SeqIO.parse(handle, "fastq"):
+                #revrecord = copy.copy(record)
+                readlen = len(record.seq)
+                num_records = int(readlen/300)
+                starts = [(x * 300)-300+1 for x in range(1, num_records + 1)]
+                for i in starts:
+                    counter += 1
+                    seqid = "{}_{}".format(params.index, counter)
+                    record.id = seqid
+                    forrecord = record[i:i+149]
+                    forrecord.id = seqid
+                    forrecord.name = ""
+                    forrecord.description = ""
+
+                    revrecord = record[i+150:i+299].reverse_complement()
+                    revrecord.id = seqid
+                    revrecord.name = ""
+                    revrecord.description = ""
+
+                    SeqIO.write(forrecord, outR1, "fastq")
+                    SeqIO.write(revrecord,
+                                outR2, "fastq")
+                    if counter % 10 == 0:
+                        print("  Analyzing {}/{} reads    ".format(
+                            counter, params.num_reads_per_file), end = "\r")
+
+        outR1.close()
+        outR2.close()
+
+rule merge_reads_R1:
+    """
+    merge the fastq files to make them map correctly
+    """
+    input:
+        R1 = expand(config["tool"] + "/temp/shorts/LR_reads_{index}_R1.fastq.gz",
+                    index = list(range(1,config["number_of_analyses"]+1)))
+    output:
+        R1 = config["tool"] + "/temp/shorts_final/frag_reads_R1.fastq.gz"
+    threads: 1
+    shell:
+        """
+        cat {input.R1} > {output.R1}
+        """
+
+rule merge_reads_R2:
+    """
+    merge the fastq files to make them map correctly
+    """
+    input:
+        R2 = expand(config["tool"] + "/temp/shorts/LR_reads_{index}_R2.fastq.gz",
+                    index = list(range(1,config["number_of_analyses"]+1)))
+    output:
+        R2 = config["tool"] + "/temp/shorts_final/frag_reads_R2.fastq.gz"
+    threads: 1
+    shell:
+        """
+        cat {input.R2} > {output.R2}
+        """
