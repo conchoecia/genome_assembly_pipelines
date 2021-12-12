@@ -5,11 +5,13 @@ This snakefile file takes an assembly that is diploid and chromosome-scale,
   - Uses a Hi-C reads pairs file to determine if the remaining scaffolds
     are in A or B
   - Splits the input read pairs into parts A and B so that they can be used later for assembly
+  - Splits the LR reads into A and B
 """
 
 from Bio import SeqIO
 import copy
 import gzip
+import os
 import operator
 import pandas as pd
 import sys
@@ -18,6 +20,12 @@ minchromsize = 1000000
 configfile: "config.yaml"
 
 config["tool"] = "GAP_assemAndReads_to_AB"
+
+if "minimap2arg" not in config:
+    raise IOError("you must specify minimap2arg in the config to tell minimap2 what type of reads you're using.")
+
+if config["minimap2arg"] not in ["map-pb", "map-ont", "map-hifi"]:
+    raise IOError("You chose a read type for minimap2arg that will not work here. Choose map-pb, map-ont, or map-hifi")
 
 rule all:
     input:
@@ -43,6 +51,9 @@ rule all:
         expand(config["tool"] + "/output/reads/notIn/{nom}_notIn{side}_{lib}_{readdir}.fastq.gz",
                nom = config["assemblies"], side = ["A", "B"],
                lib = config["HiC"], readdir = ["R1", "R2"]),
+        # now we get the hap=specific LR reads
+        expand(config["tool"] + "/output/reads/hap_specific/LR_hap{side}_to_{nom}.fastq.gz",
+               nom = config["assemblies"], side = ["A", "B"]),
 
 
 # make softlinks of the input files
@@ -67,6 +78,10 @@ rule chrom_size:
         """
 
 rule determine_which_reads_scaffolds_A_B:
+    """
+    use the Hi-C connectivity information to determine which scaffolds,
+     not yet known whether they're A or B, are A or B.
+    """
     input:
         pairs = config["pairsgz"],
         cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
@@ -382,4 +397,120 @@ rule get_reads_notInAorB:
         """
         seqtk subseq {input.reads} {input.readlist} | \
           sed 's/\t/ /g' | cut -d ' ' -f1 | gzip > {output.reads}
+        """
+
+rule symlink_the_LRs:
+    """
+    Symlinks the long reads so they are easier to work with in the rest of the
+      pipeline
+    """
+    input:
+        LR = config["LR"]
+    output:
+        assem = expand(config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz",
+                       LRnum = list(range(0, len(config["LR"]))))
+    params:
+        fileprefix = config["tool"] + "/input/longreads/LR_",
+        filesuffix = ".fastq.gz"
+    run:
+        for i in range(0, len(config["LR"])):
+            thisLR = config["LR"][i]
+            dest = "{}{}{}".format(params.fileprefix, i, params.filesuffix)
+            os.symlink(thisLR, dest)
+
+rule bed_from_scaffolds_files:
+    """
+    We originally saved this as sort of an odd format. Just change the format to bed.
+    """
+    input:
+        A_scaffolds = config["tool"] + "/output/assembly/{nom}_A_scaffolds.txt",
+        B_scaffolds = config["tool"] + "/output/assembly/{nom}_B_scaffolds.txt"
+    output:
+        A_bed = config["tool"] + "/output/assembly/{nom}_A_scaffolds.bed",
+        B_bed = config["tool"] + "/output/assembly/{nom}_B_scaffolds.bed"
+    threads: 1
+    shell:
+        """
+        cat {input.A_scaffolds} | sed 's/:/\t/g' | sed 's/-/\t/g' > {output.A_bed}
+        cat {input.B_scaffolds} | sed 's/:/\t/g' | sed 's/-/\t/g' > {output.B_bed}
+        """
+
+rule map_LR_to_genome:
+    """
+    maps the reads to the assembly
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        long_reads = config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz",
+    output:
+        bam = config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam"
+    params:
+        minimaparg = config["minimap2arg"]
+    threads: workflow.cores - 1
+    shell:
+        """
+        minimap2 -t {threads} -ax {params.minimaparg} {input.assem} {input.long_reads} | \
+          samtools view -F 2308 -hb - | \
+          samtools sort - > {output.bam}
+        """
+
+rule determine_which_hap_LR_reads:
+    """
+    for each bam, for each haplotype, figure out which reads belong to this haplotype.
+    """
+    input:
+        bed = config["tool"] + "/output/assembly/{nom}_{side}_scaffolds.bed",
+        bam = config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam"
+    output:
+        LR_to_hap = config["tool"] + "/output/reads/temp/unmerged/LR_{LRnum}_hap{side}_to_{nom}.txt"
+    threads: 1
+    shell:
+        """
+        samtools view -L {input.bed} {input.bam} | cut -f1 | sort | uniq > {output.LR_to_hap}
+        """
+
+rule combine_readlist_for_bams:
+    """
+    combine the readlists from the different bams
+    """
+    input:
+        LR_to_hap = expand(config["tool"] + "/output/reads/temp/unmerged/LR_{LRnum}_hap{{side}}_to_{{nom}}.txt",
+                           LRnum = list(range(len(config["LR"]))))
+    output:
+        LR_to_hap = config["tool"] + "/output/reads/temp/merged/LR_hap{side}_to_{nom}.txt"
+    threads: 1
+    shell:
+        """
+        cat {input.LR_to_hap} | sort | uniq > {output.LR_to_hap}
+        """
+
+rule intersect_for_readlist:
+    """
+    run an intersect to get rid of things in both haps
+    """
+    input:
+        LR_to_hapA = config["tool"] + "/output/reads/temp/merged/LR_hapA_to_{nom}.txt",
+        LR_to_hapB = config["tool"] + "/output/reads/temp/merged/LR_hapA_to_{nom}.txt"
+    output:
+        LR_to_hapA = config["tool"] + "/output/reads/LR_hapA_to_{nom}.txt",
+        LR_to_hapB = config["tool"] + "/output/reads/LR_hapA_to_{nom}.txt"
+    threads: 1
+    shell:
+        """
+        comm -23 {input.LR_to_hapA} {input.LR_to_hapB} > {output.LR_to_hapA}
+        comm -13 {input.LR_to_hapA} {input.LR_to_hapB} > {output.LR_to_hapB}
+        """
+
+rule filter_reads_for_hap:
+    input:
+        LR_to_hapA = config["tool"] + "/output/reads/LR_hap{side}_to_{nom}.txt"
+        long_reads = config["LR"],
+    output:
+        LR = config["tool"] + "/output/reads/hap_specific/LR_hap{side}_to_{nom}.fastq.gz"
+    threads: 1
+    shell:
+        """
+        for thisfile in {input.long_reads}; do
+            seqtk subseq ${{thisfile}} {input.LR_to_hapA}
+        done | gzip > {output.LR}
         """
