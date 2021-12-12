@@ -97,6 +97,10 @@ rule determine_which_reads_scaffolds_A_B:
         scaf_to_a_b_size = {}
         for side in ["A", "B"]:
             for entry in config[side]:
+                # check if we have defined the range already
+                if ":" not in entry:
+                    entry = "{}:1-{}".format(entry, chrom_to_size[entry])
+                # now it parses the file
                 scaffold = entry.split(":")[0]
                 scafstring = "{}:{}".format(scaffold, side)
                 start    = int(entry.split(":")[1].split("-")[0])
@@ -300,10 +304,15 @@ rule get_hap_specific_reads:
     threads: 1
     shell:
         """
-        seqtk subseq {input.reads} {input.readlist} | gzip > {output.reads}
+        seqtk subseq {input.reads} {input.readlist} | \
+          sed 's/\t/ /g' | cut -d ' ' -f1 | gzip > {output.reads}
         """
 
 rule get_more_inclusive_read_lists:
+    """
+    This outputs a list of reads that are (NOT in B) or (NOT in A).
+      - The result is that this will
+    """
     input:
         R1s = [config["HiC"][lib]["R1"] for lib in config["HiC"]],
         A_readlist = config["tool"] + "/output/reads/hap_specific/{nom}_A_readslist.txt",
@@ -340,6 +349,7 @@ rule get_more_inclusive_read_lists:
             print("  - analyzing {}".format(thisfile))
             with gzip.open(thisfile, "rt") as handle:
                 for record in SeqIO.parse(handle, "fastq"):
+
                     counter += 1
                     if counter % 10000 == 0:
                         print("  Analyzed {} reads.  ".format(counter), end = "\r")
@@ -370,5 +380,6 @@ rule get_reads_notInAorB:
     threads: 1
     shell:
         """
-        seqtk subseq {input.reads} {input.readlist} | gzip > {output.reads}
+        seqtk subseq {input.reads} {input.readlist} | \
+          sed 's/\t/ /g' | cut -d ' ' -f1 | gzip > {output.reads}
         """
