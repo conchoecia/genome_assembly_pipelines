@@ -490,10 +490,10 @@ rule intersect_for_readlist:
     """
     input:
         LR_to_hapA = config["tool"] + "/output/reads/temp/merged/LR_hapA_to_{nom}.txt",
-        LR_to_hapB = config["tool"] + "/output/reads/temp/merged/LR_hapA_to_{nom}.txt"
+        LR_to_hapB = config["tool"] + "/output/reads/temp/merged/LR_hapB_to_{nom}.txt"
     output:
         LR_to_hapA = config["tool"] + "/output/reads/LR_hapA_to_{nom}.txt",
-        LR_to_hapB = config["tool"] + "/output/reads/LR_hapA_to_{nom}.txt"
+        LR_to_hapB = config["tool"] + "/output/reads/LR_hapB_to_{nom}.txt"
     threads: 1
     shell:
         """
@@ -503,8 +503,8 @@ rule intersect_for_readlist:
 
 rule filter_reads_for_hap:
     input:
-        LR_to_hapA = config["tool"] + "/output/reads/LR_hap{side}_to_{nom}.txt"
-        long_reads = config["LR"],
+        LR_to_hapA = config["tool"] + "/output/reads/LR_hap{side}_to_{nom}.txt",
+        long_reads = config["LR"]
     output:
         LR = config["tool"] + "/output/reads/hap_specific/LR_hap{side}_to_{nom}.fastq.gz"
     threads: 1
