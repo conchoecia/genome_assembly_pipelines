@@ -443,7 +443,7 @@ rule map_LR_to_genome:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
         long_reads = config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz",
     output:
-        bam = config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam"
+        bam = temp(config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam")
     params:
         minimaparg = config["minimap2arg"]
     threads: workflow.cores - 1
