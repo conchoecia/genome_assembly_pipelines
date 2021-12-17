@@ -1,0 +1,65 @@
+"""
+Assembles a genome using HiFi and Hi-C data.
+
+run the first part of the assembly pipeline
+"""
+
+configfile: "config.yaml"
+
+check_these = ["prefix", "HiC", "LR"]
+
+for x in check_these:
+    if x not in config:
+        raise IOError("The option '{}' must be in the config".format(x))
+
+if "hifiasm_options" not in config:
+    config["hifiasm_options"] = ""
+
+rule all:
+    # genome assem
+    input:
+        expand("step1_hifiasm_hic/" + config["prefix"] + ".hic.hap{hap}.p_ctg.fasta",
+               hap = ["1", "2"])
+
+
+rule assemble:
+    input:
+        LR  = config["LR"],
+        R1 = [config["HiC"][lib]["R1"] for lib in config["HiC"]],
+        R2 = [config["HiC"][lib]["R2"] for lib in config["HiC"]]
+    output:
+        hap1 = "step1_hifiasm_hic/" + config["prefix"] + ".hic.hap1.p_ctg.gfa",
+        hap2 = "step1_hifiasm_hic/" + config["prefix"] + ".hic.hap2.p_ctg.gfa"
+    threads: workflow.cores - 1
+    params:
+        hic_R1_string = ",".join([config["HiC"][lib]["R1"] for lib in config["HiC"]]),
+        hic_R2_string = ",".join([config["HiC"][lib]["R2"] for lib in config["HiC"]]),
+        LR_string     = " ".join(config["LR"]),
+        hifiasm_opts  = config["hifiasm_options"],
+        prefix        = config["prefix"]
+    shell:
+        """
+        mkdir -p step1_hifiasm_hic
+        cd step1_hifiasm_hic
+        hifiasm -o {params.prefix} \
+          -t {threads} \
+          --h1 {params.hic_R1_string} \
+          --h2 {params.hic_R2_string} \
+          --n-weight 5 \
+          {params.hifiasm_opts} \
+          {params.LR_string}
+        cd ..
+        """
+
+rule gfa_to_fasta:
+    input:
+        gfa = "step1_hifiasm_hic/" + config["prefix"] + ".hic.hap{hap}.p_ctg.gfa",
+    output:
+        gfa = "step1_hifiasm_hic/" + config["prefix"] + ".hic.hap{hap}.p_ctg.fasta",
+    threads: 1
+    shell:
+        """
+        cat {input.gfa} | \
+          awk '{{if ($1 == "S"){{printf(">%s\\n%s\\n", $2, $3)}} }}' | \
+          fold -60 > {output.gfa}
+        """
