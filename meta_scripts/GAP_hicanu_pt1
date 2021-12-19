@@ -18,13 +18,13 @@ if "canu_options" not in config:
 rule all:
     # genome assem
     input:
-        "step1_canu/test.fasta"
+        "step1_canu/" + config["prefix"] + ".contigs.fasta"
 
 rule assemble:
     input:
         LR  = config["LR"],
     output:
-        step1_canu = "step1_canu/test.fasta"
+        step1_canu = "step1_canu/" + config["prefix"] + ".contigs.fasta"
     threads: workflow.cores - 1
     params:
         LR_string     = " ".join(config["LR"]),
