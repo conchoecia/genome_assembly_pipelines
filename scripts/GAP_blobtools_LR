@@ -1,0 +1,146 @@
+"""
+This snakefile runs blobtools on the assembly.
+"""
+configfile: "config.yaml"
+config["tool"] = "GAP_blobtools"
+
+if "LR" not in config:
+    raise IOError("You must specify the long reads in a yaml list in the config file. The reads must be in fastq.gz format")
+
+if "minimap2arg" not in config:
+    raise IOError("you must specify minimap2arg in the config to tell minimap2 what type of reads you're using.")
+
+if config["minimap2arg"] not in ["map-pb", "map-ont", "map-hifi"]:
+    raise IOError("You chose a read type for minimap2arg that will not work here. Choose map-pb, map-ont, or map-hifi")
+
+
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam", LRnum = len(config["LR"]))
+        #expand(config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png",
+        #       nom = config["assemblies"])
+
+# this bit makes softlinks of the assemblies and maps the short reads
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+
+rule download_taxid:
+    output:
+        taxid_file = filepath + "/../db/nr_accesion_to_taxids.txt"
+    threads: 1
+    params:
+        db = config["nr_db"]
+    shell:
+        """
+        blastdbcmd -db {params.db} -entry all \
+           -outfmt "%a %T" | \
+           awk '{{print($1, "NCBI_TaxID", $2)}}' > {output.taxid_file}
+        """
+
+rule get_diamond_nr_hits:
+    input:
+        db = config["diamond_nr_db"],
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        taxid_file = filepath + "/../db/nr_accesion_to_taxids.txt"
+    output:
+        dmnd_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx"
+    threads:
+        workflow.cores - 1
+    shell:
+        """
+        diamond blastx \
+          --query {input.assembly} \
+          --db {input.db} \
+          --outfmt 6 \
+          --sensitive \
+          --evalue 0.001 \
+          --threads {threads} \
+          --out {output.dmnd_out}
+        """
+
+rule blobtools_taxonify:
+    input:
+        dmnd_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx",
+        taxid_file = filepath + "/../db/nr_accesion_to_taxids.txt"
+    output:
+        taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
+    params:
+        outprefix = lambda wildcards: config["tool"] + "/input/dmnd/{}_dmnd.blastx.taxified".format(wildcards.nom)
+    shell:
+        """
+        blobtools taxify -f {input.dmnd_out} -m {input.taxid_file} -s 0 -t 2 -o {params.outprefix}
+        """
+
+rule symlink_the_LRs:
+    """
+    Symlinks the long reads so they are easier to work with in the rest of the
+      pipeline
+    """
+    input:
+        LR = config["LR"]
+    output:
+        assem = expand(config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz",
+                       LRnum = list(range(0, len(config["LR"]))))
+    params:
+        fileprefix = config["tool"] + "/input/longreads/LR_",
+        filesuffix = ".fastq.gz"
+    run:
+        for i in range(0, len(config["LR"])):
+            thisLR = config["LR"][i]
+            dest = "{}{}{}".format(params.fileprefix, i, params.filesuffix)
+            os.symlink(thisLR, dest)
+
+
+rule map_LR_to_genome:
+    """
+    maps the reads to the assembly
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        long_reads = config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz",
+    output:
+        bam = config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam"
+    params:
+        minimaparg = config["minimap2arg"]
+    threads: workflow.cores - 1
+    shell:
+        """
+        minimap2 -t {threads} -ax {params.minimaparg} {input.assem} {input.long_reads} | \
+          samtools view -F 2308 -hb - | \
+          samtools sort - > {output.bam}
+        """
+
+rule blobtools_create:
+    input:
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        bam = config["tool"] + "/input/bams/SR_to_{nom}_input.sorted.bam",
+        bai = config["tool"] + "/input/bams/SR_to_{nom}_input.sorted.bam.bai",
+        taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
+    output:
+        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
+    params:
+        blob_prefix  = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools"
+    shell:
+        """
+        blobtools create \
+           -i {input.assembly} \
+           -b {input.bam} \
+           -t {input.taxonify_out} \
+           -o {params.blob_prefix}
+        """
+
+rule blobtools_view_and_plot:
+    input:
+        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
+    output:
+        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png"
+    params:
+        mv_prefix = lambda wildcards: "{}_blobtools.blobDB.".format(wildcards.nom),
+        mv_folder = lambda wildcards: config["tool"] + "/output/blobtools_{}/".format(wildcards.nom)
+    threads: 1
+    shell:
+        """
+        blobtools view -i {input.blob_results}
+        blobtools plot -i {input.blob_results}
+        mv {params.mv_prefix}* {params.mv_folder}
+        """
