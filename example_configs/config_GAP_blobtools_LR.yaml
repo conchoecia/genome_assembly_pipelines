@@ -1,0 +1,15 @@
+assemblies:
+  assembly1: "/run/blobtools/on/this/assembly.fasta"
+
+# could be map-hifi, map-ont, or map-pb
+minimap2arg: "map-hifi"
+
+LR:
+  - "/path/to/LR/reads_0.fastq.gz"
+  - "/path/to/LR/reads_1.fastq.gz"
+  - "/some/other/reads.fastq.gz"
+
+# we use the diamond database to perform the searches
+diamond_nr_db: "/path/to/nr.dmnd"
+# we just use the nr blast database to extract the taxids for blobtools
+nr_db: "/path/to/nr"
