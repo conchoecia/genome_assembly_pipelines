@@ -13,12 +13,9 @@ if "minimap2arg" not in config:
 if config["minimap2arg"] not in ["map-pb", "map-ont", "map-hifi"]:
     raise IOError("You chose a read type for minimap2arg that will not work here. Choose map-pb, map-ont, or map-hifi")
 
-
-
 rule all:
     input:
-        expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam",
-               LRnum = list(range(len(config["LR"]))),
+        expand(config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam",
                nom = config["assemblies"])
         #expand(config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png",
         #       nom = config["assemblies"])
@@ -115,37 +112,60 @@ rule map_LR_to_genome:
           samtools sort - > {output.bam}
         """
 
-#rule blobtools_create:
-#    input:
-#        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
-#        bam = config["tool"] + "/input/bams/SR_to_{nom}_input.sorted.bam",
-#        bai = config["tool"] + "/input/bams/SR_to_{nom}_input.sorted.bam.bai",
-#        taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
-#    output:
-#        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
-#    params:
-#        blob_prefix  = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools"
-#    shell:
-#        """
-#        blobtools create \
-#           -i {input.assembly} \
-#           -b {input.bam} \
-#           -t {input.taxonify_out} \
-#           -o {params.blob_prefix}
-#        """
-#
-#rule blobtools_view_and_plot:
-#    input:
-#        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
-#    output:
-#        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png"
-#    params:
-#        mv_prefix = lambda wildcards: "{}_blobtools.blobDB.".format(wildcards.nom),
-#        mv_folder = lambda wildcards: config["tool"] + "/output/blobtools_{}/".format(wildcards.nom)
-#    threads: 1
-#    shell:
-#        """
-#        blobtools view -i {input.blob_results}
-#        blobtools plot -i {input.blob_results}
-#        mv {params.mv_prefix}* {params.mv_folder}
-#        """
+rule merge_LR_bams:
+    input:
+        LR_bams = expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam",
+                         LRnum = list(range(len(config["LR"]))) )
+    output:
+        merge_bam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam"
+    threads: 1
+    shell:
+        """
+        samtools merge {output.merge_bam} {input.LR_bams}
+        """
+
+rule index_LR_bam:
+    input:
+        merge_bam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam"
+    output:
+        bai = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam.bai"
+    threads: 1
+    shell:
+        """
+        samtools index {input.merge_bam}
+        """
+
+rule blobtools_create:
+    input:
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        bam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam",
+        bai = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam.bai",
+        taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
+    output:
+        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
+    params:
+        blob_prefix  = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools"
+    shell:
+        """
+        blobtools create \
+           -i {input.assembly} \
+           -b {input.bam} \
+           -t {input.taxonify_out} \
+           -o {params.blob_prefix}
+        """
+
+rule blobtools_view_and_plot:
+    input:
+        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
+    output:
+        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png"
+    params:
+        mv_prefix = lambda wildcards: "{}_blobtools.blobDB.".format(wildcards.nom),
+        mv_folder = lambda wildcards: config["tool"] + "/output/blobtools_{}/".format(wildcards.nom)
+    threads: 1
+    shell:
+        """
+        blobtools view -i {input.blob_results}
+        blobtools plot -i {input.blob_results}
+        mv {params.mv_prefix}* {params.mv_folder}
+        """
