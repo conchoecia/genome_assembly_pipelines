@@ -15,10 +15,10 @@ if config["minimap2arg"] not in ["map-pb", "map-ont", "map-hifi"]:
 
 rule all:
     input:
-        expand(config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam",
-               nom = config["assemblies"])
-        #expand(config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png",
+        #expand(config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam",
         #       nom = config["assemblies"])
+        expand(config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png",
+               nom = config["assemblies"])
 
 # this bit makes softlinks of the assemblies and maps the short reads
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
