@@ -256,6 +256,7 @@ rule run_braker_PROT:
            --genome={input.assem} \
            --hints={input.prothint}
         rsync -r {params.working_dir} {params.outdir}
+        rm -rf {params.working_dir}
         """
 
 rule run_braker_DNA:
@@ -298,6 +299,7 @@ rule run_braker_DNA:
            --genome={input.assem} \
            --bam={params.bamsarg}
         rsync -r {params.working_dir} {params.outdir}
+        rm -rf {params.working_dir}
         """
 
 rule TSEBRA_config:
