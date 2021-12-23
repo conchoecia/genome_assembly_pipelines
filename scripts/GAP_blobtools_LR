@@ -25,6 +25,54 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 include: softlinks_rule_path
 
+rule symlink_the_LRs:
+    """
+    Symlinks the long reads so they are easier to work with in the rest of the
+      pipeline
+    """
+    input:
+        LR = config["LR"]
+    output:
+        assem = expand(config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz",
+                       LRnum = list(range(0, len(config["LR"]))))
+    params:
+        fileprefix = config["tool"] + "/input/longreads/LR_",
+        filesuffix = ".fastq.gz"
+    run:
+        for i in range(0, len(config["LR"])):
+            thisLR = config["LR"][i]
+            dest = "{}{}{}".format(params.fileprefix, i, params.filesuffix)
+            os.symlink(thisLR, dest)
+
+rule map_LR_to_genome:
+    """
+    maps the reads to the assembly
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        long_reads = config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz"
+    output:
+        bam = config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam"
+    params:
+        minimaparg = config["minimap2arg"]
+    threads: workflow.cores - 1
+    shell:
+        """
+        minimap2 -t {threads} -ax {params.minimaparg} {input.assem} {input.long_reads} | \
+          samtools view -hb - | \
+          samtools sort - > {output.bam}
+        """
+
+rule index_bams:
+    input:
+        bam = config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam"
+    output:
+        bai = config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam.bai"
+    threads: 1
+    shell:
+        """
+        samtools index {input.merge_bam}
+        """
 
 rule download_taxid:
     output:
@@ -67,89 +115,31 @@ rule blobtools_taxonify:
     output:
         taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
     params:
-        outprefix = lambda wildcards: config["tool"] + "/input/dmnd/{}_dmnd.blastx.taxified".format(wildcards.nom)
+        outprefix = lambda wildcards: config["tool"] + "/input/dmnd/{}".format(wildcards.nom)
     shell:
         """
         blobtools taxify -f {input.dmnd_out} -m {input.taxid_file} -s 0 -t 2 -o {params.outprefix}
         """
 
-rule symlink_the_LRs:
-    """
-    Symlinks the long reads so they are easier to work with in the rest of the
-      pipeline
-    """
-    input:
-        LR = config["LR"]
-    output:
-        assem = expand(config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz",
-                       LRnum = list(range(0, len(config["LR"]))))
-    params:
-        fileprefix = config["tool"] + "/input/longreads/LR_",
-        filesuffix = ".fastq.gz"
-    run:
-        for i in range(0, len(config["LR"])):
-            thisLR = config["LR"][i]
-            dest = "{}{}{}".format(params.fileprefix, i, params.filesuffix)
-            os.symlink(thisLR, dest)
-
-
-rule map_LR_to_genome:
-    """
-    maps the reads to the assembly
-    """
-    input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        long_reads = config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz"
-    output:
-        bam = config["tool"] + "/output/bams/LR_{LRnum}_to_{nom}.bam"
-    params:
-        minimaparg = config["minimap2arg"]
-    threads: workflow.cores - 1
-    shell:
-        """
-        minimap2 -t {threads} -ax {params.minimaparg} {input.assem} {input.long_reads} | \
-          samtools view -F 2308 -hb - | \
-          samtools sort - > {output.bam}
-        """
-
-rule merge_LR_bams:
-    input:
-        LR_bams = expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam",
-                         LRnum = list(range(len(config["LR"]))) )
-    output:
-        merge_bam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam"
-    threads: 1
-    shell:
-        """
-        samtools merge {output.merge_bam} {input.LR_bams}
-        """
-
-rule index_LR_bam:
-    input:
-        merge_bam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam"
-    output:
-        bai = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam.bai"
-    threads: 1
-    shell:
-        """
-        samtools index {input.merge_bam}
-        """
-
 rule blobtools_create:
     input:
         assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        bam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam",
-        bai = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam.bai",
+        bams = expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam",
+                      LRnum = list(range(len(config["LR"]))) ),
+        bais = expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam.bai",
+                      LRnum = list(range(len(config["LR"]))) ),
         taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
     output:
         blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
     params:
-        blob_prefix  = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools"
+        blob_prefix  = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools",
+        bam_string   = "-b ".join([config["tool"] + "/output/bams/LR_" + str(x) + "_to_{nom}.bam"
+                                   for x in range(len(config["LR"]))])
     shell:
         """
         blobtools create \
            -i {input.assembly} \
-           -b {input.bam} \
+           {params.bam_string} \
            -t {input.taxonify_out} \
            -o {params.blob_prefix}
         """
