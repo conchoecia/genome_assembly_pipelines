@@ -1,0 +1,4 @@
+# these assemblies will be broken into scaffolds
+assemblies:
+  assembly1: "/path/to/assembly1/to/scaffold.fasta"
+  some_other_assem: "/this/path/is/to/the/second/assembly/we/want/to/scaffold.fasta"
