@@ -71,7 +71,7 @@ rule index_bams:
     threads: 1
     shell:
         """
-        samtools index {input.merge_bam}
+        samtools index {input.bam}
         """
 
 rule download_taxid:
