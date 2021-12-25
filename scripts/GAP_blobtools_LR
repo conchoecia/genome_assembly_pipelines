@@ -115,7 +115,7 @@ rule blobtools_taxonify:
     output:
         taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
     params:
-        outprefix = lambda wildcards: config["tool"] + "/input/dmnd/{}".format(wildcards.nom)
+        outprefix = lambda wildcards: config["tool"] + "/input/dmnd/"
     shell:
         """
         blobtools taxify -f {input.dmnd_out} -m {input.taxid_file} -s 0 -t 2 -o {params.outprefix}
