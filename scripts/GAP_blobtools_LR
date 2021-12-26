@@ -133,7 +133,7 @@ rule blobtools_create:
         blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
     params:
         blob_prefix  = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools",
-        bam_string   = "-b ".join([config["tool"] + "/output/bams/LR_" + str(x) + "_to_{nom}.bam"
+        bam_string   = "-b " + " -b ".join([config["tool"] + "/output/bams/LR_" + str(x) + "_to_{nom}.bam"
                                    for x in range(len(config["LR"]))])
     shell:
         """
