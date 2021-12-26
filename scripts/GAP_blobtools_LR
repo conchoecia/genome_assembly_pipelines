@@ -128,18 +128,22 @@ rule blobtools_create:
                       LRnum = list(range(len(config["LR"]))) ),
         bais = expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam.bai",
                       LRnum = list(range(len(config["LR"]))) ),
+        LRbam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam",
+        LRbai = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam.bai",
         taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
     output:
         blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
     params:
         blob_prefix  = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools",
-        bam_string   = "-b " + " -b ".join([config["tool"] + "/output/bams/LR_" + str(x) + "_to_{nom}.bam"
+        bam_string   = "-b " + \
+                       " -b ".join([config["tool"] + "/output/bams/LR_" + str(x) + "_to_{nom}.bam" 
                                    for x in range(len(config["LR"]))])
     shell:
         """
         blobtools create \
            -i {input.assembly} \
            {params.bam_string} \
+           -b {input.LRbam} \
            -t {input.taxonify_out} \
            -o {params.blob_prefix}
         """
@@ -158,4 +162,27 @@ rule blobtools_view_and_plot:
         blobtools view -i {input.blob_results}
         blobtools plot -i {input.blob_results}
         mv {params.mv_prefix}* {params.mv_folder}
+        """
+
+rule merge_LR_bams:
+    input:
+        LR_bams = expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam",
+                         LRnum = list(range(len(config["LR"]))) )
+    output:
+        merge_bam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam"
+    threads: 1
+    shell:
+        """
+        samtools merge {output.merge_bam} {input.LR_bams}
+        """
+
+rule index_LR_bam:
+    input:
+        merge_bam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam"
+    output:
+        bai = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam.bai"
+    threads: 1
+    shell:
+        """
+        samtools index {input.merge_bam}
         """
