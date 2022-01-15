@@ -40,6 +40,14 @@ rule all:
         expand(config["tool"] + "/output/assembly_{nom}/{nom}_non_metazoan.fasta",
                nom = config["assemblies"]),
 
+        expand(config["tool"] + "/input/bams_shorts/hic_{hicnum}_to_{nom}.sorted.bam.bai",
+                       hicnum = list(range(0, len(config["hic"]))),
+                       nom = config["assemblies"]),
+
+
+
+
+
 # this bit makes softlinks of the assemblies and maps the short reads
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
@@ -58,24 +66,80 @@ rule download_taxid:
            awk '{{print($1, "NCBI_TaxID", $2)}}' > {output.taxid_file}
         """
 
-rule symlink_the_LRs:
+rule symlink_the_HiC:
     """
-    Symlinks the long reads so they are easier to work with in the rest of the
-      pipeline
+    Symlinks the HiC reads so they are easier to work with.
     """
     input:
-        LR = config["LR"]
+        hicf = [config["hic"][x]["read1"] for x in config["hic"]],
+        hicr = [config["hic"][x]["read2"] for x in config["hic"]]
     output:
-        assem = expand(config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz",
-                       LRnum = list(range(0, len(config["LR"]))))
+        reads_f = expand(config["tool"] + "/input/hic/hic_{hicnum}_f.fastq.gz",
+                       hicnum = list(range(0, len(config["hic"])))),
+        reads_r = expand(config["tool"] + "/input/hic/hic_{hicnum}_r.fastq.gz",
+                       hicnum = list(range(0, len(config["hic"])))),
+    threads: workflow.cores - 1
     params:
-        fileprefix = config["tool"] + "/input/longreads/LR_",
-        filesuffix = ".fastq.gz"
+        fileprefix = config["tool"] + "/input/hic/hic_",
+        f_suffix = "_f.fastq.gz",
+        r_suffix = "_r.fastq.gz",
     run:
-        for i in range(0, len(config["LR"])):
-            thisLR = config["LR"][i]
-            dest = "{}{}{}".format(params.fileprefix, i, params.filesuffix)
-            os.symlink(thisLR, dest)
+        counter = 0
+        for thislib in config["hic"]:
+            read1 = config["hic"][thislib]["read1"]
+            read2 = config["hic"][thislib]["read2"]
+            dest = "{}{}{}".format(params.fileprefix, counter, params.f_suffix)
+            os.symlink(read1, dest)
+            dest = "{}{}{}".format(params.fileprefix, counter, params.r_suffix)
+            os.symlink(read2, dest)
+            counter += 1
+
+rule index_ref:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        amb   = config["tool"] + "/input/assembly/{nom}_input.fasta.amb",
+        ann   = config["tool"] + "/input/assembly/{nom}_input.fasta.ann",
+        bwt   = config["tool"] + "/input/assembly/{nom}_input.fasta.bwt",
+        pac   = config["tool"] + "/input/assembly/{nom}_input.fasta.pac",
+    threads: 1
+    shell:
+        """
+        bwa index {input.assem}
+        """
+
+rule map_hic_to_ref:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        amb   = config["tool"] + "/input/assembly/{nom}_input.fasta.amb",
+        ann   = config["tool"] + "/input/assembly/{nom}_input.fasta.ann",
+        bwt   = config["tool"] + "/input/assembly/{nom}_input.fasta.bwt",
+        pac   = config["tool"] + "/input/assembly/{nom}_input.fasta.pac",
+        left  = config["tool"] + "/input/hic/hic_{hicnum}_f.fastq.gz",
+        right = config["tool"] + "/input/hic/hic_{hicnum}_r.fastq.gz"
+    output:
+        bam   = config["tool"] + "/input/bams_shorts/hic_{hicnum}_to_{nom}.sorted.bam"
+    params:
+        sort_threads = max(1, int((workflow.cores)/4))
+    threads:
+        workflow.cores - 1
+    shell:
+        """
+        bwa mem -5SPM -t {threads} {input.assem} {input.left} {input.right} | \
+            samtools view -hb -@ {params.sort_threads} - | \
+            samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule index_hic_bams:
+    input:
+        bam = config["tool"] + "/input/bams_shorts/hic_{hicnum}_to_{nom}.sorted.bam"
+    output:
+        bai = config["tool"] + "/input/bams_shorts/hic_{hicnum}_to_{nom}.sorted.bam.bai"
+    threads: 1
+    shell:
+        """
+        samtools index {input.bam}
+        """
 
 rule map_LR_to_genome:
     """
