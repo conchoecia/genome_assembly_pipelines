@@ -1,6 +1,12 @@
 """
 This snakefile runs blobtools on the assembly.
 """
+from Bio import SeqIO
+from collections import defaultdict
+import pandas as pd
+import json
+import sys
+
 configfile: "config.yaml"
 config["tool"] = "GAP_blobtools_LR"
 
@@ -13,17 +19,44 @@ if "minimap2arg" not in config:
 if config["minimap2arg"] not in ["map-pb", "map-ont", "map-hifi"]:
     raise IOError("You chose a read type for minimap2arg that will not work here. Choose map-pb, map-ont, or map-hifi")
 
+# now we set up entrez to parse the taxinfo
+from Bio import Entrez
+if "NCBIemail" not in config:
+    raise IOError("You must specify the email of your NCBI account in the config file with the 'NCBIemail' field")
+if "NCBIapikey" not in config:
+    raise IOError("You must specify the apikey of your NCBI account in the config file with the 'NCBIapikey' field")
+Entrez.email  = config["NCBIemail"]
+Entrez.api_key = config["NCBIapikey"]
+
+
 rule all:
     input:
         #expand(config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam",
         #       nom = config["assemblies"])
         expand(config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png",
-               nom = config["assemblies"])
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/assembly_{nom}/{nom}_metazoan.fasta",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/assembly_{nom}/{nom}_non_metazoan.fasta",
+               nom = config["assemblies"]),
 
 # this bit makes softlinks of the assemblies and maps the short reads
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 include: softlinks_rule_path
+
+rule download_taxid:
+    output:
+        taxid_file = filepath + "/../db/nr_accesion_to_taxids.txt"
+    threads: 1
+    params:
+        db = config["nr_db"]
+    shell:
+        """
+        blastdbcmd -db {params.db} -entry all \
+           -outfmt "%a %T" | \
+           awk '{{print($1, "NCBI_TaxID", $2)}}' > {output.taxid_file}
+        """
 
 rule symlink_the_LRs:
     """
@@ -74,19 +107,6 @@ rule index_bams:
         samtools index {input.bam}
         """
 
-rule download_taxid:
-    output:
-        taxid_file = filepath + "/../db/nr_accesion_to_taxids.txt"
-    threads: 1
-    params:
-        db = config["nr_db"]
-    shell:
-        """
-        blastdbcmd -db {params.db} -entry all \
-           -outfmt "%a %T" | \
-           awk '{{print($1, "NCBI_TaxID", $2)}}' > {output.taxid_file}
-        """
-
 rule get_diamond_nr_hits:
     input:
         db = config["diamond_nr_db"],
@@ -128,8 +148,6 @@ rule blobtools_create:
                       LRnum = list(range(len(config["LR"]))) ),
         bais = expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam.bai",
                       LRnum = list(range(len(config["LR"]))) ),
-        LRbam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam",
-        LRbai = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam.bai",
         taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
     output:
         blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
@@ -140,10 +158,10 @@ rule blobtools_create:
                                    for x in range(len(config["LR"]))])
     shell:
         """
+        # the last bam is the newest
         blobtools create \
            -i {input.assembly} \
            {params.bam_string} \
-           -b {input.LRbam} \
            -t {input.taxonify_out} \
            -o {params.blob_prefix}
         """
@@ -152,7 +170,8 @@ rule blobtools_view_and_plot:
     input:
         blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
     output:
-        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png"
+        blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png",
+        table = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.table.txt"
     params:
         mv_prefix = lambda wildcards: "{}_blobtools.blobDB.".format(wildcards.nom),
         mv_folder = lambda wildcards: config["tool"] + "/output/blobtools_{}/".format(wildcards.nom)
@@ -164,25 +183,203 @@ rule blobtools_view_and_plot:
         mv {params.mv_prefix}* {params.mv_folder}
         """
 
-rule merge_LR_bams:
+rule fix_table_header:
     input:
-        LR_bams = expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam",
-                         LRnum = list(range(len(config["LR"]))) )
+        table = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.table.txt"
     output:
-        merge_bam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam"
+        table = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.table.fixed.txt"
+    run:
+        outhandle = open(output.table, "w")
+        with open(input.table, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    if line.startswith("##"):
+                        # these are just comments, we don't want them
+                        pass
+                    else:
+                        if line.startswith("# name"):
+                            print(line.replace("# name", "name"),
+                                  file = outhandle)
+                        else:
+                            print(line, file=outhandle)
+
+def is_metazoa(taxid):
+    """
+    Just return True if metazoan or False if not
+    """
+    taxid = taxid.split("-")[0]
+    searchterm = "'\"{}\"[Scientific Name]'".format(taxid)
+    searchterm = taxid
+
+    species = taxid.replace(" ", "+").strip()
+    search = Entrez.esearch(term = species, db = "taxonomy", retmode = "xml")
+    records = Entrez.read(search)
+    try:
+        foundtaxid = records["IdList"][0]
+
+        handle = Entrez.efetch(db="taxonomy", id = foundtaxid , retmode="xml")
+        records = Entrez.read(handle)
+        lineage = defaultdict(lambda: 'Unclassified')
+        lineage["Bilateria"] = "NO"
+        lineage["Deuterostomia"] = "NO"
+        lineage["Protostomia"] = "NO"
+        lineage["Opisthokonta"] = "NO"
+        lineage["Metazoa"] = "NO"
+        lineage["Organism"] = records[0]['ScientificName']
+        for entry in records[0]['LineageEx']:
+            if entry['Rank'] in ['superkingdom', 'kingdom', 'phylum',
+                                 'class', 'order', 'family',
+                                 'genus', 'species']:
+                lineage[entry['Rank']] = entry['ScientificName'].split(' ')[-1]
+                lineage["{}_id".format(entry['Rank'])] = int(entry['TaxId'].split(' ')[-1])
+            # entry as integer
+            eai = int(entry["TaxId"])
+            if eai == 33213:
+                lineage["Bilateria"] = "YES"
+            elif eai == 33317:
+                lineage["Protostomia"] = "YES"
+            elif eai == 33511:
+                lineage["Deuterostomia"] = "YES"
+            elif eai == 33154:
+                lineage["Opisthokonta"] = "YES"
+            elif eai == 33208:
+                lineage["Metazoa"] = "YES"
+        if lineage["Metazoa"] == "YES":
+            return True
+        else:
+            return False
+    except:
+        return True
+
+rule get_possible_contams:
+    """
+    This finds the scaffolds that are definitely not metazoan
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        table = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.table.fixed.txt",
+        json = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
+    output:
+        nm = config["tool"] + "/output/cleanup_{nom}/{nom}_non_metazoan_scafs.txt",
+        me = config["tool"] + "/output/cleanup_{nom}/{nom}_metazoan_scafs.txt"
+    threads: 1
+    run:
+        # read in the summary
+        df = pd.read_csv(input.table, comment = "#", delimiter = "\t")
+        # which column
+        thiscol = [x for x in df.columns if x.startswith("phylum.t")][0]
+
+        nonmetaz_taxa = [
+            "Actinobacteria",
+            "Ascomycota",
+            "Bacteria-undef",
+            "Bacteroidetes",
+            "Basidiomycota",
+            "Chlorophyta",
+            "Cyanobacteria",
+            "Firmicutes",
+            "Microsporidia",
+            "Mucoromycota",
+            "Proteobacteria",
+            "Streptophyta",
+            "Thaumarchaeota",
+            "Viruses-undef"]
+        metazoan_taxa = ["Annelida",
+                         "Arthropoda",
+                         "Brachiopoda",
+                         "Chordata",
+                         "Cnidaria",
+                         "Ctenophora",
+                         "Echinodermata",
+                         "Eukaryota-undef",
+                         "Hemichordata",
+                         "Mollusca",
+                         "Nematoda",
+                         "no-hit",
+                         "Porifera",
+                         "Platyhelminthes",
+                         "Placozoa",
+                         "Priapulida",
+                         "Tardigrada",
+                         "undef"]
+
+        not_seen_before = set()
+        metazoa_or_not_dict = {}
+        print("Checking if things are metazoan")
+        print("Taxonomy\tmetazoan?")
+        for thisname in df[thiscol].unique():
+            edited = thisname.strip()
+            are_these_metazoa = False
+            if edited in nonmetaz_taxa:
+                pass
+            elif edited in metazoan_taxa:
+                are_these_metazoa = True
+            else:
+                if edited == "Mollusca":
+                    print("mollusca in else")
+                not_seen_before.add(edited)
+                are_these_metazoa = is_metazoa(edited)
+            metazoa_or_not_dict[edited] = are_these_metazoa
+            print(edited, are_these_metazoa)
+        if len(not_seen_before) > 0:
+            print()
+            print("We don't have these phyla in our script. Contact the authors to add them. Everything probably worked fine anyway, so you can proceed normally")
+            print(not_seen_before)
+            print()
+
+        all_seqs = set()
+        non_metazoan = set()
+        metazoan = set()
+        for record in SeqIO.parse(input.assem, "fasta"):
+            all_seqs.add(str(record.id))
+
+        # now determine which seqs are metazoa
+        for index, row in df.iterrows():
+            thisseq = row["name"]
+            is_metazoan = metazoa_or_not_dict[row[thiscol]]
+            if is_metazoan:
+                metazoan.add(thisseq)
+            else:
+                non_metazoan.add(thisseq)
+        test_all = metazoan.union(non_metazoan)
+        if not test_all == all_seqs:
+            raise IOError("The sequences from the fasta don't match those from the table")
+
+        # now make a list of metazoan or non-metazoan sequences
+        with open(output.nm, "w") as f:
+            for entry in non_metazoan:
+                print(entry, file=f)
+        with open(output.me, "w") as f:
+            for entry in metazoan:
+                print(entry, file=f)
+
+rule nonmetazoan_assembly:
+    """
+    This finds the scaffolds that are definitely not metazoan
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        nm = config["tool"] + "/output/cleanup_{nom}/{nom}_non_metazoan_scafs.txt",
+    output:
+        nm = config["tool"] + "/output/assembly_{nom}/{nom}_non_metazoan.fasta"
     threads: 1
     shell:
         """
-        samtools merge {output.merge_bam} {input.LR_bams}
+        seqtk subseq {input.assem} {input.nm} > {output.nm}
         """
 
-rule index_LR_bam:
+rule metazoan_assembly:
+    """
+    This finds the scaffolds that are metazoan
+    """
     input:
-        merge_bam = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam"
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        me = config["tool"] + "/output/cleanup_{nom}/{nom}_metazoan_scafs.txt",
     output:
-        bai = config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam.bai"
+        me = config["tool"] + "/output/assembly_{nom}/{nom}_metazoan.fasta"
     threads: 1
     shell:
         """
-        samtools index {input.merge_bam}
+        seqtk subseq {input.assem} {input.me} > {output.me}
         """
