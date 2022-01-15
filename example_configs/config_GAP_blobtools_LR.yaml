@@ -1,6 +1,11 @@
 assemblies:
   assembly1: "/run/blobtools/on/this/assembly.fasta"
 
+# Use your NCBI account and the public API key here.
+# Go to this website https://ncbiinsights.ncbi.nlm.nih.gov/2017/11/02/new-api-keys-for-the-e-utilities/
+NCBIemail: "myemail@whatever.com"
+NCBIapikey: "3987kjsdfSomeLongNumber09sdflj23l"
+
 # could be map-hifi, map-ont, or map-pb
 minimap2arg: "map-hifi"
 
