@@ -9,6 +9,22 @@ NCBIapikey: "3987kjsdfSomeLongNumber09sdflj23l"
 # could be map-hifi, map-ont, or map-pb
 minimap2arg: "map-hifi"
 
+# This is called hic, but it just as well could be Illumina shotgun
+#  libraries. Give each library its own line. If one library has multiple
+#  fastq pairs, just give the additional pairs a new name. Blobtools renames
+#  everything, so the names you choose don't matter at all.
+hic:
+  HiC-lib1:
+    read1:
+    - /path/to/HiC-lib1_f.fastq.gz
+    read2:
+    - /path/to/HiC-lib1_r.fastq.gz
+  Another-HiC-lib:
+    read1:
+    - /path/to/Another-HiC-lib_f.fastq.gz
+    read2:
+    - /path/to/Another-HiC-lib_r.fastq.gz
+
 LR:
   - "/path/to/LR/reads_0.fastq.gz"
   - "/path/to/LR/reads_1.fastq.gz"
