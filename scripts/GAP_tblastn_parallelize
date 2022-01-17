@@ -5,86 +5,93 @@ tblastn crashes with a high number of threads. Use fewer threads
 configfile: "config.yaml"
 config["tool"] = "GAP_tblastn_parallelize"
 
+from Bio import SeqIO
+
+seq_counter = 0
+with open(config["protein_query"]) as handle:
+    for record in SeqIO.parse(handle, "fasta"):
+        seq_counter += 1
+
+num_seqs_per_file = 50
+num_files = int(seq_counter/num_seqs_per_file)
+
 rule all:
     input:
-        expand(config["tool"] + "/output/{nom}_output.fasta",
-                nom=config["assemblies"])
+        expand(config["tool"] + "/output/blast/query_{qnum}.tblastn",
+                       qnum = range(num_files))
 
-
-# make softlinks of the input files
-# files end up here:
-#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
-softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
-include: softlinks_rule_path
-
-rule scaffolds_to_contigs:
+# make softlink of the input files
+rule softlink_assembly:
+    """
+    make a softlink of the assembly
+    """
     input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+        assem = config["assembly_db"]
     output:
-        assem = config["tool"] + "/output/{nom}_output.fasta"
-    params:
-        min_gap = 0
+        assem = config["tool"] + "/input/assembly/assembly_query.fasta"
+    threads:
+        1
+    shell:
+        """
+        ln -s {input.assem} {output.assem}
+        """
+
+rule makeblastdb:
+    input:
+        assem = config["tool"] + "/input/assembly/assembly_query.fasta"
+    output:
+        ndb = config["tool"] + "/input/assembly/assembly_query.fasta.ndb",
+        nhr = config["tool"] + "/input/assembly/assembly_query.fasta.nhr",
+        nin = config["tool"] + "/input/assembly/assembly_query.fasta.nin"
+    shell:
+        """
+        makeblastdb -in {input.assem} -dbtype nucl
+        """
+
+rule split_the_query:
+    """
+    Split the query file into smaller pieces that can be more easily run on tblastn
+    """
+    input:
+        query = config["protein_query"]
+    output:
+        query = expand(config["tool"] + "/input/query/query_{qnum}.fasta",
+                       qnum = range(num_files))
     threads: 1
     run:
-        from Bio import SeqIO
-        import sys
-        contig_counter = 1
-        min_gap = params.min_gap
-        lw = 80
-        out_handle = open(output.assem, "w")
+        seq_counter = 0
+        file_counter = 0
+        with open(input.query) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                if seq_counter == 0:
+                    outfile = config["tool"] + "/input/query/query_{}.fasta".format(
+                        file_counter)
+                    outhandle = open(outfile, "w")
+                SeqIO.write(record, outhandle, "fasta")
+                seq_counter += 1
+                if seq_counter == num_seqs_per_file:
+                    outhandle.close()
+                    seq_counter = 0
+                    file_counter += 1
+            if not outhandle.closed:
+                outhandle.close()
 
-        Ns = ['N', 'n']
-        if min_gap == 0:
-            in_gap = False
-            for record in SeqIO.parse(input.assem, "fasta"):
-                print(">contig{}".format(contig_counter), file=out_handle)
-                chunk = ""
-                for i in range(len(record.seq)):
-                    if record.seq[i] in Ns:
-                        if in_gap:
-                            pass
-                        else:
-                            #we just transitioned to a gap. Print the contig
-                            if len(chunk) > 0:
-                                print(chunk, file=out_handle)
-                                contig_counter += 1
-                                print(">contig{}".format(contig_counter), file=out_handle)
-                            chunk = ""
-                        in_gap = True
-                    else:
-                        in_gap = False
-                        #not an N. collect and print.
-                        if len(chunk) < lw:
-                            chunk += record.seq[i]
-                        else:
-                            #time to print and start over
-                            print(chunk, file=out_handle)
-                            chunk = record.seq[i]
-                if len(chunk) > 0:
-                    print(chunk, file=out_handle)
-                contig_counter += 1
-        else:
-            for record in SeqIO.parse(input.assem, "fasta"):
-                N_count = 0
-                this_seq = ""
-                for i in range(len(record.seq)):
-                    if record.seq[i] in Ns:
-                        N_count+=1
-                    else:
-                        if N_count > min_gap:
-                            print(">contig{}".format(contig_counter))
-                            for chunk in (this_seq[i:i+lw] for i in range(0, len(this_seq), lw)):
-                                print(chunk, file=out_handle)
-                            this_seq = ""
-                            contig_counter += 1
-                        else:
-                            this_seq = this_seq + ("".join(["N"]*N_count) )
-                        N_count = 0
-                        this_seq = this_seq + record.seq[i]
-                if N_count == 0:
-                    print(">contig{}".format(contig_counter), file=out_handle)
-                    for chunk in (this_seq[i:i+lw] for i in range(0, len(this_seq), lw)):
-                        print(chunk, file=out_handle)
-                    this_seq = ""
-                    contig_counter += 1
+rule tblastn:
+    """
+    Just runs tblastn for one file
+    """
+    input:
+        query = config["tool"] + "/input/query/query_{qnum}.fasta",
+        assem = config["tool"] + "/input/assembly/assembly_query.fasta",
+        ndb = config["tool"] + "/input/assembly/assembly_query.fasta.ndb",
+        nhr = config["tool"] + "/input/assembly/assembly_query.fasta.nhr",
+        nin = config["tool"] + "/input/assembly/assembly_query.fasta.nin"
+    output:
+        query = config["tool"] + "/output/blast/query_{qnum}.tblastn"
+    threads: 1
+    shell:
+        """
+        tblastn -db {input.assem} -query {input.query} \
+          -num_threads {threads} \
+          -outfmt 6 > {output.query}
+        """
