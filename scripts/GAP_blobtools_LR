@@ -31,8 +31,6 @@ Entrez.api_key = config["NCBIapikey"]
 
 rule all:
     input:
-        #expand(config["tool"] + "/output/bams_LR/LR_all_to_{nom}.bam",
-        #       nom = config["assemblies"])
         expand(config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json.bestsum.phylum.p7.span.100.blobplot.bam0.png",
                nom = config["assemblies"]),
         expand(config["tool"] + "/output/assembly_{nom}/{nom}_metazoan.fasta",
@@ -43,10 +41,6 @@ rule all:
         expand(config["tool"] + "/input/bams_shorts/hic_{hicnum}_to_{nom}.sorted.bam.bai",
                        hicnum = list(range(0, len(config["hic"]))),
                        nom = config["assemblies"]),
-
-
-
-
 
 # this bit makes softlinks of the assemblies and maps the short reads
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
@@ -141,6 +135,25 @@ rule index_hic_bams:
         samtools index {input.bam}
         """
 
+rule symlink_the_LRs:
+    """
+    Symlinks the long reads so they are easier to work with in the rest of the
+      pipeline
+    """
+    input:
+        LR = config["LR"]
+    output:
+        assem = expand(config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz",
+                       LRnum = list(range(0, len(config["LR"]))))
+    params:
+        fileprefix = config["tool"] + "/input/longreads/LR_",
+        filesuffix = ".fastq.gz"
+    run:
+        for i in range(0, len(config["LR"])):
+            thisLR = config["LR"][i]
+            dest = "{}{}{}".format(params.fileprefix, i, params.filesuffix)
+            os.symlink(thisLR, dest)
+
 rule map_LR_to_genome:
     """
     maps the reads to the assembly
@@ -208,10 +221,14 @@ rule blobtools_taxonify:
 rule blobtools_create:
     input:
         assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        bams = expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam",
-                      LRnum = list(range(len(config["LR"]))) ),
-        bais = expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam.bai",
-                      LRnum = list(range(len(config["LR"]))) ),
+        bams =   expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam",
+                      LRnum = list(range(len(config["LR"])))   ),
+        bais =   expand(config["tool"] + "/output/bams/LR_{LRnum}_to_{{nom}}.bam.bai",
+                      LRnum = list(range(len(config["LR"])))   ),
+        hicbam = expand(config["tool"] + "/input/bams_shorts/hic_{hicnum}_to_{{nom}}.sorted.bam",
+                      hicnum = list(range(len(config["hic"]))) ),
+        hicbai = expand(config["tool"] + "/input/bams_shorts/hic_{hicnum}_to_{{nom}}.sorted.bam.bai",
+                      hicnum = list(range(len(config["hic"]))) ),
         taxonify_out = config["tool"] + "/input/dmnd/{nom}_dmnd.blastx.taxified.out",
     output:
         blob_results = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools.blobDB.json"
@@ -219,13 +236,17 @@ rule blobtools_create:
         blob_prefix  = config["tool"] + "/output/blobtools_{nom}/{nom}_blobtools",
         bam_string   = "-b " + \
                        " -b ".join([config["tool"] + "/output/bams/LR_" + str(x) + "_to_{nom}.bam" 
-                                   for x in range(len(config["LR"]))])
+                                   for x in range(len(config["LR"]))]),
+        hic_string   = "-b " + \
+                       " -b ".join([config["tool"] + "/input/bams_shorts/hic_" + str(x) + "_to_{nom}.sorted.bam" 
+                                   for x in range(len(config["hic"]))]),
     shell:
         """
         # the last bam is the newest
         blobtools create \
            -i {input.assembly} \
            {params.bam_string} \
+           {params.hic_string} \
            -t {input.taxonify_out} \
            -o {params.blob_prefix}
         """
@@ -380,16 +401,15 @@ rule get_possible_contams:
             elif edited in metazoan_taxa:
                 are_these_metazoa = True
             else:
-                if edited == "Mollusca":
-                    print("mollusca in else")
                 not_seen_before.add(edited)
                 are_these_metazoa = is_metazoa(edited)
             metazoa_or_not_dict[edited] = are_these_metazoa
             print(edited, are_these_metazoa)
         if len(not_seen_before) > 0:
             print()
-            print("We don't have these phyla in our script. Contact the authors to add them. Everything probably worked fine anyway, so you can proceed normally")
+            print("We don't have these phyla in our script. Contact the authors to add them. This will make the program stop prematurely, so ask the author on github if you'd like this feature removed.")
             print(not_seen_before)
+            raise IOError("see above error from stdout")
             print()
 
         all_seqs = set()
