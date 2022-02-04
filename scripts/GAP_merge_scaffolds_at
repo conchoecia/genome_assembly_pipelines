@@ -1,0 +1,113 @@
+"""
+This script makes manual joins. The gaps between scaffolds are strings of 100 Ns.
+
+The syntax is:
+
+joins:
+  new_scaf_name: ["scaf1", "f", "scaf2", "r", "scaf5", "f"]
+
+The syntax above allows multiple scaffolds to be joined in a sequence
+"""
+import subprocess
+configfile: "config.yaml"
+config["tool"] = "GAP_merge_scaffolds_at"
+
+# first check out the input
+if "assemblies" not in config:
+    raise IOError("you need to have an assemblies field in the config. Even if it is just one assembly")
+if "joins" not in config:
+    raise IOError("you need to have a joins field in the config. Please see the example config.")
+
+# now parse the joins to make sure they makes sense
+join_dict = {}
+scaf_to_joinkey = {}
+involved_in_join = set()
+for entry in config["joins"]:
+    if entry not in join_dict:
+        join_dict[entry] = {"scafs": [], "directions": []}
+        # now we parse the entry
+        if len(config["joins"][entry]) % 2 != 0:
+            raise IOError("Join syntax must be scaffold-direction-scaffold-direction. There were an odd number of entries for {}".format(entry))
+        # now we add the info to the lists for doing the joins later
+        for i in range(len(config["joins"][entry])):
+            item = config["joins"][entry][i]
+            if i % 2 == 0:
+                join_dict[entry]["scafs"].append(item)
+                involved_in_join.add(item)
+                scaf_to_joinkey[item] = entry
+            else:
+                if item not in ["f", "r"]:
+                    raise IOError("The scaffolds must be oriented in either the f or r direction")
+                join_dict[entry]["directions"].append(item)
+    else:
+        raise IOError("You can't name two merged scaffolds the same thing: {}".format(entry))
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/{nom}_output.fasta",
+               nom=config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule parse_and_make_merges:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        assem = config["tool"] + "/output/{nom}_output.fasta"
+    run:
+        from Bio import SeqIO
+        from Bio.SeqRecord import SeqRecord
+        from Bio.Seq import Seq
+
+        record_dict = {}
+        print_order = []
+        printed = set()
+        # read the entire assembly into memory
+        with open(input.assem, "rU") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                record_dict[record.id] = record
+                print_order.append(record.id)
+
+        # now print it out, merging things as we go
+        outhandle = open(output.assem, "w")
+        for scaffold in print_order:
+            if scaffold not in printed:
+                if scaffold not in involved_in_join:
+                    SeqIO.write(record_dict[scaffold], outhandle, "fasta")
+                else:
+                    # we must parse the join
+                    newid = scaf_to_joinkey[scaffold]
+                    newseq = ""
+                    print("merging {}".format(join_dict[newid]["scafs"]))
+                    for i in range(len(join_dict[newid]["scafs"])):
+                        thisscafid  = join_dict[newid]["scafs"][i]
+                        print("  - adding {}".format(thisscafid))
+                        thisscafdir = join_dict[newid]["directions"][i]
+                        if thisscafid not in record_dict:
+                            raise IOError("You're trying an action with something that wasn't in the assembly: {}".format(thisscafid))
+                        Ns = ""
+                        if newseq == "":
+                            Ns = ""
+                        else:
+                            Ns = "".join(["N"] * 100)
+                        if thisscafdir == "f":
+                            this_scaf_seq = str(record_dict[thisscafid].seq)
+                            newseq = "{}{}{}".format(newseq, Ns, this_scaf_seq)
+                        elif thisscafdir == "r":
+                            this_scaf_seq = str(record_dict[thisscafid].reverse_complement().seq)
+                            newseq = "{}{}{}".format(newseq, Ns, this_scaf_seq)
+                        else:
+                            raise IOError("Must be f or r for the direction")
+                        printed.add(thisscafid)
+                    # now output the new sequence
+                    sr = SeqRecord(Seq(newseq), newid, '', '')
+                    print(sr)
+                    print("\n\n")
+                    SeqIO.write(sr, outhandle, "fasta")
+            printed.add(scaffold)
+        outhandle.close()
