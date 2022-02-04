@@ -1,0 +1,10 @@
+assemblies:
+  your_assem: "/just/the/path/to/your/assem.fasta"
+
+# Your joins are encoded here. Just the scaffolds and the orientation.
+# The scaffolds end up exactly in the order you encode them in below
+joins:
+  j14: ["sca21", "f", "sca14", "f"]
+  j16: ["sca22", "f", "sca16", "f"]
+  j17: ["sca17", "f", "sca18", "f"]
+  j19: ["sca19", "f", "sca20", "f"]
