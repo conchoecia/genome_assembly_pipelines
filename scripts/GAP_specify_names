@@ -1,0 +1,76 @@
+"""
+This snakefile takes an input fasta file,
+  outputs scaffolds in the name and order as specified,
+  otherwise it just prints out the scaffolds in the order
+  and name in the original file.
+
+This program uses a lot of RAM in favor of speed.
+"""
+import subprocess
+configfile: "config.yaml"
+config["tool"] = "GAP_specify_names"
+
+if "scaf_to_name" not in config:
+    raise IOError("You need to specify some example names to change with the scaf_to_name field")
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/{nom}_output.fasta",
+               nom=config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule reorder_fasta:
+    """
+    this reorders the fasta files based on the length
+    """
+    input:
+        assem     = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    output:
+        assem = config["tool"] + "/output/{nom}_output.fasta"
+    threads: 1
+    run:
+        from Bio import SeqIO
+
+        # get all the sequences in RAM
+        record_dict = {}
+        for record in SeqIO.parse(input.assem, "fasta"):
+            record_dict[record.id] = record
+
+        # figure out what to rename and make sure the formatting is correct and all the names are unique
+        rename_dict = {}
+        targets = set()
+        for entrypair in config["scaf_to_name"]:
+            if len(entrypair) != 2:
+                raise IOError("each entry in scaf_to_name must only have 2 entries. The orig scaffold and what to rename it: {}".format(entrypair))
+            if entrypair[0] not in record_dict:
+                raise IOError("The scaf {} was not found in the original assembly".format(entrypair[0]))
+            if entrypair[1] in targets:
+                raise IOError("You can only name different scaffolds unique names. Only rename one thing to: {}".format(entrypair[1]))
+            targets.add(entrypair[1])
+            for scaf in entrypair:
+                if scaf in rename_dict:
+                    raise IOError("The scaffold {} was already in scaf_to_name somewhere once. Only use unique names.".format(scaf))
+            rename_dict[entrypair[0]] = entrypair[1]
+
+        # now we go through and print out the new assembly
+        outhandle = open(output.assem, "w")
+        # first print out the things we specified
+        printed = set()
+        for entrypair in config["scaf_to_name"]:
+            record_dict[entrypair[0]].id = entrypair[1]
+            SeqIO.write(record_dict[entrypair[0]], outhandle, 'fasta')
+            printed.add(entrypair[0])
+
+        #now print out everything else
+        for record in SeqIO.parse(input.assem, "fasta"):
+            if record.id not in printed:
+                SeqIO.write(record, outhandle, 'fasta')
+            printed.add(record.id)
+
+        outhandle.close()

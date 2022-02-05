@@ -1,0 +1,20 @@
+assemblies:
+  your_assem_name: "/path/to/assembly/to/rename/reorder.fasta"
+
+# The format here is a list of the orders in which to
+#  output the scaffolds, and the name it will become
+# nothing else is renamed! The order is not changed at all
+scaf_to_name:
+  - ["sca1", "c1"]
+  - ["sca3", "c2"]
+  - ["sca4", "c3"]
+  - ["sca12", "c4"]
+  - ["sca2", "c5"]
+  - ["sca5", "c6"]
+  - ["sca7", "c7"]
+  - ["sca8", "c8"]
+  - ["sca10", "c9"]
+  - ["sca9", "c10"]
+  - ["sca6", "c11"]
+  - ["sca13", "c12"]
+  - ["sca11", "c13"]
