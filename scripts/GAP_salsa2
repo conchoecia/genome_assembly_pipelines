@@ -77,7 +77,7 @@ rule SALSA_map:
         """
         bwa mem -5SPM -t {threads} {input.assem} \
                  {input.f} {input.r} | \
-                 samtools view -hb -F 2308 -@ {threads} - | \
+                 samtools view -hb -F 4 -@ {threads} - | \
                  samtools sort -@ {threads} - > {output.bam}
         """
 
