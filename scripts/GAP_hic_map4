@@ -245,7 +245,7 @@ rule get_coverage_of_LR_bams:
                        LRnum = list(range(0, len(config["LR"]))))
     output:
         depth = config["tool"] + "/output/depth/LR_to_{nom}_depth.bg"
-    threads: int(workflow.cores /2)
+    threads: max(4, int(workflow.cores /4))
     shell:
         """
         samtools cat {input.bams} | \
@@ -286,7 +286,7 @@ rule get_coverage_of_SR_bams:
                        lib=config["libs"])
     output:
         depth = config["tool"] + "/output/depth/SR_to_{nom}_depth.bg"
-    threads: int(workflow.cores /2)
+    threads: max(4, int(workflow.cores /4))
     shell:
         """
         samtools cat {input.bams} | \
