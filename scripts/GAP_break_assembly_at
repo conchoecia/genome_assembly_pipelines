@@ -45,7 +45,8 @@ rule fai_index_assemblies:
 
 rule get_sort_list:
     """
-    sort the fai file to figure out the longest scaffolds
+    Just print out the fai to use the order of the assembly.
+     We used to sort by size, but now we just print as things are
     """
     input:
         fai = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai"
@@ -54,7 +55,8 @@ rule get_sort_list:
     threads: 1
     shell:
         """
-        sort -k2 -nr {input.fai} | cut -f1,2 > {output.sort_list}
+        #sort -k2 -nr {input.fai} | cut -f1,2 > {output.sort_list}
+        cat {input.fai} | cut -f1,2 > {output.sort_list}
         """
 
 rule reorder_fasta:
