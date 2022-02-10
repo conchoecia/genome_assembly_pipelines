@@ -1,0 +1,45 @@
+# put your assembly here with whatever you'd like the output to be named
+assemblies:
+  your_assem_name: "/path/to/your/assembly.fasta"
+
+# - The scaffold insertions are encoded here.
+# - Currently this doesn't support nested insertions.
+# - The order doesn't matter, the software will sort the
+#   insertions so they occur in the correct order
+insertions:
+  sca1:
+    86150:   ["sca39", "f"]
+  sca4:
+    1897231: ["sca26", "f"]
+  sca5:
+    217970:  ["sca31", "r"]
+    1724146: ["sca28", "f"]
+  sca6:
+    1732362: ["sca35", "f"]
+  sca7:
+    1529300: ["sca20", "f"]
+  sca8:
+    50600: ["sca25", "f"]
+  sca9:
+    1: ["sca18", "f"]
+    260180: ["sca36", "f"]
+    369110: ["sca19", "r"]
+    969540: ["sca44", "f"]
+  sca10:
+    8020: ["sca22", "r"]
+    1029698: ["sca24", "f"]
+    1236687: ["sca41", "f"]
+  sca11:
+    337873: ["sca32", "f"]
+  sca12:
+    1050943: ["sca29", "f"]
+  sca13:
+    15864: ["sca27", "f"]
+  sca14:
+    1: ["sca23", "r"]
+  sca15:
+    165405: ["sca30", "r"]
+  sca16:
+    79960: ["sca37", "f"]
+    372644: ["sca21", "f"]
+    644606: ["sca17", "f"]

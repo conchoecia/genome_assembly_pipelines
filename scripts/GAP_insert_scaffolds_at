@@ -1,0 +1,118 @@
+"""
+This script makes manual joins. The gaps between scaffolds are strings of 100 Ns.
+
+The syntax is:
+
+insertions:
+  scaffoldname:
+    1093892: ["scaf1", "f"]
+    936: ["scaffold20", "r"]
+  scaf2:
+    1: ["scaf3", "r"]
+
+The syntax above allows multiple scaffolds to be inserted into a sequence in any orientation.
+The order that the scffolds appear in the config file don't matter.
+"""
+
+import subprocess
+configfile: "config.yaml"
+config["tool"] = "GAP_merge_scaffolds_at"
+
+# first check out the input
+if "assemblies" not in config:
+    raise IOError("you need to have an assemblies field in the config. Even if it is just one assembly")
+if "insertions" not in config:
+    raise IOError("you need to have an insertions field in the config. Please see the example config.")
+
+# now parse the joins to make sure they makes sense
+insertion_set = set()
+for scaffold in config["insertions"]:
+    if scaffold in insertion_set:
+        raise IOError("You can only specify the scaffold {} once.".format(scaffold))
+    else:
+        insertion_set.add(scaffold)
+        # We haven't seen this yet, so fine to parse
+        position_set = set()
+        for position in sorted(config["insertions"][scaffold], reverse = False):
+            if len(config["insertions"][scaffold][position]) % 2 != 0:
+                raise IOError("Join syntax must be scaffold-direction only. There were an odd number of entries for {}".format(config["insertions"][scaffold][position]))
+            if position in position_set:
+                raise IOError("Each position should only be the positions one time. Scaffold {} position {}. If you want to add sequential scaffolds, just put them at least one basepair away from each other".format(scaffold, position))
+            position_set.add(position)
+            insert_scaffold = config["insertions"][scaffold][position][0]
+            if insert_scaffold in insertion_set:
+                raise IOError("You can't specify a scaffold more than once. We don't support nested joins at the moment")
+            insertion_set.add(insert_scaffold)
+            insert_direction = config["insertions"][scaffold][position][1]
+            if insert_direction not in ["f", "r"]:
+                raise IOError("The scaffolds must be oriented in either the f or r direction: {}".format(config["insertions"][scaffold][position]))
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/{nom}_output.fasta",
+               nom=config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule parse_and_make_merges:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        assem = config["tool"] + "/output/{nom}_output.fasta"
+    run:
+        from Bio import SeqIO
+        from Bio.SeqRecord import SeqRecord
+        from Bio.Seq import Seq
+
+        record_dict = {}
+        print_order = []
+        printed = set()
+        # read the entire assembly into memory
+        with open(input.assem, "rU") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                record_dict[record.id] = record
+                print_order.append(record.id)
+
+        #gap
+        gap = "".join(["N"] * 100)
+
+        # make all the insertions
+        outhandle = open(output.assem, "w")
+        for scaffold in config["insertions"]:
+            print("Scaffold {} - len {}".format(scaffold, len(record_dict[scaffold].seq)))
+            if scaffold not in record_dict:
+                raise IOError("We didn't find the scaffold {} in the assembly. Make sure you're only using scaffolds that are in the assembly.".format(scaffold))
+            printed.add(scaffold)
+            newseq = str(record_dict[scaffold].seq).upper()
+            for position in sorted(config["insertions"][scaffold], reverse = True):
+                insscaf  = config["insertions"][scaffold][position][0]
+                insdirec = config["insertions"][scaffold][position][1]
+                print("  - Inserting {} (len {}) in {} orientation at {} position".format(insscaf, len(record_dict[insscaf].seq), insdirec, position))
+                printed.add(insscaf)
+                front = newseq[0:position]
+                back  = newseq[position::]
+                insseq = ""
+                if insdirec == "f":
+                    insseq = str(record_dict[insscaf].seq).upper()
+                elif insdirec == "r":
+                    insseq = str(record_dict[insscaf].reverse_complement().seq).upper()
+                newseq = front + gap + insseq + gap + back
+            # now output the new sequence
+            sr = SeqRecord(Seq(newseq), scaffold, '', '')
+            SeqIO.write(sr, outhandle, "fasta")
+
+        # now print everything else
+        for scaffold in record_dict:
+            if scaffold not in printed:
+                SeqIO.write(record_dict[scaffold], outhandle, "fasta")
+                printed.add(scaffold)
+
+        # now make sure we've printed out everything to the fasta file
+        if printed != set(record_dict.keys()):
+            raise IOError("Not everything that was in the assembly was printed. This will need further debugging.")
+        outhandle.close()
