@@ -16,12 +16,10 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 bedsort_path=os.path.join(filepath, "../dependencies/kentutils/bedSort")
 bed2bw_path=os.path.join(filepath,  "../dependencies/kentutils/bedGraphToBigWig")
 
-
-
 if "minimap2arg" not in config:
     config["minimap2arg"] = "map-hifi"
 
-# make this dummy fastq file in case we don't actually want to map any reads
+# make this dummy LR fastq file in case we don't actually want to map any reads
 if "LR" not in config:
     config["LR"] = ["{}/temp_dont_delete_me.fastq.gz".format(os.path.join(os.getcwd(),config["tool"]))]
     if not os.path.exists(config["LR"][0]):
@@ -30,14 +28,25 @@ if "LR" not in config:
         f.write(content)
         f.close()
 
-# now we check the LR files to make sure they are fasta or fastq
-for entry in config["LR"]:
-    good = False
-    for ending in [".fa", ".fa.gz", ".fasta", ".fasta.gz", ".fastq", ".fastq.gz"]:
-        if entry.endswith(ending):
-            good = True
-    if not good:
-        raise IOError ("The LR file {} must end with .fa, .fa.gz, .fasta, .fasta.gz, .fastq, or .fastq.gz.".format(entry))
+# make this dummy transcript file in case we don't actually want to map any reads
+if "transcripts" not in config:
+    config["transcripts"] = ["{}/temp_dont_delete_me.fastq.gz".format(os.path.join(os.getcwd(),config["tool"]))]
+    if not os.path.exists(config["transcript"][0]):
+        content = b""
+        f = gzip.open(config["LR"][0], 'wb')
+        f.write(content)
+        f.close()
+
+# now we check the LR and transcript files to make sure they are fasta or fastq
+for thiskey in ["transcripts", "LR"]:
+    for entry in config[thiskey]:
+        good = False
+        for ending in [".fa", ".fa.gz", ".fasta", ".fasta.gz", ".fastq", ".fastq.gz"]:
+            if entry.endswith(ending):
+                good = True
+        if not good:
+            raise IOError ("The LR or transcripts file {} must end with .fa, .fa.gz, .fasta, .fasta.gz, .fastq, or .fastq.gz.".format(entry))
+
 
 def get_chromosome_sizes(assembly_file, minsize):
     """
@@ -52,6 +61,14 @@ def get_chromosome_sizes(assembly_file, minsize):
 
 rule all:
     input:
+        # make a depth plot
+        expand(config["tool"] + "/output/{nom}/{nom}_LRdepth.bw",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_TXdepth.bw",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_SRdepth.bw",
+               nom = config["assemblies"]),
+
         #stats - this is in the pair processing step. fine with HiC-v2
         expand(config["tool"] + "/output/pairsam_stats/{nom}_parsed.pairsam.stats",
                nom = config["assemblies"]),
@@ -60,11 +77,6 @@ rule all:
         expand(config["tool"] + "/output/pairs/{nom}/{nom}.dedup.filt.pairs.covstats",
                nom = config["assemblies"]),
 
-        # make a depth plot
-        expand(config["tool"] + "/output/{nom}/{nom}_LRdepth.bw",
-               nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_SRdepth.bw",
-               nom = config["assemblies"]),
 
         #final files
         # chromsize
@@ -182,6 +194,96 @@ rule make_beddb:
           --output-file {output.beddb}
         """
 
+rule symlink_the_transcripts:
+    """
+    Symlinks the transcripts so they are easier to work with in the rest of the
+      pipeline.
+    """
+    input:
+        LR = config["transcripts"]
+    output:
+        assem = expand(config["tool"] + "/input/transcripts/{tx}",
+                       tx = [os.path.basename(x) for x in config["transcripts"]])
+    params:
+        fileprefix = config["tool"] + "/input/transcripts/"
+    run:
+        for thisfile in config["transcripts"]:
+            fname = os.path.basename(thisfile)
+            dest = "{}{}".format(params.fileprefix, fname)
+            os.symlink(thisfile, dest)
+
+rule map_transcripts_to_genome:
+    """
+    maps the reads to the assembly
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        transcripts = config["tool"] + "/input/transcripts/{tx}"
+    output:
+        bam = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam"
+    threads: workflow.cores - 1
+    shell:
+        """
+        minimap2 -t {threads} -ax splice:hq {input.assem} {input.transcripts} | \
+          samtools view -hb - | \
+          samtools sort - > {output.bam}
+        """
+
+rule index_transcripts_bams:
+    input:
+        bam = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam"
+    output:
+        bai = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam.bai"
+    threads: 1
+    shell:
+        """
+        samtools index {input.bam}
+        """
+
+rule get_coverage_of_transcripts_bams:
+    input:
+        bams = expand(config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{{nom}}.bam",
+                       tx = [os.path.basename(x) for x in config["transcripts"]]),
+        bais = expand(config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{{nom}}.bam.bai",
+                       tx = [os.path.basename(x) for x in config["transcripts"]])
+    output:
+        depth = config["tool"] + "/output/depth/transcripts_to_{nom}_depth.bg"
+    threads: max(4, int(workflow.cores /4))
+    shell:
+        """
+        samtools cat {input.bams} | \
+          samtools sort -@ {threads} - | \
+          bedtools genomecov -ibam stdin -bga -split > {output.depth}
+        """
+
+rule sort_depth_file_transcripts_bam:
+    input:
+        depth = config["tool"] + "/output/depth/transcripts_to_{nom}_depth.bg",
+        bedsort = bedsort_path
+    output:
+        depth = config["tool"] + "/output/depth/transcripts_to_{nom}_depth.s.bg"
+    threads: 1
+    shell:
+        """
+        chmod u+x {input.bedsort}
+        {input.bedsort} {input.depth} {output.depth}
+        """
+
+rule make_bigwig_transcripts_bam:
+    input:
+        depth = config["tool"] + "/output/depth/transcripts_to_{nom}_depth.s.bg",
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        bw = config["tool"] + "/output/{nom}/{nom}_TXdepth.bw"
+    threads: 1
+    shell:
+        """
+        chmod u+x {input.bed2bw}
+        {input.bed2bw} {input.depth} {input.cs} {output.bw}
+        """
+
+
 rule symlink_the_LRs:
     """
     Symlinks the long reads so they are easier to work with in the rest of the
@@ -190,22 +292,15 @@ rule symlink_the_LRs:
     input:
         LR = config["LR"]
     output:
-        assem = expand(config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz",
-                       LRnum = list(range(0, len(config["LR"]))))
+        assem = expand(config["tool"] + "/input/longreads/{LR}",
+                       LR = [os.path.basename(x) for x in config["LR"]])
     params:
-        fileprefix = config["tool"] + "/input/longreads/LR_",
-        filesuffix = ".fastq.gz"
+        fileprefix = config["tool"] + "/input/longreads/"
     run:
-        for i in range(0, len(config["LR"])):
-            dest = "{}{}{}".format(params.fileprefix, i, params.filesuffix)
-            if os.path.exists(config["LR"][i]):
-                thisLR = config["LR"][i]
-                #print(thisLR)
-                #print(dest)
-                os.symlink(thisLR, dest)
-            else:
-                with open(dest, "w") as f:
-                    print("", end = "", file = f)
+        for thisfile in config["LR"]:
+            fname = os.path.basename(thisfile)
+            dest = "{}{}".format(params.fileprefix, fname)
+            os.symlink(thisfile, dest)
 
 rule map_LR_to_genome:
     """
@@ -213,9 +308,9 @@ rule map_LR_to_genome:
     """
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        long_reads = config["tool"] + "/input/longreads/LR_{LRnum}.fastq.gz"
+        long_reads = config["tool"] + "/input/longreads/{LR}"
     output:
-        bam = config["tool"] + "/input/bams_LR/LR_{LRnum}_to_{nom}.bam"
+        bam = temp(config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam")
     params:
         minimaparg = config["minimap2arg"]
     threads: workflow.cores - 1
@@ -226,11 +321,11 @@ rule map_LR_to_genome:
           samtools sort - > {output.bam}
         """
 
-rule index_bams:
+rule index_LR_bams:
     input:
-        bam = config["tool"] + "/input/bams_LR/LR_{LRnum}_to_{nom}.bam"
+        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam"
     output:
-        bai = config["tool"] + "/input/bams_LR/LR_{LRnum}_to_{nom}.bam.bai"
+        bai = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam.bai"
     threads: 1
     shell:
         """
@@ -239,10 +334,10 @@ rule index_bams:
 
 rule get_coverage_of_LR_bams:
     input:
-        bams = expand(config["tool"] + "/input/bams_LR/LR_{LRnum}_to_{{nom}}.bam",
-                       LRnum = list(range(0, len(config["LR"])))),
-        bais = expand(config["tool"] + "/input/bams_LR/LR_{LRnum}_to_{{nom}}.bam.bai",
-                       LRnum = list(range(0, len(config["LR"]))))
+        bams = expand(config["tool"] + "/input/bams_LR/LR_{LR}_to_{{nom}}.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]]),
+        bais = expand(config["tool"] + "/input/bams_LR/LR_{LR}_to_{{nom}}.bam.bai",
+                       LR = [os.path.basename(x) for x in config["LR"]]),
     output:
         depth = config["tool"] + "/output/depth/LR_to_{nom}_depth.bg"
     threads: max(4, int(workflow.cores /4))
@@ -331,7 +426,7 @@ rule map_hic_to_ref:
         left  = lambda wildcards: config["libs"][wildcards.lib]["read1"],
         right = lambda wildcards: config["libs"][wildcards.lib]["read2"]
     output:
-        bam   = config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam"
+        bam   = temp(config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam")
     threads:
         workflow.cores
     shell:
