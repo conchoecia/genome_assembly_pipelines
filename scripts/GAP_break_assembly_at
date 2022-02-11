@@ -3,6 +3,9 @@ This snakefile takes an input fasta file,
   then sorts the scaffolds from longest to shortest.
 It does not rename scaffolds.
 """
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
 import subprocess
 configfile: "config.yaml"
 config["tool"] = "GAP_break_assembly_at"
@@ -25,8 +28,6 @@ rule print_out_temp_assembly_rewrap:
     output:
         assem = temp(config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta")
     run:
-        from Bio import SeqIO
-
         outhandle = open(output.assem, "w")
         with open(input.assem, "rU") as handle:
             for record in SeqIO.parse(handle, "fasta"):
@@ -68,7 +69,7 @@ rule reorder_fasta:
         fai = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai",
         sort_list = config["tool"] + "/input/sort_list/{nom}_sort_list.txt"
     output:
-        assem = config["tool"] + "/output/assembly/{nom}_output.fasta"
+        assem = temp(config["tool"] + "/output/assembly/{nom}_output.temp.fasta")
     threads: 1
     run:
         first = True
@@ -101,3 +102,21 @@ rule reorder_fasta:
                                output.assem)
                         #print(this_cmd)
                         subprocess.run(this_cmd, shell = True)
+
+rule strip_terminal_Ns:
+    """
+    breaking the assembly can result in terminal Ns, this just cleans those up
+    """
+    input:
+        assem = config["tool"] + "/output/assembly/{nom}_output.temp.fasta"
+    output:
+        assem = config["tool"] + "/output/assembly/{nom}_output.fasta"
+    threads: 1
+    run:
+        outhandle = open(output.assem, "w")
+        with open(input.assem, "rU") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                newseq = str(record.seq).lstrip(" nN").rstrip(" nN")
+                sr = SeqRecord(Seq(newseq), record.id, '', '')
+                SeqIO.write(sr, outhandle, "fasta")
+        outhandle.close()
