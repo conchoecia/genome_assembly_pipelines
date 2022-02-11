@@ -1,7 +1,11 @@
 """
-This snakefile takes an input fasta file,
-  then sorts the scaffolds from longest to shortest.
-It does not rename scaffolds.
+This breaks scaffolds in specific places.
+ - The resulting scaffolds are just named by their intervals.
+
+Example, break HCA1 at position 5Mb
+result:
+  - HCA1:1-5000000
+  - HCA1:5000001-8967254
 """
 from Bio import SeqIO
 from Bio.SeqRecord import SeqRecord
@@ -9,6 +13,14 @@ from Bio.Seq import Seq
 import subprocess
 configfile: "config.yaml"
 config["tool"] = "GAP_break_assembly_at"
+
+if "breaks" not in config:
+    raise IOError("You must specify the breaks in the config file")
+
+# make sure that the same coord isn't there twice
+for thisscaf in config["breaks"]:
+    if len(set(config["breaks"][thisscaf])) != len(config["breaks"][thisscaf]):
+        raise IOError("You can only specify a breakpoint number once for each chromosome")
 
 rule all:
     input:
@@ -22,93 +34,10 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 include: softlinks_rule_path
 
-rule print_out_temp_assembly_rewrap:
+
+rule break_assembly_at:
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
-    output:
-        assem = temp(config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta")
-    run:
-        outhandle = open(output.assem, "w")
-        with open(input.assem, "rU") as handle:
-            for record in SeqIO.parse(handle, "fasta"):
-                SeqIO.write(record, outhandle, "fasta")
-        outhandle.close()
-
-rule fai_index_assemblies:
-    input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta"
-    output:
-        fai = temp(config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai")
-    shell:
-        """
-        samtools faidx {input.assem}
-        """
-
-rule get_sort_list:
-    """
-    Just print out the fai to use the order of the assembly.
-     We used to sort by size, but now we just print as things are
-    """
-    input:
-        fai = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai"
-    output:
-        sort_list = temp(config["tool"] + "/input/sort_list/{nom}_sort_list.txt")
-    threads: 1
-    shell:
-        """
-        #sort -k2 -nr {input.fai} | cut -f1,2 > {output.sort_list}
-        cat {input.fai} | cut -f1,2 > {output.sort_list}
-        """
-
-rule reorder_fasta:
-    """
-    this reorders the fasta files based on the length
-    """
-    input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta",
-        fai = config["tool"] + "/input/assembly/{nom}_input.rewrap.fasta.fai",
-        sort_list = config["tool"] + "/input/sort_list/{nom}_sort_list.txt"
-    output:
-        assem = temp(config["tool"] + "/output/assembly/{nom}_output.temp.fasta")
-    threads: 1
-    run:
-        first = True
-        with open(input.sort_list, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    scaf   = line.split()[0]
-                    last_spot = int(line.split()[1])
-                    breaks = []
-                    if scaf in config["breaks"]:
-                        breaks = [0] + [int(x) for x in list(sorted(config["breaks"][scaf]))] + [last_spot]
-                    else:
-                        breaks = [0, last_spot]
-                    for i in range(1, len(breaks)):
-                        pipe_char = ""
-                        if first:
-                            pipe_char = ">"
-                            first = False
-                        else:
-                            pipe_char = ">>"
-                        section_string = ":{}-{}".format(breaks[i-1]+1, breaks[i])
-                        if section_string == ":1-{}".format(last_spot):
-                            section_string = ""
-                        this_cmd = "samtools faidx {} {}{} {} {}".format(
-                               input.assem,
-                               scaf,
-                               section_string,
-                               pipe_char,
-                               output.assem)
-                        #print(this_cmd)
-                        subprocess.run(this_cmd, shell = True)
-
-rule strip_terminal_Ns:
-    """
-    breaking the assembly can result in terminal Ns, this just cleans those up
-    """
-    input:
-        assem = config["tool"] + "/output/assembly/{nom}_output.temp.fasta"
     output:
         assem = config["tool"] + "/output/assembly/{nom}_output.fasta"
     threads: 1
@@ -116,7 +45,30 @@ rule strip_terminal_Ns:
         outhandle = open(output.assem, "w")
         with open(input.assem, "rU") as handle:
             for record in SeqIO.parse(handle, "fasta"):
-                newseq = str(record.seq).lstrip(" nN").rstrip(" nN")
-                sr = SeqRecord(Seq(newseq), record.id, '', '')
-                SeqIO.write(sr, outhandle, "fasta")
+                if record.id in config["breaks"]:
+                    # now we make breaks
+                    # check that the breakpoints are less than the coords
+                    for thisbreak in config["breaks"][record.id]:
+                        if thisbreak >= len(record.seq):
+                            raise IOError("The breakpoint must be < the length of the sequence.")
+                    intervals = []
+                    # now that we've determined the breaks, find intervals
+                    sorted_breaks = [0] + [int(x) for x in list(sorted(
+                        config["breaks"][record.id]))] + [len(record.seq)]
+                    for i in range(len(sorted_breaks)-1):
+                        intervals.append([sorted_breaks[i], sorted_breaks[i+1]])
+                    print(intervals)
+
+                    # now go through the intervals and print
+                    for thisint in intervals:
+                        newseq = str(record.seq)[thisint[0]:thisint[1]].lstrip(
+                            " nN").rstrip(" nN")
+                        scafname = "{}:{}-{}".format(record.id,
+                                                     thisint[0]+1, thisint[1])
+                        sr = SeqRecord(Seq(newseq), scafname, '', '')
+                        SeqIO.write(sr, outhandle, "fasta")
+                else:
+                    newseq = str(record.seq).lstrip(" nN").rstrip(" nN")
+                    sr = SeqRecord(Seq(newseq), record.id, '', '')
+                    SeqIO.write(sr, outhandle, "fasta")
         outhandle.close()
