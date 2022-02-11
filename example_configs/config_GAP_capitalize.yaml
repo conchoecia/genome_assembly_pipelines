@@ -1,0 +1,3 @@
+# just the assemblies that you want to capitalize
+assemblies:
+  your_assem_name: "/path/to/your/assem.fasta"

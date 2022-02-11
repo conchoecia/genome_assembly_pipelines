@@ -1,0 +1,36 @@
+"""
+This turns all of the gaps to length 100bp.
+"""
+import subprocess
+configfile: "config.yaml"
+config["tool"] = "GAP_capitalize"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/{nom}_output.fasta",
+               nom=config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule print_out_temp_assembly_rewrap:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        assem = config["tool"] + "/output/{nom}_output.fasta"
+    run:
+        from Bio import SeqIO
+        from Bio.SeqRecord import SeqRecord
+        from Bio.Seq import Seq
+
+        outhandle = open(output.assem, "w")
+        with open(input.assem, "rU") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                newseq = str(record.seq).upper()
+                sr = SeqRecord(Seq(newseq), record.id, '', '')
+                SeqIO.write(sr, outhandle, "fasta")
+        outhandle.close()
