@@ -104,7 +104,8 @@ rule parse_and_make_merges:
                         else:
                             raise IOError("Must be f or r for the direction")
                         printed.add(thisscafid)
-                    # now output the new sequence
+                    # now output the new sequence after cleaning trailing Ns
+                    newseq = str(record.seq).lstrip(" nN").rstrip(" nN")
                     sr = SeqRecord(Seq(newseq), newid, '', '')
                     print(sr)
                     print("\n\n")
