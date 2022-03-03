@@ -18,7 +18,8 @@ num_files = int(seq_counter/num_seqs_per_file)
 rule all:
     input:
         expand(config["tool"] + "/output/blast/query_{qnum}.tblastn",
-                       qnum = range(num_files))
+                       qnum = range(num_files)),
+        chrom = config["tool"] + "/output/query_to_ref.chrom"
 
 # make softlink of the input files
 rule softlink_assembly:
@@ -94,4 +95,27 @@ rule tblastn:
         tblastn -db {input.assem} -query {input.query} \
           -num_threads {threads} \
           -outfmt 6 > {output.query}
+        """
+
+rule make_a_chrom_file:
+    """
+    cat the tblastn results to make a .chrom file. Used in the odp pipeline.
+    """
+    input:
+        query = expand(config["tool"] + "/output/blast/query_{qnum}.tblastn",
+                       qnum = range(num_files))
+    output:
+        chrom = config["tool"] + "/output/query_to_ref.chrom",
+    params:
+        catdir = config["tool"] + "/output/blast/query_*.tblastn"
+    threads: 1
+    shell:
+        """
+        cat {params.catdir} | \
+          awk 'BEGIN{{prev = ""}} {{if ($1 != prev){{print($0)}}; prev = $1}}' | \
+          awk '{{direc = "+"; left = $9; right = $10; \
+                if ($9 > $10){{direc = "-"; left = $10; right = $9}}; \
+                printf("%s\\t%s\\t%s\\t%d\\t%d\\n", $1, \
+                       $2, direc, left, right)}}' | \
+              sort -k2,2 -k4,4n > {output.chrom}
         """
