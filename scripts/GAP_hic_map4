@@ -77,6 +77,11 @@ rule all:
         expand(config["tool"] + "/output/pairs/{nom}/{nom}.dedup.filt.pairs.covstats",
                nom = config["assemblies"]),
 
+        # now make a hic map
+        expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.gi.tsv",
+               nom = config["assemblies"], binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.best_connection.tsv",
+               nom = config["assemblies"], binsize=config["binsize"]),
 
         #final files
         # chromsize
@@ -99,7 +104,9 @@ rule all:
         ## pretext view
         expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
         # plots of AB compartmentalization
-        expand(config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf", nom = config["assemblies"], binsize = [x for x in config["binsize"] if int(x) >= 50000])
+        expand(config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf",
+               nom = config["assemblies"],
+               binsize = [x for x in config["binsize"] if int(x) >= 50000])
 
         ## output interaction matrix used for running the Lorentz 3DGR problem
         #expand(config["tool"] + "/output/{nom}/3DGR/{nom}_balanced.{binsize}.if.tsv",
@@ -175,7 +182,6 @@ rule gaps_from_assembly:
                             gap = False
                     counter += 1
         outhandle.close()
-
 
 rule make_beddb:
     input:
@@ -688,7 +694,8 @@ rule cutoff_matrix:
 
 rule zoomify_matrix:
     """
-    ## Aggregation (for HiGlass view) - This generates a *.mcool file from the balanced cool file
+    ## Aggregation (for HiGlass view)
+      - This generates a *.mcool file from the balanced cool file
     """
     input:
         cool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
@@ -698,6 +705,97 @@ rule zoomify_matrix:
         """
         cooler zoomify -o {output.mcool} {input.cool}
         """
+
+# Now we get the Hi-C interaction matrix
+rule make_hic_matrix_simple:
+    input:
+        cool =   config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
+    output:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.gi.tsv"
+    params:
+        gi = config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.gi"
+    shell:
+        """
+        hicConvertFormat -m {input.cool} \
+           --outFileName {params.gi} \
+           --inputFormat cool \
+           --outputFormat ginteractions
+        """
+
+rule best_connected_scaffold:
+    """
+    Find which scaffold is the best connected to each.
+      - This is most useful for placing scaffolds during manual edits
+
+    COW1    12000   14000   sca1    4000    6000    0.003780422975718399
+    COW1    16000   18000   sca1    2000    4000    0.0013141025221723496
+    COW1    32000   34000   sca1    0       2000    0.0012358846777278977
+    """
+    input:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.gi.tsv",
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.best_connection.tsv"
+    threads: 1
+    run:
+        scaf_sizes = {}
+        # first we need to get the scaffold sizes without gaps
+        for record in SeqIO.parse(input.assem, "fasta"):
+            scaf_sizes[record.id] = len(str(record.seq).replace("N",
+                                                "").replace("n", ""))
+        contact_dict = {}
+        # now we process the table
+        with open(input.hicm, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    scaf1 = fields[0]
+                    scaf2 = fields[3]
+                    if scaf1 != scaf2:
+                        value = float(fields[6])
+                        if scaf1 not in contact_dict:
+                            contact_dict[scaf1] = {}
+                        if scaf2 not in contact_dict:
+                            contact_dict[scaf2] = {}
+
+                        if scaf1 not in contact_dict[scaf2]:
+                            contact_dict[scaf2][scaf1] = 0
+                        if scaf2 not in contact_dict[scaf1]:
+                            contact_dict[scaf1][scaf2] = 0
+                        contact_dict[scaf1][scaf2] += value
+                        contact_dict[scaf2][scaf1] += value
+
+        ## now we correct for basepair area
+        #for i in contact_dict:
+        #    for j in contact_dict[i]:
+        #        bp_i = scaf_sizes[i]
+        #        bp_j = scaf_sizes[j]
+        #        area = bp_i * bp_j
+        #        value = contact_dict[i][j]
+        #        #print("{}: {} * {}: {} = {} || {}/{} = {}".format(i, bp_i, j, bp_j, area, value, area, value/area))
+        #        contact_dict[i][j] = value/bp_j
+
+        # now we print out the strongest connection
+        outhandle = open(output.hicm, "w")
+        for this_scaf in scaf_sizes:
+            max_val = 0
+            max_scaf = "NA"
+            #print (this_scaf, contact_dict[this_scaf])
+            #print()
+            if this_scaf in contact_dict:
+                for other_scaf in contact_dict[this_scaf]:
+                    thisval = contact_dict[this_scaf][other_scaf]
+                    if thisval > max_val:
+                        max_val = thisval
+                        max_scaf = other_scaf
+                print("{}\t{}\t{}".format(this_scaf, max_scaf, max_val),
+                                          file = outhandle)
+            else:
+                print("{}\t{}\t{}".format(this_scaf, "NA", "0"),
+                                          file = outhandle)
+
+
 
 # Filter out the small chromosomes for further analyses/balancing/et cet
 rule only_chromosomes:
@@ -796,7 +894,8 @@ rule convert_pearson_to_gi:
 rule plot_matrices_custom:
     """
     This plots the AB compartments using a custom script.
-    I think the results are much nicer than the package that is included in HiCExplorer
+    I think the results are much nicer than the package that is included
+      in HiCExplorer.
     """
     input:
         gi = config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.gi.tsv"
@@ -842,6 +941,7 @@ rule plot_matrices_custom:
         for i in range(2):
             df = pd.read_csv(filepath, header=None, sep='\t')
             df.columns = columns[i]
+            # Feb 2022 - I do not know why this big block is commented out
             #df["distance"] = df["tstart"] - df["sstart"]
             #expected = df.groupby(["distance"]).mean().reset_index()
             #expected["expected"] = expected["counts"]
