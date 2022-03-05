@@ -16,7 +16,7 @@ The order that the scffolds appear in the config file don't matter.
 
 import subprocess
 configfile: "config.yaml"
-config["tool"] = "GAP_merge_scaffolds_at"
+config["tool"] = "GAP_insert_scaffolds_at"
 
 # first check out the input
 if "assemblies" not in config:
