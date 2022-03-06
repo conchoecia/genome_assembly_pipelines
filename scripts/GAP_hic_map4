@@ -317,7 +317,7 @@ rule map_LR_to_genome:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
         long_reads = config["tool"] + "/input/longreads/{LR}"
     output:
-        bam = temp(config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam")
+        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam"
     params:
         minimaparg = config["minimap2arg"]
     threads: workflow.cores - 1
@@ -433,7 +433,7 @@ rule map_hic_to_ref:
         left  = lambda wildcards: config["libs"][wildcards.lib]["read1"],
         right = lambda wildcards: config["libs"][wildcards.lib]["read2"]
     output:
-        bam   = temp(config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam")
+        bam   = config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam"
     threads:
         workflow.cores
     shell:
