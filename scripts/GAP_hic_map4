@@ -61,14 +61,6 @@ def get_chromosome_sizes(assembly_file, minsize):
 
 rule all:
     input:
-        # make a depth plot
-        expand(config["tool"] + "/output/{nom}/{nom}_LRdepth.bw",
-               nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_TXdepth.bw",
-               nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_SRdepth.bw",
-               nom = config["assemblies"]),
-
         #stats - this is in the pair processing step. fine with HiC-v2
         expand(config["tool"] + "/output/pairsam_stats/{nom}_parsed.pairsam.stats",
                nom = config["assemblies"]),
@@ -107,6 +99,15 @@ rule all:
         expand(config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf",
                nom = config["assemblies"],
                binsize = [x for x in config["binsize"] if int(x) >= 50000])
+
+        # make depth plots
+        expand(config["tool"] + "/output/{nom}/{nom}_LRdepth.bw",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_TXdepth.bw",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_SRdepth.bw",
+               nom = config["assemblies"]),
+
 
         ## output interaction matrix used for running the Lorentz 3DGR problem
         #expand(config["tool"] + "/output/{nom}/3DGR/{nom}_balanced.{binsize}.if.tsv",
@@ -1064,9 +1065,9 @@ rule make_pretextmap:
         if [ ${{NUMBAM}} -gt 1 ]
           then
             samtools cat -h {input.bam} | samtools view -h - | \
-                PretextMap -o {output.pretext}
+                PretextMap --sortby nosort -o {output.pretext}
           else
             samtools view -h {input.bam} | \
-                PretextMap -o {output.pretext}
+                PretextMap --sortby nosort -o {output.pretext}
         fi
         """
