@@ -98,7 +98,7 @@ rule all:
         # plots of AB compartmentalization
         expand(config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf",
                nom = config["assemblies"],
-               binsize = [x for x in config["binsize"] if int(x) >= 50000])
+               binsize = [x for x in config["binsize"] if int(x) >= 50000]),
 
         # make depth plots
         expand(config["tool"] + "/output/{nom}/{nom}_LRdepth.bw",
