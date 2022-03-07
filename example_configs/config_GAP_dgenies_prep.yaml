@@ -1,0 +1,5 @@
+# name of two assemblies and their paths
+qname: /path/to/assembly/one.fasta
+query: "my_assem_one"
+rname: /path/to/assembly/two.fasta
+reference: "my_assem_two"
