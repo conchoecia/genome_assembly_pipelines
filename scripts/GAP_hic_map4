@@ -8,6 +8,7 @@ This snakefile maps all the HiC reads to a final genome assembly
 from Bio import SeqIO
 import gzip
 import os
+import sys
 minchromsize = 1000000
 configfile: "config.yaml"
 config["tool"] = "GAP_hic_map4"
@@ -18,6 +19,10 @@ bed2bw_path=os.path.join(filepath,  "../dependencies/kentutils/bedGraphToBigWig"
 
 if "minimap2arg" not in config:
     config["minimap2arg"] = "map-hifi"
+
+# if telomere kmers not specified in the config file, use regular metazoan seq
+if "telomere_kmers" not in config:
+    config["telomere_kmers"] = ["TTAGGG", "CCCTAA"]
 
 # make this dummy LR fastq file in case we don't actually want to map any reads
 if "LR" not in config:
@@ -100,14 +105,10 @@ rule all:
                nom = config["assemblies"],
                binsize = [x for x in config["binsize"] if int(x) >= 50000]),
 
-        # make depth plots
-        expand(config["tool"] + "/output/{nom}/{nom}_LRdepth.bw",
+        # telomere_positions
+        expand(config["tool"] + "/output/{nom}/{nom}_{datatype}.bw",
+               datatype = ["telomereKmerCount", "SRdepth", "TXdepth", "LRdepth"],
                nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_TXdepth.bw",
-               nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_SRdepth.bw",
-               nom = config["assemblies"]),
-
 
         ## output interaction matrix used for running the Lorentz 3DGR problem
         #expand(config["tool"] + "/output/{nom}/3DGR/{nom}_balanced.{binsize}.if.tsv",
@@ -147,6 +148,89 @@ rule index_ref:
         bwa index {input.assem}
         """
 
+rule telomere_positions:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    output:
+        pos   = config["tool"] + "/output/depth/{nom}_telomereKmerCount.bg"
+    params:
+        tkmers = config["telomere_kmers"]
+    threads: 1
+    run:
+        outhandle = open(output.pos, "w")
+        k = 6
+        window_size = 1000
+        with open(input.assem, mode="r") as fasta_handle:
+            for record in SeqIO.parse(fasta_handle, "fasta"):
+                positions = []
+                thisseq = str(record.seq)
+                start_pos = 0
+                counter = 0
+                for i in range(len(thisseq)):
+                    if thisseq[i:i+k] in params.tkmers:
+                        counter += 1
+                    if i % window_size == 0 and i != 0:
+                        positions.append([record.id, start_pos,
+                                          i, counter])
+                        #print("{}\t{}\t{}\t{}".format(record.id,
+                        #                              start_pos,
+                        #                              i,
+                        #                              counter))
+                        counter = 0
+                        start_pos = i
+                if i % window_size != 0:
+                    positions.append([record.id, start_pos,
+                                      len(thisseq), counter])
+                prev_value = -1
+                prev_start = -1
+                prev_stop  = -1
+                for entry in positions:
+                    if entry[3] != prev_value:
+                        if prev_start == -1:
+                            pass
+                        else:
+                            print("{}\t{}\t{}\t{}".format(entry[0],
+                                                          prev_start,
+                                                          prev_stop,
+                                                          prev_value),
+                                  file = outhandle)
+                        prev_value = entry[3]
+                        prev_start = entry[1]
+                    prev_stop  = entry[2]
+                print("{}\t{}\t{}\t{}".format(positions[0][0],
+                                              prev_start,
+                                              positions[-1][2],
+                                              prev_value),
+                      file = outhandle)
+        outhandle.close()
+
+rule sort_bedgraph:
+    input:
+        depth   = config["tool"] + "/output/depth/{nom}_{datatype}.bg",
+        bedsort = bedsort_path
+    output:
+        depth   = config["tool"] + "/output/depth/{nom}_{datatype}.s.bg"
+    threads: 1
+    shell:
+        """
+        chmod u+x {input.bedsort}
+        {input.bedsort} {input.depth} {output.depth}
+        """
+
+rule bed2bigwig:
+    input:
+        depth   = config["tool"] + "/output/depth/{nom}_{datatype}.s.bg",
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        bw = config["tool"] + "/output/{nom}/{nom}_{datatype}.bw"
+    threads: 1
+    shell:
+        """
+        chmod u+x {input.bed2bw}
+        {input.bed2bw} {input.depth} {input.cs} {output.bw}
+        """
+
 rule gaps_from_assembly:
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
@@ -155,7 +239,6 @@ rule gaps_from_assembly:
     threads: 1
     run:
         # this block of code from https://www.biostars.org/p/133742/
-        import sys
         #import the SeqIO module from Biopython
         outhandle = open(output.gapbed, "w")
         with open(input.assem, mode="r") as fasta_handle:
@@ -213,6 +296,7 @@ rule symlink_the_transcripts:
                        tx = [os.path.basename(x) for x in config["transcripts"]])
     params:
         fileprefix = config["tool"] + "/input/transcripts/"
+    threads: 1
     run:
         for thisfile in config["transcripts"]:
             fname = os.path.basename(thisfile)
@@ -254,7 +338,7 @@ rule get_coverage_of_transcripts_bams:
         bais = expand(config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{{nom}}.bam.bai",
                        tx = [os.path.basename(x) for x in config["transcripts"]])
     output:
-        depth = config["tool"] + "/output/depth/transcripts_to_{nom}_depth.bg"
+        depth = config["tool"] + "/output/depth/{nom}_TXdepth.bg"
     threads: max(4, int(workflow.cores /4))
     shell:
         """
@@ -262,34 +346,6 @@ rule get_coverage_of_transcripts_bams:
           samtools sort -@ {threads} - | \
           bedtools genomecov -ibam stdin -bga -split > {output.depth}
         """
-
-rule sort_depth_file_transcripts_bam:
-    input:
-        depth = config["tool"] + "/output/depth/transcripts_to_{nom}_depth.bg",
-        bedsort = bedsort_path
-    output:
-        depth = config["tool"] + "/output/depth/transcripts_to_{nom}_depth.s.bg"
-    threads: 1
-    shell:
-        """
-        chmod u+x {input.bedsort}
-        {input.bedsort} {input.depth} {output.depth}
-        """
-
-rule make_bigwig_transcripts_bam:
-    input:
-        depth = config["tool"] + "/output/depth/transcripts_to_{nom}_depth.s.bg",
-        bed2bw = bed2bw_path,
-        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-    output:
-        bw = config["tool"] + "/output/{nom}/{nom}_TXdepth.bw"
-    threads: 1
-    shell:
-        """
-        chmod u+x {input.bed2bw}
-        {input.bed2bw} {input.depth} {input.cs} {output.bw}
-        """
-
 
 rule symlink_the_LRs:
     """
@@ -346,40 +402,13 @@ rule get_coverage_of_LR_bams:
         bais = expand(config["tool"] + "/input/bams_LR/LR_{LR}_to_{{nom}}.bam.bai",
                        LR = [os.path.basename(x) for x in config["LR"]]),
     output:
-        depth = config["tool"] + "/output/depth/LR_to_{nom}_depth.bg"
+        depth = config["tool"] + "/output/depth/{nom}_LRdepth.bg"
     threads: max(4, int(workflow.cores /4))
     shell:
         """
         samtools cat {input.bams} | \
           samtools sort -@ {threads} - | \
           bedtools genomecov -ibam stdin -bga -split > {output.depth}
-        """
-
-rule sort_depth_file_LR_bam:
-    input:
-        depth = config["tool"] + "/output/depth/LR_to_{nom}_depth.bg",
-        bedsort = bedsort_path
-    output:
-        depth = config["tool"] + "/output/depth/LR_to_{nom}_depth.s.bg"
-    threads: 1
-    shell:
-        """
-        chmod u+x {input.bedsort}
-        {input.bedsort} {input.depth} {output.depth}
-        """
-
-rule make_bigwig_LR_bam:
-    input:
-        depth = config["tool"] + "/output/depth/LR_to_{nom}_depth.s.bg",
-        bed2bw = bed2bw_path,
-        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-    output:
-        bw = config["tool"] + "/output/{nom}/{nom}_LRdepth.bw"
-    threads: 1
-    shell:
-        """
-        chmod u+x {input.bed2bw}
-        {input.bed2bw} {input.depth} {input.cs} {output.bw}
         """
 
 rule get_coverage_of_SR_bams:
@@ -387,40 +416,13 @@ rule get_coverage_of_SR_bams:
         bams  = expand(config["tool"] + "/input/bams/{{nom}}_{lib}_to_ref.sorted.bam",
                        lib=config["libs"])
     output:
-        depth = config["tool"] + "/output/depth/SR_to_{nom}_depth.bg"
+        depth = config["tool"] + "/output/depth/{nom}_SRdepth.bg"
     threads: max(4, int(workflow.cores /4))
     shell:
         """
         samtools cat {input.bams} | \
           samtools sort -@ {threads} - | \
           bedtools genomecov -ibam stdin -bga -split > {output.depth}
-        """
-
-rule sort_depth_file_SR_bam:
-    input:
-        depth = config["tool"] + "/output/depth/SR_to_{nom}_depth.bg",
-        bedsort = bedsort_path
-    output:
-        depth = config["tool"] + "/output/depth/SR_to_{nom}_depth.s.bg"
-    threads: 1
-    shell:
-        """
-        chmod u+x {input.bedsort}
-        {input.bedsort} {input.depth} {output.depth}
-        """
-
-rule make_bigwig_SR_bam:
-    input:
-        depth = config["tool"] + "/output/depth/SR_to_{nom}_depth.s.bg",
-        bed2bw = bed2bw_path,
-        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-    output:
-        bw = config["tool"] + "/output/{nom}/{nom}_SRdepth.bw"
-    threads: 1
-    shell:
-        """
-        chmod u+x {input.bed2bw}
-        {input.bed2bw} {input.depth} {input.cs} {output.bw}
         """
 
 rule map_hic_to_ref:
@@ -434,8 +436,7 @@ rule map_hic_to_ref:
         right = lambda wildcards: config["libs"][wildcards.lib]["read2"]
     output:
         bam   = config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam"
-    threads:
-        workflow.cores
+    threads: workflow.cores - 1
     shell:
         """
         # DONT PIPE INTO SAMTOOLS SORT
@@ -500,8 +501,7 @@ rule hic_dedup:
     output:
         dpps = config["tool"] + "/output/temp/dedupe/{nom}_parsed_sorted_dedupe.pairsam.gz",
         stats = config["tool"] + "/output/pairsam_stats/{nom}_parsed_sorted_dedupe.pairsam.stats"
-    threads:
-        workflow.cores - 1
+    threads: workflow.cores - 1
     params:
         nom = lambda w: w.nom
     shell:
@@ -519,8 +519,7 @@ rule hic_filter:
         dpps = config["tool"] + "/output/temp/dedupe/{nom}_parsed_sorted_dedupe.pairsam.gz",
     output:
         filt = config["tool"] + "/output/temp/filt/{nom}_parsed_sorted_dedupe_filt.pairsam.gz"
-    threads:
-        1
+    threads: 1
     shell:
         """
         pairtools select  '(pair_type == "UU") or (pair_type == "UR") or (pair_type == "RU")' \
@@ -535,8 +534,7 @@ rule generate_final_pairs:
         filt = config["tool"] + "/output/temp/filt/{nom}_parsed_sorted_dedupe_filt.pairsam.gz"
     output:
         final = config["tool"] + "/output/pairs/{nom}/{nom}.dedup.filt.pairs.gz"
-    threads:
-        1
+    threads: 1
     shell:
         """
         pairtools split --output-pairs {output.final} {input.filt}
@@ -605,8 +603,7 @@ rule index_pairs:
         pairs = config["tool"] + "/output/pairs/{nom}/{nom}.dedup.filt.pairs.gz"
     output:
         index = config["tool"] + "/output/pairs/{nom}/{nom}.dedup.filt.pairs.gz.px2"
-    threads:
-        1
+    threads: 1
     shell:
         """
         pairix -f {input.pairs}
@@ -623,8 +620,7 @@ rule make_bins_individual:
         cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
     output:
         cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
-    threads:
-        1
+    threads: 1
     params:
         bs = lambda wildcards: wildcards.binsize,
         nom = lambda wildcards: wildcards.nom,
@@ -661,6 +657,7 @@ rule cutoff_matrix:
         zmin = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmin"],
         zmax = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmax"],
         binsize = lambda wildcards: wildcards.binsize
+    threads: 1
     shell:
         """
         if [ "{params.zmin}" -eq "0" ]; then
@@ -702,6 +699,7 @@ rule zoomify_matrix:
         cool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
     output:
         mcool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.mcool"
+    threads: 1
     shell:
         """
         cooler zoomify -o {output.mcool} {input.cool}
@@ -715,6 +713,7 @@ rule make_hic_matrix_simple:
         hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.gi.tsv"
     params:
         gi = config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.gi"
+    threads: 1
     shell:
         """
         hicConvertFormat -m {input.cool} \
@@ -810,6 +809,7 @@ rule only_chromosomes:
         #chr_string = lambda wildcards: ' '.join(get_chromosome_sizes(
         #                      config["tool"] + "/input/assembly/{}_input.fasta".format(wildcards.nom), 
         #                      minchromsize))
+    threads: 1
     shell:
         """
         CHROMS=$(bioawk -cfastx '{{if (length($seq) >= {params.mc}) {{printf("%s ", $name)}} }}' {input.assem})
@@ -826,6 +826,7 @@ rule obs_expected_lieb:
         onlychr = config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.cool"
     output:
         obsexp = config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.cool"
+    threads: 1
     shell:
         """
         hicTransform -m {input.onlychr} \
@@ -839,6 +840,7 @@ rule pearson_matrix:
         obsexp = config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.cool"
     output:
         pearson = config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.cool"
+    threads: 1
     shell:
         """
         hicTransform -m {input.obsexp} \
@@ -884,6 +886,7 @@ rule convert_pearson_to_gi:
         gi = config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.gi.tsv"
     params:
         gi = config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.gi"
+    threads: 1
     shell:
         """
         hicConvertFormat -m {input.pearson} \
@@ -902,6 +905,7 @@ rule plot_matrices_custom:
         gi = config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.gi.tsv"
     output:
         pdf = config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf"
+    threads: 1
     run:
         import ast
         import pandas as pd
