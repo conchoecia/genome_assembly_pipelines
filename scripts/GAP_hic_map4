@@ -375,11 +375,13 @@ rule map_LR_to_genome:
     output:
         bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam"
     params:
-        minimaparg = config["minimap2arg"]
+        minimaparg = config["minimap2arg"],
+        LR_name = lambda wildcards: wildcards.LR
     threads: workflow.cores - 1
     shell:
         """
-        minimap2 -t {threads} -ax {params.minimaparg} {input.assem} {input.long_reads} | \
+        minimap2 -t {threads} -ax {params.minimaparg} {input.assem} \
+            --split-prefix {params.LR_name} {input.long_reads} | \
           samtools view -hb - | \
           samtools sort - > {output.bam}
         """
