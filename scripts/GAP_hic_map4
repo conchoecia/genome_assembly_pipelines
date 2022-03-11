@@ -14,6 +14,7 @@ configfile: "config.yaml"
 config["tool"] = "GAP_hic_map4"
 
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+kmer_position_path=os.path.join(filepath, "../bin/kmer_positions.py")
 bedsort_path=os.path.join(filepath, "../dependencies/kentutils/bedSort")
 bed2bw_path=os.path.join(filepath,  "../dependencies/kentutils/bedGraphToBigWig")
 
@@ -147,62 +148,50 @@ rule index_ref:
         """
         bwa index {input.assem}
         """
+rule genome_bed:
+    """
+    just a bed file of the whole genome assembly to usebedtools subtract
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        bed = config["tool"] + "/output/{nom}/{nom}.bed"
+    threads: 1
+    shell:
+        """
+        bioawk -cfastx '{{printf("%s\\t0\\t%d\\n", $name, length($seq))}}' {input.assem} | \
+          bedtools sort > {output.bed}
+        """
 
-rule telomere_positions:
+rule telomere_kmer_positions:
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        kmer_counter = kmer_position_path,
+        bed = config["tool"] + "/output/{nom}/{nom}.bed"
     output:
-        pos   = config["tool"] + "/output/depth/{nom}_telomereKmerCount.bg"
+        temppos   = temp(config["tool"] + "/output/depth/TEMP_{nom}_telomereKmerCount.nozero.bg"),
+        tempzeros = temp(config["tool"] + "/output/depth/TEMP_{nom}_telomereKmerCount.zero.bg"),
+        bg = temp(config["tool"] + "/output/depth/{nom}_telomereKmerCount.bg")
     params:
-        tkmers = config["telomere_kmers"]
+        tkmers = " ".join(config["telomere_kmers"]),
+        k = int(list(set([len(x) for x in config["telomere_kmers"]]))[0])
     threads: 1
-    run:
-        outhandle = open(output.pos, "w")
-        k = 6
-        window_size = 1000
-        with open(input.assem, mode="r") as fasta_handle:
-            for record in SeqIO.parse(fasta_handle, "fasta"):
-                positions = []
-                thisseq = str(record.seq)
-                start_pos = 0
-                counter = 0
-                for i in range(len(thisseq)):
-                    if thisseq[i:i+k] in params.tkmers:
-                        counter += 1
-                    if i % window_size == 0 and i != 0:
-                        positions.append([record.id, start_pos,
-                                          i, counter])
-                        #print("{}\t{}\t{}\t{}".format(record.id,
-                        #                              start_pos,
-                        #                              i,
-                        #                              counter))
-                        counter = 0
-                        start_pos = i
-                if i % window_size != 0:
-                    positions.append([record.id, start_pos,
-                                      len(thisseq), counter])
-                prev_value = -1
-                prev_start = -1
-                prev_stop  = -1
-                for entry in positions:
-                    if entry[3] != prev_value:
-                        if prev_start == -1:
-                            pass
-                        else:
-                            print("{}\t{}\t{}\t{}".format(entry[0],
-                                                          prev_start,
-                                                          prev_stop,
-                                                          prev_value),
-                                  file = outhandle)
-                        prev_value = entry[3]
-                        prev_start = entry[1]
-                    prev_stop  = entry[2]
-                print("{}\t{}\t{}\t{}".format(positions[0][0],
-                                              prev_start,
-                                              positions[-1][2],
-                                              prev_value),
-                      file = outhandle)
-        outhandle.close()
+    shell:
+        """
+        # get the telomere kmer positions
+        cat {input.assem} | \
+          python {input.kmer_counter} {params.k} {params.tkmers} | \
+          bedtools merge | \
+          awk '{{if (($3-$2)/{params.k} > 1) {{ \
+          printf("%s\\t%d\\t%d\\t%d\\n", $1, $2, $3, ($3-$2)/{params.k} )}}}}' | \
+          bedtools sort > {output.temppos}
+        # get subtract for the zero positions
+        bedtools subtract -a {input.bed} -b {output.temppos} | \
+          awk '{{printf("%s\\t0\\n", $0)}}' > {output.tempzeros}
+        # now cat and sort
+        cat {output.temppos} {output.tempzeros} | \
+          sort -k1,1 -k2,2n -k3,3n > {output.bg}
+        """
 
 rule sort_bedgraph:
     input:
