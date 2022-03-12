@@ -15,15 +15,29 @@ config["tool"] = "GAP_hic_map4"
 
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 kmer_position_path=os.path.join(filepath, "../bin/kmer_positions.py")
+picard_path=os.path.join(filepath, "../bin/picard.jar")
 bedsort_path=os.path.join(filepath, "../dependencies/kentutils/bedSort")
 bed2bw_path=os.path.join(filepath,  "../dependencies/kentutils/bedGraphToBigWig")
+
+def reverse_complement(seq):
+    this_complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+    return "".join(this_complement.get(base, base) for base in reversed(seq))
 
 if "minimap2arg" not in config:
     config["minimap2arg"] = "map-hifi"
 
+# if kmers not specified in config, add
+if "kmers" not in config:
+    config["kmers"] = {}
+
 # if telomere kmers not specified in the config file, use regular metazoan seq
-if "telomere_kmers" not in config:
-    config["telomere_kmers"] = ["TTAGGG", "CCCTAA"]
+if "telomere" not in config:
+    config["kmers"]["telomere"] = ["TTAGGG", "CCCTAA"]
+
+# make sure all the kmers are uppercase and that the set is complete
+for key in config["kmers"]:
+    config["kmers"][key] = list(set([x.upper() for x in config["kmers"][key]] + \
+                           [reverse_complement(x.upper()) for x in config["kmers"][key]]))
 
 # make this dummy LR fastq file in case we don't actually want to map any reads
 if "LR" not in config:
@@ -53,7 +67,6 @@ for thiskey in ["transcripts", "LR"]:
         if not good:
             raise IOError ("The LR or transcripts file {} must end with .fa, .fa.gz, .fasta, .fasta.gz, .fastq, or .fastq.gz.".format(entry))
 
-
 def get_chromosome_sizes(assembly_file, minsize):
     """
     returns a set of chromosomes to keep
@@ -64,6 +77,10 @@ def get_chromosome_sizes(assembly_file, minsize):
             if len(record.seq) >= minsize:
                 chroms.append(record.id)
     return chroms
+
+wildcard_constraints:
+    kmer="[A-Za-z0-9]+",
+    datatype="[A-Za-z0-9]+"
 
 rule all:
     input:
@@ -106,9 +123,20 @@ rule all:
                nom = config["assemblies"],
                binsize = [x for x in config["binsize"] if int(x) >= 50000]),
 
-        # telomere_positions
+        # read_depth_positions
+        expand(config["tool"] + "/output/{nom}/{nom}_kmer_{kmer}.bw",
+               kmer = config["kmers"], nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_kmerInLR_{kmer}.bw",
+               kmer = config["kmers"], nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_kmerInSR_{kmer}.bw",
+               kmer = config["kmers"], nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/{nom}_{datatype}.bw",
-               datatype = ["telomereKmerCount", "SRdepth", "TXdepth", "LRdepth"],
+               datatype = ["SRdepth", "TXdepth", "LRdepth"],
+               nom = config["assemblies"]),
+
+        #get the LR bam
+        expand(config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]],
                nom = config["assemblies"]),
 
         ## output interaction matrix used for running the Lorentz 3DGR problem
@@ -163,61 +191,187 @@ rule genome_bed:
           bedtools sort > {output.bed}
         """
 
-rule telomere_kmer_positions:
+rule kmer_positions_bigwig:
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
         kmer_counter = kmer_position_path,
-        bed = config["tool"] + "/output/{nom}/{nom}.bed"
+        bed = config["tool"] + "/output/{nom}/{nom}.bed",
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
     output:
-        temppos   = temp(config["tool"] + "/output/depth/TEMP_{nom}_telomereKmerCount.nozero.bg"),
-        tempzeros = temp(config["tool"] + "/output/depth/TEMP_{nom}_telomereKmerCount.zero.bg"),
-        bg = temp(config["tool"] + "/output/depth/{nom}_telomereKmerCount.bg")
+        temppos   = temp(config["tool"] + "/output/depth/TEMP_{nom}_kmer_{kmer}.nozero.bg"),
+        tempzeros = temp(config["tool"] + "/output/depth/TEMP_{nom}_kmer_{kmer}.zero.bg"),
+        bg    =      config["tool"] + "/output/depth/{nom}_kmer_{kmer}.bg",
+        depth = temp(config["tool"] + "/output/depth/{nom}_kmer_{kmer}.s.bg"),
+        bw    =      config["tool"] + "/output/{nom}/{nom}_kmer_{kmer}.bw"
     params:
-        tkmers = " ".join(config["telomere_kmers"]),
-        k = int(list(set([len(x) for x in config["telomere_kmers"]]))[0])
+        tkmers = lambda wildcards: " ".join(config["kmers"][wildcards.kmer]),
+        k = lambda wildcards: int(list(set([len(x) for x in config["kmers"][wildcards.kmer]]))[0])
     threads: 1
     shell:
         """
-        # get the telomere kmer positions
+        # get the kmer positions
         cat {input.assem} | \
           python {input.kmer_counter} {params.k} {params.tkmers} | \
           bedtools merge | \
           awk '{{if (($3-$2)/{params.k} > 1) {{ \
           printf("%s\\t%d\\t%d\\t%d\\n", $1, $2, $3, ($3-$2)/{params.k} )}}}}' | \
           bedtools sort > {output.temppos}
+
         # get subtract for the zero positions
         bedtools subtract -a {input.bed} -b {output.temppos} | \
           awk '{{printf("%s\\t0\\n", $0)}}' > {output.tempzeros}
+
         # now cat and sort
         cat {output.temppos} {output.tempzeros} | \
           sort -k1,1 -k2,2n -k3,3n > {output.bg}
+
+        # now do the steps to make a bigwig
+        chmod u+x {input.bedsort}
+        chmod u+x {input.bed2bw}
+        {input.bedsort} {output.bg} {output.depth}
+        {input.bed2bw} {output.depth} {input.cs} {output.bw}
         """
 
-rule sort_bedgraph:
+rule kmer_lookup_longreads:
+    input:
+        long_reads = expand(config["tool"] + "/input/longreads/{LR}",
+                       LR = [os.path.basename(x) for x in config["LR"]])
+    output:
+        read_list = config["tool"] + "/input/kmer_reads/{kmer}_LR_readlist.txt"
+    threads: 1
+    params:
+        grep_string = lambda wildcards: "\|".join(["".join([x]*5) for x in config["kmers"][wildcards.kmer]])
+    shell:
+        """
+        zcat -f {input.long_reads} | \
+          bioawk -cfastx '{{print($name, $seq)}}' | \
+          grep '{params.grep_string}' | \
+          cut -f1 > {output.read_list}
+        """
+
+rule filter_kmer_bams_longreads:
+    """
+    We have a list of reads that have the kmers we want, so
+     pull them out with picard.
+    """
+    input:
+        read_list = config["tool"] + "/input/kmer_reads/{kmer}_LR_readlist.txt",
+        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam",
+        picard = picard_path
+    output:
+        bam = config["tool"] + "/input/kmer_reads/{LR}_to_{nom}_{kmer}.bam"
+    threads: 1
+    shell:
+        """
+        java -jar {input.picard} FilterSamReads \
+          I={input.bam} \
+          O={output.bam} \
+          READ_LIST_FILE={input.read_list} \
+          FILTER=includeReadList
+        """
+
+rule get_coverage_of_bams_kmer_positions:
+    input:
+        bams = expand(config["tool"] + "/input/kmer_reads/{LR}_to_{{nom}}_{{kmer}}.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]]),
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        bg  =      config["tool"] + "/output/depth/{nom}_kmerInLR_{kmer}.bg",
+        bgs = temp(config["tool"] + "/output/depth/{nom}_kmerInLR_{kmer}.s.bg"),
+        bw    =    config["tool"] + "/output/{nom}/{nom}_kmerInLR_{kmer}.bw"
+    threads: max(4, int(workflow.cores /4))
+    shell:
+        """
+        samtools cat {input.bams} | \
+          samtools sort -@ {threads} - | \
+          bedtools genomecov -ibam stdin -bga -split > {output.bg}
+        chmod u+x {input.bedsort}
+        chmod u+x {input.bed2bw}
+        {input.bedsort} {output.bg} {output.bgs}
+        {input.bed2bw} {output.bgs} {input.cs} {output.bw}
+        """
+
+rule kmer_lookup_shortreads:
+    input:
+        left  = [config["libs"][x]["read1"] for x in config["libs"]],
+        right = [config["libs"][x]["read2"] for x in config["libs"]]
+    output:
+        read_list = config["tool"] + "/input/kmer_reads/{kmer}_SR_readlist.txt"
+    threads: 1
+    params:
+        grep_string = lambda wildcards: "\|".join(["".join([x]*5) for x in config["kmers"][wildcards.kmer]])
+    shell:
+        """
+        zcat -f {input.left} {input.right} | \
+          bioawk -cfastx '{{print($name, $seq)}}' | \
+          grep '{params.grep_string}' | \
+          cut -f1 > {output.read_list}
+        """
+
+rule filter_kmer_bams_shortreads:
+    """
+    We have a list of reads that have the kmers we want, so
+     pull them out with picard.
+    """
+    input:
+        read_list = config["tool"] + "/input/kmer_reads/{kmer}_SR_readlist.txt",
+        bam = config["tool"] + "/input/bams/{nom}_{lib}_to_ref.sorted.bam",
+        picard = picard_path
+    output:
+        bam = config["tool"] + "/input/kmer_reads_short/{lib}_to_{nom}_{kmer}.bam"
+    threads: 1
+    shell:
+        """
+        java -jar {input.picard} FilterSamReads \
+          I={input.bam} \
+          O={output.bam} \
+          READ_LIST_FILE={input.read_list} \
+          FILTER=includeReadList
+        """
+
+rule get_coverage_of_bams_kmer_positions_shortreads:
+    input:
+        bams = expand(config["tool"] + "/input/kmer_reads_short/{lib}_to_{{nom}}_{{kmer}}.bam",
+                            lib=config["libs"]),
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        bg  =      config["tool"] + "/output/depth/{nom}_kmerInSR_{kmer}.bg",
+        bgs = temp(config["tool"] + "/output/depth/{nom}_kmerInSR_{kmer}.s.bg"),
+        bw    =    config["tool"] + "/output/{nom}/{nom}_kmerInSR_{kmer}.bw"
+    threads: max(4, int(workflow.cores /4))
+    shell:
+        """
+        samtools cat {input.bams} | \
+          samtools sort -@ {threads} - | \
+          bedtools genomecov -ibam stdin -bga -split > {output.bg}
+        chmod u+x {input.bedsort}
+        chmod u+x {input.bed2bw}
+        {input.bedsort} {output.bg} {output.bgs}
+        {input.bed2bw} {output.bgs} {input.cs} {output.bw}
+        """
+
+rule bedgraph_and_bed2bigwig:
     input:
         depth   = config["tool"] + "/output/depth/{nom}_{datatype}.bg",
-        bedsort = bedsort_path
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
     output:
-        depth   = config["tool"] + "/output/depth/{nom}_{datatype}.s.bg"
+        depth = temp(config["tool"] + "/output/depth/{nom}_{datatype}.s.bg"),
+        bw    = config["tool"] + "/output/{nom}/{nom}_{datatype}.bw"
     threads: 1
     shell:
         """
         chmod u+x {input.bedsort}
-        {input.bedsort} {input.depth} {output.depth}
-        """
-
-rule bed2bigwig:
-    input:
-        depth   = config["tool"] + "/output/depth/{nom}_{datatype}.s.bg",
-        bed2bw = bed2bw_path,
-        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-    output:
-        bw = config["tool"] + "/output/{nom}/{nom}_{datatype}.bw"
-    threads: 1
-    shell:
-        """
         chmod u+x {input.bed2bw}
-        {input.bed2bw} {input.depth} {input.cs} {output.bw}
+        {input.bedsort} {input.depth} {output.depth}
+        {input.bed2bw} {output.depth} {input.cs} {output.bw}
         """
 
 rule gaps_from_assembly:
