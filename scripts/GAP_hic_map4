@@ -19,25 +19,59 @@ picard_path=os.path.join(filepath, "../bin/picard.jar")
 bedsort_path=os.path.join(filepath, "../dependencies/kentutils/bedSort")
 bed2bw_path=os.path.join(filepath,  "../dependencies/kentutils/bedGraphToBigWig")
 
-def reverse_complement(seq):
+def rc(seq):
+    """
+    reverse complement the sequence
+    """
     this_complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
     return "".join(this_complement.get(base, base) for base in reversed(seq))
+
+def nx(seq, n):
+    """
+    concats the sequence n times
+    """
+    return "".join([seq]*n)
 
 if "minimap2arg" not in config:
     config["minimap2arg"] = "map-hifi"
 
+###
+###  KMER PARSING SECTION
+###
 # if kmers not specified in config, add
 if "kmers" not in config:
     config["kmers"] = {}
 
 # if telomere kmers not specified in the config file, use regular metazoan seq
 if "telomere" not in config:
-    config["kmers"]["telomere"] = ["TTAGGG", "CCCTAA"]
+    config["telomere_seqs"] = ["TTAGGG"]
+config["telomere_seqs"] = [x.upper() for x in config["telomere_seqs"]]
+
+# make sure that there are no reverse complements in the telomere_seqs
+#  we don't want this because we specifically define the revcomp in the
+#  next step
+for x in config["telomere_seqs"]:
+    if rc(x) in config["telomere_seqs"]:
+        raise IOError("Don't include the reverse reverse complement of the telomere sequences")
+config["telomere_seqs"] = {"{}5x".format(key.upper()):
+                           {"f":nx(key.upper(), 5),
+                            "r":nx(rc(key.upper()), 5)}
+                           for key in config["telomere_seqs"]}
+## now add tracks for contiguous stretches of two, three
+#for n in [3]:
+#    config["telomere_seqs"].update(
+#        {"{}{}x".format(key.upper(), n):
+#                  {"f":nx(key.upper(), n),
+#                   "r":nx(rc(key.upper()), n)}
+#                  for key in config["telomere_seqs"]})
+
+print(config["telomere_seqs"])
 
 # make sure all the kmers are uppercase and that the set is complete
 for key in config["kmers"]:
     config["kmers"][key] = list(set([x.upper() for x in config["kmers"][key]] + \
                            [reverse_complement(x.upper()) for x in config["kmers"][key]]))
+print(config["kmers"])
 
 # make this dummy LR fastq file in case we don't actually want to map any reads
 if "LR" not in config:
@@ -79,8 +113,11 @@ def get_chromosome_sizes(assembly_file, minsize):
     return chroms
 
 wildcard_constraints:
+    datatype="[A-Za-z0-9]+",
     kmer="[A-Za-z0-9]+",
-    datatype="[A-Za-z0-9]+"
+    nom="[A-Za-z0-9.]+",
+    telo="[A-Za-z0-9]+",
+    telodir="[fr]"
 
 rule all:
     input:
@@ -124,20 +161,28 @@ rule all:
                binsize = [x for x in config["binsize"] if int(x) >= 50000]),
 
         # read_depth_positions
-        expand(config["tool"] + "/output/{nom}/{nom}_kmer_{kmer}.bw",
-               kmer = config["kmers"], nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_kmerInLR_{kmer}.bw",
-               kmer = config["kmers"], nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_kmerInSR_{kmer}.bw",
-               kmer = config["kmers"], nom = config["assemblies"]),
+        #expand(config["tool"] + "/output/{nom}/{nom}_kmer_{kmer}.bw",
+        #       kmer = config["kmers"], nom = config["assemblies"]),
+        #expand(config["tool"] + "/output/{nom}/{nom}_kmerInLR_{kmer}.bw",
+        #       kmer = config["kmers"], nom = config["assemblies"]),
+        #expand(config["tool"] + "/output/{nom}/{nom}_kmerInSR_{kmer}.bw",
+        #       kmer = config["kmers"], nom = config["assemblies"]),
+
         expand(config["tool"] + "/output/{nom}/{nom}_{datatype}.bw",
                datatype = ["SRdepth", "TXdepth", "LRdepth"],
                nom = config["assemblies"]),
 
-        #get the LR bam
-        expand(config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam",
-                       LR = [os.path.basename(x) for x in config["LR"]],
-               nom = config["assemblies"]),
+        # LR telomere bams
+        #expand(config["tool"] + "/input/telomere_reads/{telo}_{telodir}_LR_readlist.txt",
+        #       telo = config["telomere_seqs"], telodir = ["f", "r"]),
+        #expand(config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}.bam",
+        #       LR = [os.path.basename(x) for x in config["LR"]],
+        #       telo = config["telomere_seqs"], telodir = ["f", "r"],
+        #       nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.mv5",
+               telo = config["telomere_seqs"], nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5",
+               telo = config["telomere_seqs"], nom = config["assemblies"]),
 
         ## output interaction matrix used for running the Lorentz 3DGR problem
         #expand(config["tool"] + "/output/{nom}/3DGR/{nom}_balanced.{binsize}.if.tsv",
@@ -176,6 +221,7 @@ rule index_ref:
         """
         bwa index {input.assem}
         """
+
 rule genome_bed:
     """
     just a bed file of the whole genome assembly to usebedtools subtract
@@ -234,6 +280,177 @@ rule kmer_positions_bigwig:
         {input.bed2bw} {output.depth} {input.cs} {output.bw}
         """
 
+rule telomere_lookup_longreads:
+    """
+    look up the reads with telomere sequences in a specific direction
+    """
+    input:
+        long_reads = expand(config["tool"] + "/input/longreads/{LR}",
+                       LR = [os.path.basename(x) for x in config["LR"]])
+    output:
+        read_list = config["tool"] + "/input/telomere_reads/{telo}_{telodir}_LR_readlist.txt"
+    threads: 1
+    params:
+        grep_string = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir]
+    shell:
+        """
+        zcat -f {input.long_reads} | \
+          bioawk -cfastx '{{print($name, $seq)}}' | \
+          grep '{params.grep_string}' | \
+          awk '{{print($1)}}' > {output.read_list} || true
+        """
+
+rule filter_telo_bams_longreads:
+    """
+    we have a list of reads that have the telomere seqs we want, so
+     pull them out with picard.
+    """
+    input:
+        read_list = config["tool"] + "/input/telomere_reads/{telo}_{telodir}_LR_readlist.txt",
+        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam",
+        picard = picard_path
+    output:
+        bam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}.bam"
+    threads: 1
+    shell:
+        """
+        {{ # try
+           java -jar {input.picard} FilterSamReads \
+            I={input.bam} \
+            O={output.bam} \
+            READ_LIST_FILE={input.read_list} \
+            FILTER=includeReadList
+        }} || {{ # catch
+            # save log for exception
+            samtools view -Hb {input.bam} > {output.bam}
+        }}
+        """
+
+rule filter_telodir_mapdir:
+    """
+    filter the bams so that we know the mapping direction
+    """
+    input:
+        bam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}.bam"
+    output:
+        fbam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}_f.bam",
+        rbam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}_r.bam"
+    threads: 1
+    shell:
+        """
+        samtools view -hb -F 20 {input.bam} | \
+          samtools sort - > {output.fbam}
+        samtools view -hb -F 4 -f 16 {input.bam} | \
+          samtools sort - > {output.rbam}
+        """
+
+rule bedgraph_of_telomeres:
+    input:
+        fbam = expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_f_f.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]]) + \
+               expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_r_r.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]]),
+        rbam = expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_f_r.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]]) + \
+               expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_r_f.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]])
+    output:
+        bg_f  =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bg",
+        bg_r  =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bg",
+    threads: max(4, int(workflow.cores /4))
+    shell:
+        """
+        samtools cat {input.fbam} | \
+          samtools sort -@ {threads} - | \
+          bedtools genomecov -ibam stdin -bga -split > {output.bg_f}
+        samtools cat {input.rbam} | \
+          samtools sort -@ {threads} - | \
+          bedtools genomecov -ibam stdin -bga -split > {output.bg_r}
+        """
+
+rule bigwig_of_telomeres:
+    """
+    just make bigwigs of these files
+    """
+    input:
+        bg = config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.bg",
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        bg_s =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.s.bg",
+        bw   =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.bw",
+    threads: 1
+    shell:
+        """
+        chmod u+x {input.bedsort}
+        chmod u+x {input.bed2bw}
+        {input.bedsort} {input.bg} {output.bg_s}
+        {input.bed2bw} {output.bg_s} {input.cs} {output.bw}
+        """
+
+rule telomere_multivec:
+    """
+    makes a multivec file in the format needed for higlass
+    """
+    input:
+        bg_f  =   config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bg",
+        bg_r  =   config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bg",
+    output:
+        mv    =   config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}.bg",
+        rows  =   config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
+    params:
+        forward = lambda wildcards: config["telomere_seqs"][wildcards.telo]["f"], 
+        reverse = lambda wildcards: config["telomere_seqs"][wildcards.telo]["r"] 
+    threads: 1
+    shell:
+        """
+        bedtools unionbedg -i {input.bg_f} {input.bg_r} >> {output.mv}
+        echo -e '{params.forward}\n{params.reverse}' > {output.rows}
+        """
+
+rule telomere_bigwig_to_multivec:
+    """
+    make a multivec from multiple bigwig files based on working multivec spec
+      - https://paper.dropbox.com/doc/Multivec-Spec-3IelZjzjXDo7mGy3SkGUF
+
+    #--row-infos-filename {input.rows} \
+    """
+    input:
+        bw_f = config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bw",
+        bw_r = config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bw",
+        #rows = config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        multivec = config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5"
+    threads: 1
+    shell:
+        """
+        clodius convert bigwigs-to-multivec {input.bw_f} {input.bw_r} \
+        --chromsizes-filename {input.cs} \
+        --output-file {output.multivec}
+        """
+
+rule aggregate_telomere_multivec:
+    """
+    #--row-infos-filename {input.rows} \
+    """
+    input:
+        mv    =    config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}.bg",
+        #rows  =    config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        multivec = config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.mv5"
+    threads: 1
+    shell:
+        """
+        clodius convert bedfile-to-multivec \
+          {input.mv} \
+          --chromsizes-filename {input.cs} \
+          --starting-resolution 1 \
+          --output-file {output.multivec}
+        """
+
 rule kmer_lookup_longreads:
     input:
         long_reads = expand(config["tool"] + "/input/longreads/{LR}",
@@ -253,7 +470,7 @@ rule kmer_lookup_longreads:
 
 rule filter_kmer_bams_longreads:
     """
-    We have a list of reads that have the kmers we want, so
+    we have a list of reads that have the kmers we want, so
      pull them out with picard.
     """
     input:
@@ -265,11 +482,16 @@ rule filter_kmer_bams_longreads:
     threads: 1
     shell:
         """
-        java -jar {input.picard} FilterSamReads \
-          I={input.bam} \
-          O={output.bam} \
-          READ_LIST_FILE={input.read_list} \
-          FILTER=includeReadList
+        {{ # try
+           java -jar {input.picard} FilterSamReads \
+            I={input.bam} \
+            O={output.bam} \
+            READ_LIST_FILE={input.read_list} \
+            FILTER=includeReadList
+        }} || {{ # catch
+            # save log for exception
+            samtools view -Hb {input.bam} > {output.bam}
+        }}
         """
 
 rule get_coverage_of_bams_kmer_positions:
@@ -326,11 +548,16 @@ rule filter_kmer_bams_shortreads:
     threads: 1
     shell:
         """
-        java -jar {input.picard} FilterSamReads \
-          I={input.bam} \
-          O={output.bam} \
-          READ_LIST_FILE={input.read_list} \
-          FILTER=includeReadList
+        {{ # try
+           java -jar {input.picard} FilterSamReads \
+            I={input.bam} \
+            O={output.bam} \
+            READ_LIST_FILE={input.read_list} \
+            FILTER=includeReadList
+        }} || {{ # catch
+            # save log for exception
+            samtools view -Hb {input.bam} > {output.bam}
+        }}
         """
 
 rule get_coverage_of_bams_kmer_positions_shortreads:
