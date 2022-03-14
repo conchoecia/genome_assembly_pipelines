@@ -805,10 +805,14 @@ rule map_transcripts_to_genome:
         transcripts = config["tool"] + "/input/transcripts/{tx}"
     output:
         bam = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam"
+    params:
+        tx_name = lambda wildcards: wildcards.tx
     threads: workflow.cores - 1
     shell:
         """
-        minimap2 -t {threads} -ax splice:hq {input.assem} {input.transcripts} | \
+        minimap2 -t {threads} -ax splice:hq {input.assem} \
+            --split-prefix {params.tx_name} \
+            {input.transcripts} | \
           samtools view -hb - | \
           samtools sort - > {output.bam}
         """
