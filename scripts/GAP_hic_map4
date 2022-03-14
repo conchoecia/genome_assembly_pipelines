@@ -1159,7 +1159,7 @@ rule cutoff_matrix:
             echo "Set the {params.binsize} zmin to something other than 0";
             exit;
         fi
-        if [ "{params.zmin}" -eq "0" ]; then
+        if [ "{params.zmax}" -eq "0" ]; then
             echo "Set the {params.binsize} zmax to something other than 0";
             exit;
         fi
