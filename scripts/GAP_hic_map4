@@ -58,7 +58,7 @@ config["telomere_seqs"] = {"{}5x".format(key.upper()):
                             "r":nx(rc(key.upper()), 5)}
                            for key in config["telomere_seqs"]}
 ## now add tracks for contiguous stretches of two, three
-#for n in [3]:
+#for n in [2]:
 #    config["telomere_seqs"].update(
 #        {"{}{}x".format(key.upper(), n):
 #                  {"f":nx(key.upper(), n),
@@ -172,6 +172,7 @@ rule all:
                datatype = ["SRdepth", "TXdepth", "LRdepth"],
                nom = config["assemblies"]),
 
+
         # LR telomere bams
         #expand(config["tool"] + "/input/telomere_reads/{telo}_{telodir}_LR_readlist.txt",
         #       telo = config["telomere_seqs"], telodir = ["f", "r"]),
@@ -179,9 +180,11 @@ rule all:
         #       LR = [os.path.basename(x) for x in config["LR"]],
         #       telo = config["telomere_seqs"], telodir = ["f", "r"],
         #       nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.mv5",
-               telo = config["telomere_seqs"], nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5",
+               telo = config["telomere_seqs"], nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_telomereSRDepth_{telo}.bw.mv5",
+               telo = config["telomere_seqs"], nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5",
                telo = config["telomere_seqs"], nom = config["assemblies"]),
 
         ## output interaction matrix used for running the Lorentz 3DGR problem
@@ -235,6 +238,73 @@ rule genome_bed:
         """
         bioawk -cfastx '{{printf("%s\\t0\\t%d\\n", $name, length($seq))}}' {input.assem} | \
           bedtools sort > {output.bed}
+        """
+
+rule telomere_kmer_positions_bigwig:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        kmer_counter = kmer_position_path,
+        bed = config["tool"] + "/output/{nom}/{nom}.bed",
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        temppos   = temp(config["tool"] + "/output/depth/TEMP_{nom}_teloKmer_{telo}_{telodir}.nozero.bg"),
+        tempzeros = temp(config["tool"] + "/output/depth/TEMP_{nom}_teloKmer_{telo}_{telodir}.zero.bg"),
+        bg    = temp(config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_{telodir}.bg"),
+        depth = temp(config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_{telodir}.s.bg"),
+        bw    =      config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_{telodir}.bw"
+    params:
+        telokmer = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir],
+        k = lambda wildcards: len(config["telomere_seqs"][wildcards.telo][wildcards.telodir])
+    threads: 1
+    shell:
+        """
+        # get the kmer positions
+        cat {input.assem} | \
+          python {input.kmer_counter} {params.k} {params.telokmer} | \
+          bedtools merge | \
+          awk '{{if (($3-$2)/{params.k} > 1) {{ \
+          printf("%s\\t%d\\t%d\\t%d\\n", $1, $2, $3, ($3-$2)/{params.k} )}}}}' | \
+          bedtools sort > {output.temppos}
+
+        # get subtract for the zero positions
+        bedtools subtract -a {input.bed} -b {output.temppos} | \
+          awk '{{printf("%s\\t0\\n", $0)}}' > {output.tempzeros}
+
+        # now cat and sort
+        cat {output.temppos} {output.tempzeros} | \
+          sort -k1,1 -k2,2n -k3,3n > {output.bg}
+
+        # now do the steps to make a bigwig
+        chmod u+x {input.bedsort}
+        chmod u+x {input.bed2bw}
+        {input.bedsort} {output.bg} {output.depth}
+        {input.bed2bw} {output.depth} {input.cs} {output.bw}
+        """
+
+rule telomere_kmer_bigwig_to_multivec:
+    """
+    make a multivec from multiple bigwig files based on working multivec spec
+      - https://paper.dropbox.com/doc/Multivec-Spec-3IelZjzjXDo7mGy3SkGUF
+
+    This multivec file is from looking at the kmers present in the genome
+
+    #--row-infos-filename {input.rows} \
+    """
+    input:
+        bw_f = config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_f.bw",
+        bw_r = config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_r.bw",
+        #rows = config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        multivec = config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5"
+    threads: 1
+    shell:
+        """
+        clodius convert bigwigs-to-multivec {input.bw_f} {input.bw_r} \
+        --chromsizes-filename {input.cs} \
+        --output-file {output.multivec}
         """
 
 rule kmer_positions_bigwig:
@@ -389,26 +459,6 @@ rule bigwig_of_telomeres:
         {input.bed2bw} {output.bg_s} {input.cs} {output.bw}
         """
 
-rule telomere_multivec:
-    """
-    makes a multivec file in the format needed for higlass
-    """
-    input:
-        bg_f  =   config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bg",
-        bg_r  =   config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bg",
-    output:
-        mv    =   config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}.bg",
-        rows  =   config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
-    params:
-        forward = lambda wildcards: config["telomere_seqs"][wildcards.telo]["f"], 
-        reverse = lambda wildcards: config["telomere_seqs"][wildcards.telo]["r"] 
-    threads: 1
-    shell:
-        """
-        bedtools unionbedg -i {input.bg_f} {input.bg_r} >> {output.mv}
-        echo -e '{params.forward}\n{params.reverse}' > {output.rows}
-        """
-
 rule telomere_bigwig_to_multivec:
     """
     make a multivec from multiple bigwig files based on working multivec spec
@@ -431,24 +481,97 @@ rule telomere_bigwig_to_multivec:
         --output-file {output.multivec}
         """
 
-rule aggregate_telomere_multivec:
+# candidate for deletion - we no longer need this as we use clodius to join two bigwigs
+#rule telomere_multivec:
+#    """
+#    makes a multivec file in the format needed for higlass
+#    """
+#    input:
+#        bg_f  =   config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bg",
+#        bg_r  =   config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bg",
+#    output:
+#        mv    =   config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}.bg",
+#        rows  =   config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
+#    params:
+#        forward = lambda wildcards: config["telomere_seqs"][wildcards.telo]["f"], 
+#        reverse = lambda wildcards: config["telomere_seqs"][wildcards.telo]["r"] 
+#    threads: 1
+#    shell:
+#        """
+#        bedtools unionbedg -i {input.bg_f} {input.bg_r} >> {output.mv}
+#        echo -e '{params.forward}\n{params.reverse}' > {output.rows}
+#        """
+
+# candidate for deletion
+#rule aggregate_telomere_multivec:
+#    """
+#    #--row-infos-filename {input.rows} \
+#    """
+#    input:
+#        mv    =    config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}.bg",
+#        #rows  =    config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
+#        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+#    output:
+#        multivec = config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.mv5"
+#    threads: 1
+#    shell:
+#        """
+#        clodius convert bedfile-to-multivec \
+#          {input.mv} \
+#          --chromsizes-filename {input.cs} \
+#          --starting-resolution 1 \
+#          --output-file {output.multivec}
+#        """
+
+rule shortread_telomere_kmers_bws:
     """
+    grep the bam files to get the read depths from telomere kmers
+    """
+    input:
+        bams = expand(config["tool"] + "/input/bams/{{nom}}_{lib}_to_ref.sorted.bam", lib=config["libs"]),
+        picard = picard_path,
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        bg   = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_{telodir}.bg",
+        bg_s = temp(config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_{telodir}.s.bg"),
+        bw   = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_{telodir}.bw",
+    params:
+        telokmer = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir]
+    threads: max(1, int(workflow.cores/4))
+    shell:
+        """
+        samtools cat {input.bams} | \
+          samtools view -h - | \
+          grep '@\\|{params.telokmer}' | \
+          samtools sort -@ {threads} - | \
+          bedtools genomecov -ibam stdin -bga -split > {output.bg}
+        chmod u+x {input.bedsort}
+        chmod u+x {input.bed2bw}
+        {input.bedsort} {output.bg} {output.bg_s}
+        {input.bed2bw} {output.bg_s} {input.cs} {output.bw}
+        """
+
+rule shortread_telomere_bws_to_multivec:
+    """
+    make a multivec from multiple bigwig files based on working multivec spec
+      - https://paper.dropbox.com/doc/Multivec-Spec-3IelZjzjXDo7mGy3SkGUF
+
     #--row-infos-filename {input.rows} \
     """
     input:
-        mv    =    config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}.bg",
-        #rows  =    config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
+        bw_f = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_f.bw",
+        bw_r = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_r.bw",
         cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
     output:
-        multivec = config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.mv5"
+        multivec = config["tool"] + "/output/{nom}/{nom}_telomereSRDepth_{telo}.bw.mv5"
     threads: 1
     shell:
         """
-        clodius convert bedfile-to-multivec \
-          {input.mv} \
-          --chromsizes-filename {input.cs} \
-          --starting-resolution 1 \
-          --output-file {output.multivec}
+        clodius convert bigwigs-to-multivec {input.bw_f} {input.bw_r} \
+        --chromsizes-filename {input.cs} \
+        --output-file {output.multivec}
         """
 
 rule kmer_lookup_longreads:
