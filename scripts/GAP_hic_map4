@@ -262,7 +262,7 @@ rule telomere_kmer_positions_bigwig:
         """
         # get the kmer positions
         cat {input.assem} | \
-          python {input.kmer_counter} {params.k} {params.telokmer} | \
+          python {input.kmer_counter} {params.telokmer} | \
           bedtools merge | \
           awk '{{if (($3-$2)/{params.k} > 1) {{ \
           printf("%s\\t%d\\t%d\\t%d\\n", $1, $2, $3, ($3-$2)/{params.k} )}}}}' | \
