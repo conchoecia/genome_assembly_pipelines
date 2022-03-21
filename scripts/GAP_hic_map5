@@ -4,7 +4,10 @@ This snakefile maps all the HiC reads to a final genome assembly
   - It also calculates the obs/exp matrix, and the pearson exp matrix of that
   - It maps long reads to the assembly then makes a depth histogram that can be
      viewed in HiGlass
+
+font is small here: https://patorjk.com/software/taag
 """
+
 from Bio import SeqIO
 import gzip
 import os
@@ -12,7 +15,7 @@ import sys
 minchromsize = 1000000
 configfile: "config.yaml"
 config["tool"] = "GAP_hic_map5"
-qvals = [0,5,10,15,20]
+qvals = [0,20]
 
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 kmer_position_path=os.path.join(filepath, "../bin/kmer_positions.py")
@@ -126,56 +129,53 @@ wildcard_constraints:
     kmer="[A-Za-z0-9]+",
     nom="[A-Za-z0-9.]+",
     telo="[A-Za-z0-9]+",
+    binsize="[0-9]+",
+    qval="[0-9]+",
     telodir="[fr]"
 
 rule all:
     input:
-        #assembly file for juicebox assembly tools from Jessen's assembly kit
+        # Juicebox Assembly Tools part
         expand(config["tool"] + "/output/{nom}/{nom}.assembly",
                nom = config["assemblies"]),
-        # the hic fies from juicebox assembly tools
         expand(config["tool"] + "/output/{nom}/{nom}_allLibs_q_{qval}.hic",
                nom = config["assemblies"], qval = qvals),
 
-        ##stats - this is in the pair processing step. fine with HiC-v2
-        #expand(config["tool"] + "/output/pairsam_stats/{nom}_parsed.pairsam.stats",
-        #       nom = config["assemblies"]),
-        #expand(config["tool"] + "/output/pairsam_stats/{nom}_parsed_sorted_dedupe.pairsam.stats",
-        #       nom = config["assemblies"]),
-        #expand(config["tool"] + "/output/pairs/{nom}/{nom}.dedup.filt.pairs.covstats",
-        #       nom = config["assemblies"]),
+        # pretext view
+        expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
 
-        ## now make a hic map
-        #expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.gi.tsv",
-        #       nom = config["assemblies"], binsize=config["binsize"]),
-        #expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.best_connection.tsv",
-        #       nom = config["assemblies"], binsize=config["binsize"]),
+        # HiGlass version
+        expand(config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.covstats",
+               nom = config["assemblies"], qval = qvals),
+        # chromsize
+        expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
+               nom = config["assemblies"]),
+        # gaps
+        expand(config["tool"] + "/output/{nom}/{nom}_gaps.bed",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_gaps.beddb",
+               nom = config["assemblies"]),
+        # mcool from balanced
+        expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.balanced.mcool",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+        # get an interaction matrix and the best connected scaffolds
+        expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.tsv",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.best_connection.tsv",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
 
-        ##final files
-        ## chromsize
-        #expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
-        #       nom = config["assemblies"]),
-        ## gaps
-        #expand(config["tool"] + "/output/{nom}/{nom}_gaps.bed",
-        #       nom = config["assemblies"]),
-        #expand(config["tool"] + "/output/{nom}/{nom}_gaps.beddb",
-        #       nom = config["assemblies"]),
-        ## get the diagnostic png before doing anything else
-        #expand(config["tool"] + "/output/{nom}/{nom}.{binsize}.cool.png",
-        #       nom = config["assemblies"], binsize=config["binsize"]),
-        ## balanced cool
-        #expand(config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool",
-        #       nom = config["assemblies"], binsize=config["binsize"]),
-        ## mcool from balanced
-        #expand(config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.mcool",
-        #       nom = config["assemblies"], binsize=config["binsize"]),
-        ### pretext view
-        #expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
-        ## plots of AB compartmentalization
-        #expand(config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf",
-        #       nom = config["assemblies"],
-        #       binsize = [x for x in config["binsize"] if int(x) >= 50000]),
 
+        # get read depths
+        expand(config["tool"] + "/output/{nom}/{nom}_{datatype}.bw",
+               datatype = ["TXdepth", "LRdepth"],
+               nom = config["assemblies"]),
+        ## LR telomere bams
+        expand(config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5",
+               telo = config["telomere_seqs"], nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5",
+               telo = config["telomere_seqs"], nom = config["assemblies"]),
+
+        # abandoned code
         ## read_depth_positions
         ##expand(config["tool"] + "/output/{nom}/{nom}_kmer_{kmer}.bw",
         ##       kmer = config["kmers"], nom = config["assemblies"]),
@@ -183,26 +183,12 @@ rule all:
         ##       kmer = config["kmers"], nom = config["assemblies"]),
         ##expand(config["tool"] + "/output/{nom}/{nom}_kmerInSR_{kmer}.bw",
         ##       kmer = config["kmers"], nom = config["assemblies"]),
-
-        #expand(config["tool"] + "/output/{nom}/{nom}_{datatype}.bw",
-        #       datatype = ["SRdepth", "TXdepth", "LRdepth"],
-        #       nom = config["assemblies"]),
-
-
-        ## LR telomere bams
-        ##expand(config["tool"] + "/input/telomere_reads/{telo}_{telodir}_LR_readlist.txt",
-        ##       telo = config["telomere_seqs"], telodir = ["f", "r"]),
-        ##expand(config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}.bam",
-        ##       LR = [os.path.basename(x) for x in config["LR"]],
-        ##       telo = config["telomere_seqs"], telodir = ["f", "r"],
-        ##       nom = config["assemblies"]),
-        #expand(config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5",
-        #       telo = config["telomere_seqs"], nom = config["assemblies"]),
         #expand(config["tool"] + "/output/{nom}/{nom}_telomereSRDepth_{telo}.bw.mv5",
         #       telo = config["telomere_seqs"], nom = config["assemblies"]),
-        #expand(config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5",
-        #       telo = config["telomere_seqs"], nom = config["assemblies"]),
-
+        ## plots of AB compartmentalization
+        #expand(config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf",
+        #       nom = config["assemblies"],
+        #       binsize = [x for x in config["binsize"] if int(x) >= 50000]),
         ### output interaction matrix used for running the Lorentz 3DGR problem
         ##expand(config["tool"] + "/output/{nom}/3DGR/{nom}_balanced.{binsize}.if.tsv",
         ##       nom = config["assemblies"], binsize=config["binsize"]),
@@ -228,6 +214,11 @@ rule chrom_size:
         bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
         """
 
+#      _ ___   _ _____     _    _       __ _ _
+#   _ | | _ ) /_\_   _|   | |_ (_)__   / _(_) |___ ___
+#  | || | _ \/ _ \| |    _| ' \| / _| |  _| | / -_|_-<
+#   \__/|___/_/ \_\_|   (_)_||_|_\__| |_| |_|_\___/__/
+#
 rule compile_chromap:
     """
     compile chromap if it does not yet exist
@@ -320,7 +311,7 @@ rule gzip_pairs:
     threads: 1
     shell:
         """
-        cat {input.pairs} | gzip > {output.pairs}
+        bgzip -c {input.pairs} > {output.pairs}
         """
 
 rule pairs2hiclongformat:
@@ -329,13 +320,13 @@ rule pairs2hiclongformat:
     3d-dna long spec can be found here: https://github.com/aidenlab/juicer/wiki/Pre#long-format
     """
     input:
-        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz"
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs"
     output:
         longp = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.long"
     threads: 1
     shell:
         """
-        zgrep -v '#' {input.pairs} | \
+        grep -v '#' {input.pairs} | \
         awk '{{if($6!="+") $6=16; else $6=0; if($7!="+") $7=16; else $7=0}} \
             $2<=$4{{print $6, $2, $3, 0, $7, $4, $5, 1, "1 - - 1  - - -" }} \
             $4<$2{{print $7, $4, $5, 0, $6, $2, $3, 1, "1 - - 1  - - -" }}' > {output.longp}
@@ -388,242 +379,825 @@ rule JBAT_pairs_to_hic:
            mv {params.outprefix} {params.mvprefix}${{QVAL}}{params.mvsuffix}
         done
         """
+#   _  _ _  ___ _              __  __      _       _
+#  | || (_)/ __| |__ _ ______ |  \/  |__ _| |_ _ _(_)_ __
+#  | __ | | (_ | / _` (_-<_-< | |\/| / _` |  _| '_| \ \ /
+#  |_||_|_|\___|_\__,_/__/__/ |_|  |_\__,_|\__|_| |_/_\_\
+#
 
-#rule genome_bed:
-#    """
-#    just a bed file of the whole genome assembly to usebedtools subtract
-#    """
-#    input:
-#        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
-#    output:
-#        bed = config["tool"] + "/output/{nom}/{nom}.bed"
-#    threads: 1
-#    shell:
-#        """
-#        bioawk -cfastx '{{printf("%s\\t0\\t%d\\n", $name, length($seq))}}' {input.assem} | \
-#          bedtools sort > {output.bed}
-#        """
+rule generate_coverage_stats_final_pairs:
+    """
+    Look at the pairs file to determine to interchromosomal connectivity.
+    """
+    input:
+        final = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz",
+        chromsize = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        stats = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.covstats"
+    threads: 1
+    run:
+        scaf_to_size = {}
+        # first get the chromosome sizes
+        with open(input.chromsize, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    scaf_to_size[splitd[0]] = int(splitd[1])
+        # now parse the pairs file
+        interchrom_counter = {key: 0 for key in scaf_to_size}
+        intrachrom_counter = {key: 0 for key in scaf_to_size}
+        import gzip
+        with gzip.open(input.final, "rb") as f:
+            for line in f:
+                line = line.decode("utf-8").strip()
+                if line and not line.startswith("#"):
+                    chrom1 = line.split("\t")[1]
+                    chrom2 = line.split("\t")[3]
+                    if chrom1 == chrom2:
+                        intrachrom_counter[chrom1] += 1
+                    else:
+                        interchrom_counter[chrom1] += 1
+                        interchrom_counter[chrom2] += 1
+        # now print the information about each scaffold
+        # fields are
+        # 1 - scaffold
+        # 2 - intrachrom pairs count
+        # 3 - interchrom pairs count
+        # 4 - scaf length
+        # 5 - length of all other scafs
+        # 6 - intrachrom divided by scaf length
+        # 7 - interchrom / ( scaf len * len of other scafs)
+        with open(output.stats, "w") as f:
+            for key in scaf_to_size:
+                others_size = sum([scaf_to_size[x] for x in scaf_to_size if x != key])
+                outstr  = key + "\t"                      # 1 - scaffold
+                outstr += str(intrachrom_counter[key]) + "\t"  # 2 - intrachrom pairs count
+                outstr += str(interchrom_counter[key]) + "\t"  # 3 - interchrom counter
+                outstr += str(scaf_to_size[key]) + "\t"        # 4 - scaf length
+                outstr += str(others_size) + "\t"              # 5 - length of all other scafs
+                outstr += str(intrachrom_counter[key] / scaf_to_size[key]) + "\t" # 6 - intrachrom divided by scaf length
+                outstr += "{:.20f}".format(interchrom_counter[key] / (scaf_to_size[key] * others_size))  # 7 - interchrom divided by (scaf len * len of other scafs)
+                print(outstr, file = f)
+
+rule index_pairs:
+    """
+    indexing output. the *.pairs.gz suffix is important to parse the file correctly!
+    """
+    input:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz",
+    output:
+        index = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz.px2"
+    threads: 1
+    shell:
+        """
+        pairix -f {input.pairs}
+        """
+
+rule make_bins_individual:
+    """
+    This makes the matrix and bins everything
+    i.e. binsize: 5000 (high resolution), 500000 (lower resolution)
+    """
+    input:
+        final = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz",
+        index = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz.px2",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
+    threads: 1
+    params:
+        bs = lambda wildcards: wildcards.binsize,
+        nom = lambda wildcards: wildcards.nom,
+        outname = lambda wildcards: "{tool}/output/{nom}/{nom}.q_{qval}.{binsize}.cool".format(
+            tool=config["tool"], nom = wildcards.nom,
+            binsize = wildcards.binsize,
+            qval = wildcards.qval)
+    threads: max(8, int((workflow.cores -1)/4))
+    shell:
+        """
+        cooler cload pairix --nproc {threads} {input.cs}:{params.bs} {input.final} {params.outname}
+        """
+
+rule diagnostic_plot:
+    """
+    This generates a diagnostic plot of the bin distribution to pick the z-score cutoffs
+    """
+    input:
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
+    output:
+        png = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool.png"
+    shell:
+        """
+        hicCorrectMatrix diagnostic_plot -m {input.cool} -o {output.png}
+        """
+
+rule cutoff_matrix:
+    """
+    Balances the matrix using the z-score cutoffs. Removes bins that are too dense or sparse
+    """
+    input:
+        png = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool.png",
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
+    output:
+        balanced = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.balanced.cool"
+    params:
+        zmin = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmin"],
+        zmax = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmax"],
+        binsize = lambda wildcards: wildcards.binsize
+    threads: 1
+    shell:
+        """
+        if [ "{params.zmin}" -eq "0" ]; then
+            echo "Set the {params.binsize} zmin to something other than 0";
+            exit;
+        fi
+        if [ "{params.zmax}" -eq "0" ]; then
+            echo "Set the {params.binsize} zmax to something other than 0";
+            exit;
+        fi
+        hicCorrectMatrix correct -m {input.cool} \
+             --filterThreshold {params.zmin} {params.zmax} \
+             -o {output.balanced}
+        """
+
+rule zoomify_matrix:
+    """
+    ## Aggregation (for HiGlass view)
+      - This generates a *.mcool file from the balanced cool file
+    """
+    input:
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.balanced.cool"
+    output:
+        mcool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.balanced.mcool"
+    threads: 1
+    shell:
+        """
+        cooler zoomify -o {output.mcool} {input.cool}
+        """
+
+# This part makes a pretext map
+rule make_pretextmap:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        index   = config["tool"] + "/input/assembly/{nom}_input.fasta.index",
+        chromap = chromappath,
+        left  = flatten([config["libs"][x]["read1"] for x in config["libs"]]),
+        right = flatten([config["libs"][x]["read2"] for x in config["libs"]])
+    output:
+        pretext = config["tool"] + "/output/{nom}/{nom}.pretext"
+    params:
+        left  = " -1 ".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
+        right = " -2 ".join(flatten([config["libs"][x]["read2"] for x in config["libs"]]))
+    threads: workflow.cores - 2
+    shell:
+        """
+        {input.chromap}  -x {input.index} \
+            -r {input.assem} \
+            -1 {params.left}  \
+            -2 {params.right} \
+            -t {threads} \
+            --split-alignment --pairs \
+            --SAM \
+            -o /dev/stdout | \
+        PretextMap --sortby nosort -o {output.pretext}
+        """
+
+#   ___  _   _              _  _ _  ___ _              ___ _         __  __
+#  / _ \| |_| |_  ___ _ _  | || (_)/ __| |__ _ ______ / __| |_ _  _ / _|/ _|
+# | (_) |  _| ' \/ -_) '_| | __ | | (_ | / _` (_-<_-< \__ \  _| || |  _|  _|
+#  \___/ \__|_||_\___|_|   |_||_|_|\___|_\__,_/__/__/ |___/\__|\_,_|_| |_|
+
+rule genome_bed:
+    """
+    just a bed file of the whole genome assembly to usebedtools subtract
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        bed = config["tool"] + "/output/{nom}/{nom}.bed"
+    threads: 1
+    shell:
+        """
+        bioawk -cfastx '{{printf("%s\\t0\\t%d\\n", $name, length($seq))}}' {input.assem} | \
+          bedtools sort > {output.bed}
+        """
+
+rule gaps_from_assembly:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+    output:
+        gapbed = config["tool"] + "/output/{nom}/{nom}_gaps.bed"
+    threads: 1
+    run:
+        # this block of code from https://www.biostars.org/p/133742/
+        #import the SeqIO module from Biopython
+        outhandle = open(output.gapbed, "w")
+        with open(input.assem, mode="r") as fasta_handle:
+            for record in SeqIO.parse(fasta_handle, "fasta"):
+                start_pos=0
+                counter=0
+                gap=False
+                gap_length = 0
+                for char in record.seq:
+                    if char == 'N':
+                        if gap_length == 0:
+                            start_pos=counter
+                            gap_length = 1
+                            gap = True
+                        else:
+                            gap_length += 1
+                    else:
+                        if gap:
+                            print("{} {} {}".format(
+                                record.id,
+                                start_pos,
+                                start_pos + gap_length),
+                                  file = outhandle)
+                            gap_length = 0
+                            gap = False
+                    counter += 1
+        outhandle.close()
+
+rule make_gaps_beddb:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        gapbed = config["tool"] + "/output/{nom}/{nom}_gaps.bed",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        beddb = config["tool"] + "/output/{nom}/{nom}_gaps.beddb"
+    threads: 1
+    shell:
+        """
+        clodius aggregate bedfile \
+          --chromsizes-filename {input.cs} \
+          --delimiter " " {input.gapbed} \
+          --assembly {input.assem} \
+          --output-file {output.beddb}
+        """
+
+# random stuff
+#  ___              _                _         __  __
+# | _ \__ _ _ _  __| |___ _ __    __| |_ _  _ / _|/ _|
+# |   / _` | ' \/ _` / _ \ '  \  (_-<  _| || |  _|  _|
+# |_|_\__,_|_||_\__,_\___/_|_|_| /__/\__|\_,_|_| |_|
 #
-#rule telomere_kmer_positions_bigwig:
+
+# Now we get the Hi-C interaction matrix
+rule make_hic_matrix_simple:
+    input:
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
+    output:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.tsv"
+    params:
+        gi = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi"
+    threads: 1
+    shell:
+        """
+        hicConvertFormat -m {input.cool} \
+           --outFileName {params.gi} \
+           --inputFormat cool \
+           --outputFormat ginteractions
+        """
+
+rule best_connected_scaffold:
+    """
+    Find which scaffold is the best connected to each.
+      - This is most useful for placing scaffolds during manual edits
+
+    COW1    12000   14000   sca1    4000    6000    0.003780422975718399
+    COW1    16000   18000   sca1    2000    4000    0.0013141025221723496
+    COW1    32000   34000   sca1    0       2000    0.0012358846777278977
+    """
+    input:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.tsv",
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.best_connection.tsv"
+    threads: 1
+    run:
+        scaf_sizes = {}
+        # first we need to get the scaffold sizes without gaps
+        for record in SeqIO.parse(input.assem, "fasta"):
+            scaf_sizes[record.id] = len(str(record.seq).replace("N",
+                                                "").replace("n", ""))
+        contact_dict = {}
+        # now we process the table
+        with open(input.hicm, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    scaf1 = fields[0]
+                    scaf2 = fields[3]
+                    if scaf1 != scaf2:
+                        value = float(fields[6])
+                        if scaf1 not in contact_dict:
+                            contact_dict[scaf1] = {}
+                        if scaf2 not in contact_dict:
+                            contact_dict[scaf2] = {}
+
+                        if scaf1 not in contact_dict[scaf2]:
+                            contact_dict[scaf2][scaf1] = 0
+                        if scaf2 not in contact_dict[scaf1]:
+                            contact_dict[scaf1][scaf2] = 0
+                        contact_dict[scaf1][scaf2] += value
+                        contact_dict[scaf2][scaf1] += value
+
+        ## now we correct for basepair area
+        #for i in contact_dict:
+        #    for j in contact_dict[i]:
+        #        bp_i = scaf_sizes[i]
+        #        bp_j = scaf_sizes[j]
+        #        area = bp_i * bp_j
+        #        value = contact_dict[i][j]
+        #        #print("{}: {} * {}: {} = {} || {}/{} = {}".format(i, bp_i, j, bp_j, area, value, area, value/area))
+        #        contact_dict[i][j] = value/bp_j
+
+        # now we print out the strongest connection
+        outhandle = open(output.hicm, "w")
+        for this_scaf in scaf_sizes:
+            max_val = 0
+            max_scaf = "NA"
+            #print (this_scaf, contact_dict[this_scaf])
+            #print()
+            if this_scaf in contact_dict:
+                for other_scaf in contact_dict[this_scaf]:
+                    thisval = contact_dict[this_scaf][other_scaf]
+                    if thisval > max_val:
+                        max_val = thisval
+                        max_scaf = other_scaf
+                print("{}\t{}\t{}".format(this_scaf, max_scaf, max_val),
+                                          file = outhandle)
+            else:
+                print("{}\t{}\t{}".format(this_scaf, "NA", "0"),
+                                          file = outhandle)
+
+# ___________    .__                                         __
+# \__    ___/___ |  |   ____   _____   ___________   ____   |  | __ _____   ___________ 
+#   |    |_/ __ \|  |  /  _ \ /     \_/ __ \_  __ \_/ __ \  |  |/ //     \_/ __ \_  __ \
+#   |    |\  ___/|  |_(  <_> )  Y Y  \  ___/|  | \/\  ___/  |    <|  Y Y  \  ___/|  | \/
+#   |____| \___  >____/\____/|__|_|  /\___  >__|    \___  > |__|_ \__|_|  /\___  >__|   
+#              \/                  \/     \/            \/       \/     \/     \/       
+
+rule telomere_kmer_positions_bigwig:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        kmer_counter = kmer_position_path,
+        bed = config["tool"] + "/output/{nom}/{nom}.bed",
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        temppos   = temp(config["tool"] + "/output/depth/TEMP_{nom}_teloKmer_{telo}_{telodir}.nozero.bg"),
+        tempzeros = temp(config["tool"] + "/output/depth/TEMP_{nom}_teloKmer_{telo}_{telodir}.zero.bg"),
+        bg    = temp(config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_{telodir}.bg"),
+        depth = temp(config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_{telodir}.s.bg"),
+        bw    =      config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_{telodir}.bw"
+    params:
+        telokmer = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir],
+        k = lambda wildcards: len(config["telomere_seqs"][wildcards.telo][wildcards.telodir])
+    threads: 1
+    shell:
+        """
+        # get the kmer positions
+        cat {input.assem} | \
+          python {input.kmer_counter} {params.telokmer} | \
+          bedtools merge | \
+          awk '{{if (($3-$2)/{params.k} > 1) {{ \
+          printf("%s\\t%d\\t%d\\t%d\\n", $1, $2, $3, ($3-$2)/{params.k} )}}}}' | \
+          bedtools sort > {output.temppos}
+
+        # get subtract for the zero positions
+        bedtools subtract -a {input.bed} -b {output.temppos} | \
+          awk '{{printf("%s\\t0\\n", $0)}}' > {output.tempzeros}
+
+        # now cat and sort
+        cat {output.temppos} {output.tempzeros} | \
+          sort -k1,1 -k2,2n -k3,3n > {output.bg}
+
+        # now do the steps to make a bigwig
+        chmod u+x {input.bedsort}
+        chmod u+x {input.bed2bw}
+        {input.bedsort} {output.bg} {output.depth}
+        {input.bed2bw} {output.depth} {input.cs} {output.bw}
+        """
+
+rule telomere_kmer_bigwig_to_multivec:
+    """
+    make a multivec from multiple bigwig files based on working multivec spec
+      - https://paper.dropbox.com/doc/Multivec-Spec-3IelZjzjXDo7mGy3SkGUF
+
+    This multivec file is from looking at the kmers present in the genome
+
+    #--row-infos-filename {input.rows} \
+    """
+    input:
+        bw_f = config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_f.bw",
+        bw_r = config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_r.bw",
+        #rows = config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        multivec = config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5"
+    threads: 1
+    shell:
+        """
+        clodius convert bigwigs-to-multivec {input.bw_f} {input.bw_r} \
+        --chromsizes-filename {input.cs} \
+        --output-file {output.multivec}
+        """
+
+rule kmer_positions_bigwig:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        kmer_counter = kmer_position_path,
+        bed = config["tool"] + "/output/{nom}/{nom}.bed",
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        temppos   = temp(config["tool"] + "/output/depth/TEMP_{nom}_kmer_{kmer}.nozero.bg"),
+        tempzeros = temp(config["tool"] + "/output/depth/TEMP_{nom}_kmer_{kmer}.zero.bg"),
+        bg    =      config["tool"] + "/output/depth/{nom}_kmer_{kmer}.bg",
+        depth = temp(config["tool"] + "/output/depth/{nom}_kmer_{kmer}.s.bg"),
+        bw    =      config["tool"] + "/output/{nom}/{nom}_kmer_{kmer}.bw"
+    params:
+        tkmers = lambda wildcards: " ".join(config["kmers"][wildcards.kmer]),
+        k = lambda wildcards: int(list(set([len(x) for x in config["kmers"][wildcards.kmer]]))[0])
+    threads: 1
+    shell:
+        """
+        # get the kmer positions
+        cat {input.assem} | \
+          python {input.kmer_counter} {params.k} {params.tkmers} | \
+          bedtools merge | \
+          awk '{{if (($3-$2)/{params.k} > 1) {{ \
+          printf("%s\\t%d\\t%d\\t%d\\n", $1, $2, $3, ($3-$2)/{params.k} )}}}}' | \
+          bedtools sort > {output.temppos}
+
+        # get subtract for the zero positions
+        bedtools subtract -a {input.bed} -b {output.temppos} | \
+          awk '{{printf("%s\\t0\\n", $0)}}' > {output.tempzeros}
+
+        # now cat and sort
+        cat {output.temppos} {output.tempzeros} | \
+          sort -k1,1 -k2,2n -k3,3n > {output.bg}
+
+        # now do the steps to make a bigwig
+        chmod u+x {input.bedsort}
+        chmod u+x {input.bed2bw}
+        {input.bedsort} {output.bg} {output.depth}
+        {input.bed2bw} {output.depth} {input.cs} {output.bw}
+        """
+
+# Telomere LR
+#  _____    _                         _    ___
+# |_   _|__| |___ _ __  ___ _ _ ___  | |  | _ \
+#   | |/ -_) / _ \ '  \/ -_) '_/ -_) | |__|   /
+#   |_|\___|_\___/_|_|_\___|_| \___| |____|_|_\
+
+rule telomere_lookup_longreads:
+    """
+    look up the reads with telomere sequences in a specific direction
+    """
+    input:
+        long_reads = expand(config["tool"] + "/input/longreads/{LR}",
+                       LR = [os.path.basename(x) for x in config["LR"]])
+    output:
+        read_list = config["tool"] + "/input/telomere_reads/{telo}_{telodir}_LR_readlist.txt"
+    threads: 1
+    params:
+        grep_string = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir]
+    shell:
+        """
+        zcat -f {input.long_reads} | \
+          bioawk -cfastx '{{print($name, $seq)}}' | \
+          grep '{params.grep_string}' | \
+          awk '{{print($1)}}' > {output.read_list} || true
+        """
+
+rule filter_telo_bams_longreads:
+    """
+    we have a list of reads that have the telomere seqs we want, so
+     pull them out with picard.
+    """
+    input:
+        read_list = config["tool"] + "/input/telomere_reads/{telo}_{telodir}_LR_readlist.txt",
+        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam",
+        picard = picard_path
+    output:
+        bam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}.bam"
+    threads: 1
+    shell:
+        """
+        {{ # try
+           java -jar {input.picard} FilterSamReads \
+            I={input.bam} \
+            O={output.bam} \
+            READ_LIST_FILE={input.read_list} \
+            FILTER=includeReadList
+        }} || {{ # catch
+            # save log for exception
+            samtools view -Hb {input.bam} > {output.bam}
+        }}
+        """
+
+rule filter_telodir_mapdir:
+    """
+    filter the bams so that we know the mapping direction
+    """
+    input:
+        bam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}.bam"
+    output:
+        fbam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}_f.bam",
+        rbam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}_r.bam"
+    threads: 1
+    shell:
+        """
+        samtools view -hb -F 20 {input.bam} | \
+          samtools sort - > {output.fbam}
+        samtools view -hb -F 4 -f 16 {input.bam} | \
+          samtools sort - > {output.rbam}
+        """
+
+rule bedgraph_of_telomeres:
+    input:
+        fbam = expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_f_f.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]]) + \
+               expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_r_r.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]]),
+        rbam = expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_f_r.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]]) + \
+               expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_r_f.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]])
+    output:
+        bg_f  =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bg",
+        bg_r  =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bg",
+    threads: max(4, int(workflow.cores /4))
+    shell:
+        """
+        samtools cat {input.fbam} | \
+          samtools sort -@ {threads} - | \
+          bedtools genomecov -ibam stdin -bga -split > {output.bg_f}
+        samtools cat {input.rbam} | \
+          samtools sort -@ {threads} - | \
+          bedtools genomecov -ibam stdin -bga -split > {output.bg_r}
+        """
+
+rule bigwig_of_telomeres:
+    """
+    just make bigwigs of these files
+    """
+    input:
+        bg = config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.bg",
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        bg_s =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.s.bg",
+        bw   =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.bw",
+    threads: 1
+    shell:
+        """
+        chmod u+x {input.bedsort}
+        chmod u+x {input.bed2bw}
+        {input.bedsort} {input.bg} {output.bg_s}
+        {input.bed2bw} {output.bg_s} {input.cs} {output.bw}
+        """
+
+rule telomere_bigwig_to_multivec:
+    """
+    make a multivec from multiple bigwig files based on working multivec spec
+      - https://paper.dropbox.com/doc/Multivec-Spec-3IelZjzjXDo7mGy3SkGUF
+
+    #--row-infos-filename {input.rows} \
+    """
+    input:
+        bw_f = config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bw",
+        bw_r = config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bw",
+        #rows = config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        multivec = config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5"
+    threads: 1
+    shell:
+        """
+        clodius convert bigwigs-to-multivec {input.bw_f} {input.bw_r} \
+        --chromsizes-filename {input.cs} \
+        --output-file {output.multivec}
+        """
+
+# BG to BW
+#   ___  ___   _         _____      __
+#  | _ )/ __| | |_ ___  | _ ) \    / /
+#  | _ \ (_ | |  _/ _ \ | _ \\ \/\/ /
+#  |___/\___|  \__\___/ |___/ \_/\_/
+#
+
+rule bedgraph_and_bed2bigwig:
+    input:
+        depth   = config["tool"] + "/output/depth/{nom}_{datatype}.bg",
+        bedsort = bedsort_path,
+        bed2bw = bed2bw_path,
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        depth = temp(config["tool"] + "/output/depth/{nom}_{datatype}.s.bg"),
+        bw    = config["tool"] + "/output/{nom}/{nom}_{datatype}.bw"
+    threads: 1
+    shell:
+        """
+        chmod u+x {input.bedsort}
+        chmod u+x {input.bed2bw}
+        {input.bedsort} {input.depth} {output.depth}
+        {input.bed2bw} {output.depth} {input.cs} {output.bw}
+        """
+# Transcript Bigwig
+#  _____                         _      _     _____      __
+# |_   _| _ __ _ _ _  ___ __ _ _(_)_ __| |_  | _ ) \    / /
+#   | || '_/ _` | ' \(_-</ _| '_| | '_ \  _| | _ \\ \/\/ /
+#   |_||_| \__,_|_||_/__/\__|_| |_| .__/\__| |___/ \_/\_/
+#                                 |_|
+
+rule symlink_the_transcripts:
+    """
+    Symlinks the transcripts so they are easier to work with in the rest of the
+      pipeline.
+    """
+    input:
+        LR = config["transcripts"]
+    output:
+        assem = expand(config["tool"] + "/input/transcripts/{tx}",
+                       tx = [os.path.basename(x) for x in config["transcripts"]])
+    params:
+        fileprefix = config["tool"] + "/input/transcripts/"
+    threads: 1
+    run:
+        for thisfile in config["transcripts"]:
+            fname = os.path.basename(thisfile)
+            dest = "{}{}".format(params.fileprefix, fname)
+            os.symlink(thisfile, dest)
+
+rule map_transcripts_to_genome:
+    """
+    maps the reads to the assembly
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        transcripts = config["tool"] + "/input/transcripts/{tx}"
+    output:
+        bam = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam"
+    params:
+        tx_name = lambda wildcards: wildcards.tx
+    threads: workflow.cores - 1
+    shell:
+        """
+        minimap2 -t {threads} -ax splice:hq {input.assem} \
+            --split-prefix {params.tx_name} \
+            {input.transcripts} | \
+          samtools view -hb - | \
+          samtools sort - > {output.bam}
+        """
+
+rule index_transcripts_bams:
+    input:
+        bam = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam"
+    output:
+        bai = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam.bai"
+    threads: 1
+    shell:
+        """
+        samtools index {input.bam}
+        """
+
+rule get_coverage_of_transcripts_bams:
+    input:
+        bams = expand(config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{{nom}}.bam",
+                       tx = [os.path.basename(x) for x in config["transcripts"]]),
+        bais = expand(config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{{nom}}.bam.bai",
+                       tx = [os.path.basename(x) for x in config["transcripts"]])
+    output:
+        depth = config["tool"] + "/output/depth/{nom}_TXdepth.bg"
+    threads: max(4, int(workflow.cores /4))
+    shell:
+        """
+        samtools cat {input.bams} | \
+          samtools sort -@ {threads} - | \
+          bedtools genomecov -ibam stdin -bga -split > {output.depth}
+        """
+#
+#  _                                  _   _____      __
+# | |   ___ _ _  __ _ _ _ ___ __ _ __| | | _ ) \    / /
+# | |__/ _ \ ' \/ _` | '_/ -_) _` / _` | | _ \\ \/\/ /
+# |____\___/_||_\__, |_| \___\__,_\__,_| |___/ \_/\_/
+#               |___/
+
+rule symlink_the_LRs:
+    """
+    Symlinks the long reads so they are easier to work with in the rest of the
+      pipeline.
+    """
+    input:
+        LR = config["LR"]
+    output:
+        assem = expand(config["tool"] + "/input/longreads/{LR}",
+                       LR = [os.path.basename(x) for x in config["LR"]])
+    params:
+        fileprefix = config["tool"] + "/input/longreads/"
+    run:
+        for thisfile in config["LR"]:
+            fname = os.path.basename(thisfile)
+            dest = "{}{}".format(params.fileprefix, fname)
+            os.symlink(thisfile, dest)
+
+rule map_LR_to_genome:
+    """
+    maps the reads to the assembly
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        long_reads = config["tool"] + "/input/longreads/{LR}"
+    output:
+        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam"
+    params:
+        minimaparg = config["minimap2arg"],
+        LR_name = lambda wildcards: wildcards.LR
+    threads: workflow.cores - 1
+    shell:
+        """
+        minimap2 -t {threads} -ax {params.minimaparg} {input.assem} \
+            --split-prefix {params.LR_name} {input.long_reads} | \
+          samtools view -hb - | \
+          samtools sort - > {output.bam}
+        """
+
+rule index_LR_bams:
+    input:
+        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam"
+    output:
+        bai = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam.bai"
+    threads: 1
+    shell:
+        """
+        samtools index {input.bam}
+        """
+
+rule get_coverage_of_LR_bams:
+    input:
+        bams = expand(config["tool"] + "/input/bams_LR/LR_{LR}_to_{{nom}}.bam",
+                       LR = [os.path.basename(x) for x in config["LR"]]),
+        bais = expand(config["tool"] + "/input/bams_LR/LR_{LR}_to_{{nom}}.bam.bai",
+                       LR = [os.path.basename(x) for x in config["LR"]]),
+    output:
+        depth = config["tool"] + "/output/depth/{nom}_LRdepth.bg"
+    threads: max(4, int(workflow.cores /4))
+    shell:
+        """
+        samtools cat {input.bams} | \
+          samtools sort -@ {threads} - | \
+          bedtools genomecov -ibam stdin -bga -split > {output.depth}
+        """
+
+
+
+# Telomere SR
+#  _____    _                         ___ ___
+# |_   _|__| |___ _ __  ___ _ _ ___  / __| _ \
+#   | |/ -_) / _ \ '  \/ -_) '_/ -_) \__ \   /
+#   |_|\___|_\___/_|_|_\___|_| \___| |___/_|_\
+# This probably should get removed eventually since we're
+#  moving away from short reads
+
+#rule shortread_telomere_kmers_bws:
+#    """
+#    grep the bam files to get the read depths from telomere kmers
+#    """
 #    input:
-#        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-#        kmer_counter = kmer_position_path,
-#        bed = config["tool"] + "/output/{nom}/{nom}.bed",
+#        bams = expand(config["tool"] + "/input/bams/{{nom}}_{lib}_to_ref.sorted.bam", lib=config["libs"]),
+#        picard = picard_path,
 #        bedsort = bedsort_path,
 #        bed2bw = bed2bw_path,
 #        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
 #    output:
-#        temppos   = temp(config["tool"] + "/output/depth/TEMP_{nom}_teloKmer_{telo}_{telodir}.nozero.bg"),
-#        tempzeros = temp(config["tool"] + "/output/depth/TEMP_{nom}_teloKmer_{telo}_{telodir}.zero.bg"),
-#        bg    = temp(config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_{telodir}.bg"),
-#        depth = temp(config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_{telodir}.s.bg"),
-#        bw    =      config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_{telodir}.bw"
+#        bg   = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_{telodir}.bg",
+#        bg_s = temp(config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_{telodir}.s.bg"),
+#        bw   = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_{telodir}.bw",
 #    params:
-#        telokmer = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir],
-#        k = lambda wildcards: len(config["telomere_seqs"][wildcards.telo][wildcards.telodir])
-#    threads: 1
+#        telokmer = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir]
+#    threads: max(1, int(workflow.cores/4))
 #    shell:
 #        """
-#        # get the kmer positions
-#        cat {input.assem} | \
-#          python {input.kmer_counter} {params.telokmer} | \
-#          bedtools merge | \
-#          awk '{{if (($3-$2)/{params.k} > 1) {{ \
-#          printf("%s\\t%d\\t%d\\t%d\\n", $1, $2, $3, ($3-$2)/{params.k} )}}}}' | \
-#          bedtools sort > {output.temppos}
-#
-#        # get subtract for the zero positions
-#        bedtools subtract -a {input.bed} -b {output.temppos} | \
-#          awk '{{printf("%s\\t0\\n", $0)}}' > {output.tempzeros}
-#
-#        # now cat and sort
-#        cat {output.temppos} {output.tempzeros} | \
-#          sort -k1,1 -k2,2n -k3,3n > {output.bg}
-#
-#        # now do the steps to make a bigwig
-#        chmod u+x {input.bedsort}
-#        chmod u+x {input.bed2bw}
-#        {input.bedsort} {output.bg} {output.depth}
-#        {input.bed2bw} {output.depth} {input.cs} {output.bw}
-#        """
-#
-#rule telomere_kmer_bigwig_to_multivec:
-#    """
-#    make a multivec from multiple bigwig files based on working multivec spec
-#      - https://paper.dropbox.com/doc/Multivec-Spec-3IelZjzjXDo7mGy3SkGUF
-#
-#    This multivec file is from looking at the kmers present in the genome
-#
-#    #--row-infos-filename {input.rows} \
-#    """
-#    input:
-#        bw_f = config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_f.bw",
-#        bw_r = config["tool"] + "/output/depth/{nom}_teloKmer_{telo}_r.bw",
-#        #rows = config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
-#        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-#    output:
-#        multivec = config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5"
-#    threads: 1
-#    shell:
-#        """
-#        clodius convert bigwigs-to-multivec {input.bw_f} {input.bw_r} \
-#        --chromsizes-filename {input.cs} \
-#        --output-file {output.multivec}
-#        """
-#
-#rule kmer_positions_bigwig:
-#    input:
-#        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-#        kmer_counter = kmer_position_path,
-#        bed = config["tool"] + "/output/{nom}/{nom}.bed",
-#        bedsort = bedsort_path,
-#        bed2bw = bed2bw_path,
-#        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-#    output:
-#        temppos   = temp(config["tool"] + "/output/depth/TEMP_{nom}_kmer_{kmer}.nozero.bg"),
-#        tempzeros = temp(config["tool"] + "/output/depth/TEMP_{nom}_kmer_{kmer}.zero.bg"),
-#        bg    =      config["tool"] + "/output/depth/{nom}_kmer_{kmer}.bg",
-#        depth = temp(config["tool"] + "/output/depth/{nom}_kmer_{kmer}.s.bg"),
-#        bw    =      config["tool"] + "/output/{nom}/{nom}_kmer_{kmer}.bw"
-#    params:
-#        tkmers = lambda wildcards: " ".join(config["kmers"][wildcards.kmer]),
-#        k = lambda wildcards: int(list(set([len(x) for x in config["kmers"][wildcards.kmer]]))[0])
-#    threads: 1
-#    shell:
-#        """
-#        # get the kmer positions
-#        cat {input.assem} | \
-#          python {input.kmer_counter} {params.k} {params.tkmers} | \
-#          bedtools merge | \
-#          awk '{{if (($3-$2)/{params.k} > 1) {{ \
-#          printf("%s\\t%d\\t%d\\t%d\\n", $1, $2, $3, ($3-$2)/{params.k} )}}}}' | \
-#          bedtools sort > {output.temppos}
-#
-#        # get subtract for the zero positions
-#        bedtools subtract -a {input.bed} -b {output.temppos} | \
-#          awk '{{printf("%s\\t0\\n", $0)}}' > {output.tempzeros}
-#
-#        # now cat and sort
-#        cat {output.temppos} {output.tempzeros} | \
-#          sort -k1,1 -k2,2n -k3,3n > {output.bg}
-#
-#        # now do the steps to make a bigwig
-#        chmod u+x {input.bedsort}
-#        chmod u+x {input.bed2bw}
-#        {input.bedsort} {output.bg} {output.depth}
-#        {input.bed2bw} {output.depth} {input.cs} {output.bw}
-#        """
-#
-#rule telomere_lookup_longreads:
-#    """
-#    look up the reads with telomere sequences in a specific direction
-#    """
-#    input:
-#        long_reads = expand(config["tool"] + "/input/longreads/{LR}",
-#                       LR = [os.path.basename(x) for x in config["LR"]])
-#    output:
-#        read_list = config["tool"] + "/input/telomere_reads/{telo}_{telodir}_LR_readlist.txt"
-#    threads: 1
-#    params:
-#        grep_string = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir]
-#    shell:
-#        """
-#        zcat -f {input.long_reads} | \
-#          bioawk -cfastx '{{print($name, $seq)}}' | \
-#          grep '{params.grep_string}' | \
-#          awk '{{print($1)}}' > {output.read_list} || true
-#        """
-#
-#rule filter_telo_bams_longreads:
-#    """
-#    we have a list of reads that have the telomere seqs we want, so
-#     pull them out with picard.
-#    """
-#    input:
-#        read_list = config["tool"] + "/input/telomere_reads/{telo}_{telodir}_LR_readlist.txt",
-#        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam",
-#        picard = picard_path
-#    output:
-#        bam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}.bam"
-#    threads: 1
-#    shell:
-#        """
-#        {{ # try
-#           java -jar {input.picard} FilterSamReads \
-#            I={input.bam} \
-#            O={output.bam} \
-#            READ_LIST_FILE={input.read_list} \
-#            FILTER=includeReadList
-#        }} || {{ # catch
-#            # save log for exception
-#            samtools view -Hb {input.bam} > {output.bam}
-#        }}
-#        """
-#
-#rule filter_telodir_mapdir:
-#    """
-#    filter the bams so that we know the mapping direction
-#    """
-#    input:
-#        bam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}.bam"
-#    output:
-#        fbam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}_f.bam",
-#        rbam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}_r.bam"
-#    threads: 1
-#    shell:
-#        """
-#        samtools view -hb -F 20 {input.bam} | \
-#          samtools sort - > {output.fbam}
-#        samtools view -hb -F 4 -f 16 {input.bam} | \
-#          samtools sort - > {output.rbam}
-#        """
-#
-#rule bedgraph_of_telomeres:
-#    input:
-#        fbam = expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_f_f.bam",
-#                       LR = [os.path.basename(x) for x in config["LR"]]) + \
-#               expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_r_r.bam",
-#                       LR = [os.path.basename(x) for x in config["LR"]]),
-#        rbam = expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_f_r.bam",
-#                       LR = [os.path.basename(x) for x in config["LR"]]) + \
-#               expand(config["tool"] + "/input/telo_reads/{LR}_to_{{nom}}_{{telo}}_r_f.bam",
-#                       LR = [os.path.basename(x) for x in config["LR"]])
-#    output:
-#        bg_f  =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bg",
-#        bg_r  =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bg",
-#    threads: max(4, int(workflow.cores /4))
-#    shell:
-#        """
-#        samtools cat {input.fbam} | \
+#        samtools cat {input.bams} | \
+#          samtools view -h - | \
+#          grep '@\\|{params.telokmer}' | \
 #          samtools sort -@ {threads} - | \
-#          bedtools genomecov -ibam stdin -bga -split > {output.bg_f}
-#        samtools cat {input.rbam} | \
-#          samtools sort -@ {threads} - | \
-#          bedtools genomecov -ibam stdin -bga -split > {output.bg_r}
-#        """
-#
-#rule bigwig_of_telomeres:
-#    """
-#    just make bigwigs of these files
-#    """
-#    input:
-#        bg = config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.bg",
-#        bedsort = bedsort_path,
-#        bed2bw = bed2bw_path,
-#        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-#    output:
-#        bg_s =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.s.bg",
-#        bw   =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.bw",
-#    threads: 1
-#    shell:
-#        """
+#          bedtools genomecov -ibam stdin -bga -split > {output.bg}
 #        chmod u+x {input.bedsort}
 #        chmod u+x {input.bed2bw}
-#        {input.bedsort} {input.bg} {output.bg_s}
+#        {input.bedsort} {output.bg} {output.bg_s}
 #        {input.bed2bw} {output.bg_s} {input.cs} {output.bw}
 #        """
 #
-#rule telomere_bigwig_to_multivec:
+#rule shortread_telomere_bws_to_multivec:
 #    """
 #    make a multivec from multiple bigwig files based on working multivec spec
 #      - https://paper.dropbox.com/doc/Multivec-Spec-3IelZjzjXDo7mGy3SkGUF
@@ -631,12 +1205,11 @@ rule JBAT_pairs_to_hic:
 #    #--row-infos-filename {input.rows} \
 #    """
 #    input:
-#        bw_f = config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bw",
-#        bw_r = config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bw",
-#        #rows = config["tool"] + "/output/depth/multivec/{nom}_telomereLRDepth_{telo}_rows.txt",
+#        bw_f = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_f.bw",
+#        bw_r = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_r.bw",
 #        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
 #    output:
-#        multivec = config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5"
+#        multivec = config["tool"] + "/output/{nom}/{nom}_telomereSRDepth_{telo}.bw.mv5"
 #    threads: 1
 #    shell:
 #        """
@@ -644,57 +1217,6 @@ rule JBAT_pairs_to_hic:
 #        --chromsizes-filename {input.cs} \
 #        --output-file {output.multivec}
 #        """
-#
-##rule shortread_telomere_kmers_bws:
-##    """
-##    grep the bam files to get the read depths from telomere kmers
-##    """
-##    input:
-##        bams = expand(config["tool"] + "/input/bams/{{nom}}_{lib}_to_ref.sorted.bam", lib=config["libs"]),
-##        picard = picard_path,
-##        bedsort = bedsort_path,
-##        bed2bw = bed2bw_path,
-##        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-##    output:
-##        bg   = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_{telodir}.bg",
-##        bg_s = temp(config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_{telodir}.s.bg"),
-##        bw   = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_{telodir}.bw",
-##    params:
-##        telokmer = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir]
-##    threads: max(1, int(workflow.cores/4))
-##    shell:
-##        """
-##        samtools cat {input.bams} | \
-##          samtools view -h - | \
-##          grep '@\\|{params.telokmer}' | \
-##          samtools sort -@ {threads} - | \
-##          bedtools genomecov -ibam stdin -bga -split > {output.bg}
-##        chmod u+x {input.bedsort}
-##        chmod u+x {input.bed2bw}
-##        {input.bedsort} {output.bg} {output.bg_s}
-##        {input.bed2bw} {output.bg_s} {input.cs} {output.bw}
-##        """
-##
-##rule shortread_telomere_bws_to_multivec:
-##    """
-##    make a multivec from multiple bigwig files based on working multivec spec
-##      - https://paper.dropbox.com/doc/Multivec-Spec-3IelZjzjXDo7mGy3SkGUF
-##
-##    #--row-infos-filename {input.rows} \
-##    """
-##    input:
-##        bw_f = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_f.bw",
-##        bw_r = config["tool"] + "/input/telo_SRs/SR_to_{nom}_{telo}_r.bw",
-##        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-##    output:
-##        multivec = config["tool"] + "/output/{nom}/{nom}_telomereSRDepth_{telo}.bw.mv5"
-##    threads: 1
-##    shell:
-##        """
-##        clodius convert bigwigs-to-multivec {input.bw_f} {input.bw_r} \
-##        --chromsizes-filename {input.cs} \
-##        --output-file {output.multivec}
-##        """
 #
 #rule kmer_lookup_longreads:
 #    input:
@@ -828,210 +1350,12 @@ rule JBAT_pairs_to_hic:
 ##        {input.bed2bw} {output.bgs} {input.cs} {output.bw}
 ##        """
 #
-#rule bedgraph_and_bed2bigwig:
-#    input:
-#        depth   = config["tool"] + "/output/depth/{nom}_{datatype}.bg",
-#        bedsort = bedsort_path,
-#        bed2bw = bed2bw_path,
-#        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-#    output:
-#        depth = temp(config["tool"] + "/output/depth/{nom}_{datatype}.s.bg"),
-#        bw    = config["tool"] + "/output/{nom}/{nom}_{datatype}.bw"
-#    threads: 1
-#    shell:
-#        """
-#        chmod u+x {input.bedsort}
-#        chmod u+x {input.bed2bw}
-#        {input.bedsort} {input.depth} {output.depth}
-#        {input.bed2bw} {output.depth} {input.cs} {output.bw}
-#        """
-#
-#rule gaps_from_assembly:
-#    input:
-#        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-#    output:
-#        gapbed = config["tool"] + "/output/{nom}/{nom}_gaps.bed"
-#    threads: 1
-#    run:
-#        # this block of code from https://www.biostars.org/p/133742/
-#        #import the SeqIO module from Biopython
-#        outhandle = open(output.gapbed, "w")
-#        with open(input.assem, mode="r") as fasta_handle:
-#            for record in SeqIO.parse(fasta_handle, "fasta"):
-#                start_pos=0
-#                counter=0
-#                gap=False
-#                gap_length = 0
-#                for char in record.seq:
-#                    if char == 'N':
-#                        if gap_length == 0:
-#                            start_pos=counter
-#                            gap_length = 1
-#                            gap = True
-#                        else:
-#                            gap_length += 1
-#                    else:
-#                        if gap:
-#                            print("{} {} {}".format(
-#                                record.id,
-#                                start_pos,
-#                                start_pos + gap_length),
-#                                  file = outhandle)
-#                            gap_length = 0
-#                            gap = False
-#                    counter += 1
-#        outhandle.close()
-#
-#rule make_beddb:
-#    input:
-#        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-#        gapbed = config["tool"] + "/output/{nom}/{nom}_gaps.bed",
-#        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-#    output:
-#        beddb = config["tool"] + "/output/{nom}/{nom}_gaps.beddb"
-#    threads: 1
-#    shell:
-#        """
-#        clodius aggregate bedfile \
-#          --chromsizes-filename {input.cs} \
-#          --delimiter " " {input.gapbed} \
-#          --assembly {input.assem} \
-#          --output-file {output.beddb}
-#        """
-#
-#rule symlink_the_transcripts:
-#    """
-#    Symlinks the transcripts so they are easier to work with in the rest of the
-#      pipeline.
-#    """
-#    input:
-#        LR = config["transcripts"]
-#    output:
-#        assem = expand(config["tool"] + "/input/transcripts/{tx}",
-#                       tx = [os.path.basename(x) for x in config["transcripts"]])
-#    params:
-#        fileprefix = config["tool"] + "/input/transcripts/"
-#    threads: 1
-#    run:
-#        for thisfile in config["transcripts"]:
-#            fname = os.path.basename(thisfile)
-#            dest = "{}{}".format(params.fileprefix, fname)
-#            os.symlink(thisfile, dest)
-#
-#rule map_transcripts_to_genome:
-#    """
-#    maps the reads to the assembly
-#    """
-#    input:
-#        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-#        transcripts = config["tool"] + "/input/transcripts/{tx}"
-#    output:
-#        bam = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam"
-#    params:
-#        tx_name = lambda wildcards: wildcards.tx
-#    threads: workflow.cores - 1
-#    shell:
-#        """
-#        minimap2 -t {threads} -ax splice:hq {input.assem} \
-#            --split-prefix {params.tx_name} \
-#            {input.transcripts} | \
-#          samtools view -hb - | \
-#          samtools sort - > {output.bam}
-#        """
-#
-#rule index_transcripts_bams:
-#    input:
-#        bam = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam"
-#    output:
-#        bai = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam.bai"
-#    threads: 1
-#    shell:
-#        """
-#        samtools index {input.bam}
-#        """
-#
-#rule get_coverage_of_transcripts_bams:
-#    input:
-#        bams = expand(config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{{nom}}.bam",
-#                       tx = [os.path.basename(x) for x in config["transcripts"]]),
-#        bais = expand(config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{{nom}}.bam.bai",
-#                       tx = [os.path.basename(x) for x in config["transcripts"]])
-#    output:
-#        depth = config["tool"] + "/output/depth/{nom}_TXdepth.bg"
-#    threads: max(4, int(workflow.cores /4))
-#    shell:
-#        """
-#        samtools cat {input.bams} | \
-#          samtools sort -@ {threads} - | \
-#          bedtools genomecov -ibam stdin -bga -split > {output.depth}
-#        """
-#
-#rule symlink_the_LRs:
-#    """
-#    Symlinks the long reads so they are easier to work with in the rest of the
-#      pipeline.
-#    """
-#    input:
-#        LR = config["LR"]
-#    output:
-#        assem = expand(config["tool"] + "/input/longreads/{LR}",
-#                       LR = [os.path.basename(x) for x in config["LR"]])
-#    params:
-#        fileprefix = config["tool"] + "/input/longreads/"
-#    run:
-#        for thisfile in config["LR"]:
-#            fname = os.path.basename(thisfile)
-#            dest = "{}{}".format(params.fileprefix, fname)
-#            os.symlink(thisfile, dest)
-#
-#rule map_LR_to_genome:
-#    """
-#    maps the reads to the assembly
-#    """
-#    input:
-#        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-#        long_reads = config["tool"] + "/input/longreads/{LR}"
-#    output:
-#        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam"
-#    params:
-#        minimaparg = config["minimap2arg"],
-#        LR_name = lambda wildcards: wildcards.LR
-#    threads: workflow.cores - 1
-#    shell:
-#        """
-#        minimap2 -t {threads} -ax {params.minimaparg} {input.assem} \
-#            --split-prefix {params.LR_name} {input.long_reads} | \
-#          samtools view -hb - | \
-#          samtools sort - > {output.bam}
-#        """
-#
-#rule index_LR_bams:
-#    input:
-#        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam"
-#    output:
-#        bai = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam.bai"
-#    threads: 1
-#    shell:
-#        """
-#        samtools index {input.bam}
-#        """
-#
-#rule get_coverage_of_LR_bams:
-#    input:
-#        bams = expand(config["tool"] + "/input/bams_LR/LR_{LR}_to_{{nom}}.bam",
-#                       LR = [os.path.basename(x) for x in config["LR"]]),
-#        bais = expand(config["tool"] + "/input/bams_LR/LR_{LR}_to_{{nom}}.bam.bai",
-#                       LR = [os.path.basename(x) for x in config["LR"]]),
-#    output:
-#        depth = config["tool"] + "/output/depth/{nom}_LRdepth.bg"
-#    threads: max(4, int(workflow.cores /4))
-#    shell:
-#        """
-#        samtools cat {input.bams} | \
-#          samtools sort -@ {threads} - | \
-#          bedtools genomecov -ibam stdin -bga -split > {output.depth}
-#        """
-#
+
+#    _   ___   _   _  _ ___   ___  _  _ ___ ___     ___ ___  ___  ___
+#   /_\ | _ ) /_\ | \| |   \ / _ \| \| | __|   \   / __/ _ \|   \| __|
+#  / _ \| _ \/ _ \| .` | |) | (_) | .` | _|| |) | | (_| (_) | |) | _|
+# /_/ \_\___/_/ \_\_|\_|___/ \___/|_|\_|___|___/   \___\___/|___/|___|
+
 ##rule get_coverage_of_SR_bams:
 ##    input:
 ##        bams  = expand(config["tool"] + "/input/bams/{{nom}}_{lib}_to_ref.sorted.bam",
@@ -1047,263 +1371,7 @@ rule JBAT_pairs_to_hic:
 ##        """
 #
 #
-#rule generate_coverage_stats_final_pairs:
-#    """
-#    Look at the pairs file to determine to interchromosomal connectivity.
-#    """
-#    input:
-#        final = config["tool"] + "/output/pairs/{nom}/{nom}.pairs.gz",
-#        chromsize = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-#    output:
-#        stats = config["tool"] + "/output/pairs/{nom}/{nom}.dedup.filt.pairs.covstats"
-#    threads: 1
-#    run:
-#        scaf_to_size = {}
-#        # first get the chromosome sizes
-#        with open(input.chromsize, "r") as f:
-#            for line in f:
-#                line = line.strip()
-#                if line:
-#                    splitd = line.split("\t")
-#                    scaf_to_size[splitd[0]] = int(splitd[1])
-#        # now parse the pairs file
-#        interchrom_counter = {key: 0 for key in scaf_to_size}
-#        intrachrom_counter = {key: 0 for key in scaf_to_size}
-#        import gzip
-#        with gzip.open(input.final, "rb") as f:
-#            for line in f:
-#                line = line.decode("utf-8").strip()
-#                if line and not line.startswith("#"):
-#                    chrom1 = line.split("\t")[1]
-#                    chrom2 = line.split("\t")[3]
-#                    if chrom1 == chrom2:
-#                        intrachrom_counter[chrom1] += 1
-#                    else:
-#                        interchrom_counter[chrom1] += 1
-#                        interchrom_counter[chrom2] += 1
-#        # now print the information about each scaffold
-#        # fields are
-#        # 1 - scaffold
-#        # 2 - intrachrom pairs count
-#        # 3 - interchrom pairs count
-#        # 4 - scaf length
-#        # 5 - length of all other scafs
-#        # 6 - intrachrom divided by scaf length
-#        # 7 - interchrom / ( scaf len * len of other scafs)
-#        with open(output.stats, "w") as f:
-#            for key in scaf_to_size:
-#                others_size = sum([scaf_to_size[x] for x in scaf_to_size if x != key])
-#                outstr  = key + "\t"                      # 1 - scaffold
-#                outstr += str(intrachrom_counter[key]) + "\t"  # 2 - intrachrom pairs count
-#                outstr += str(interchrom_counter[key]) + "\t"  # 3 - interchrom counter
-#                outstr += str(scaf_to_size[key]) + "\t"        # 4 - scaf length
-#                outstr += str(others_size) + "\t"              # 5 - length of all other scafs
-#                outstr += str(intrachrom_counter[key] / scaf_to_size[key]) + "\t" # 6 - intrachrom divided by scaf length
-#                outstr += "{:.20f}".format(interchrom_counter[key] / (scaf_to_size[key] * others_size))  # 7 - interchrom divided by (scaf len * len of other scafs)
-#                print(outstr, file = f)
-#
-#rule index_pairs:
-#    """
-#    indexing output. the *.pairs.gz suffix is important to parse the file correctly!
-#    """
-#    input:
-#        pairs = config["tool"] + "/output/pairs/{nom}/{nom}.pairs.gz",
-#    output:
-#        index = config["tool"] + "/output/pairs/{nom}/{nom}.pairs.gz.px2"
-#    threads: 1
-#    shell:
-#        """
-#        pairix -f {input.pairs}
-#        """
-#
-#rule make_bins_individual:
-#    """
-#    This makes the matrix and bins everything
-#    i.e. binsize: 5000 (high resolution), 500000 (lower resolution)
-#    """
-#    input:
-#        final = config["tool"] + "/output/pairs/{nom}/{nom}.pairs.gz",
-#        index = config["tool"] + "/output/pairs/{nom}/{nom}.pairs.gz.px2",
-#        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-#    output:
-#        cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
-#    threads: 1
-#    params:
-#        bs = lambda wildcards: wildcards.binsize,
-#        nom = lambda wildcards: wildcards.nom,
-#        outname = lambda wildcards: "{tool}/output/{nom}/{nom}.{binsize}.cool".format(
-#            tool=config["tool"], nom = wildcards.nom, binsize = wildcards.binsize )
-#    shell:
-#        """
-#        cooler cload pairix {input.cs}:{params.bs} {input.final} {params.outname}
-#        """
-#
-#rule diagnostic_plot:
-#    """
-#    This generates a diagnostic plot of the bin distribution to pick the z-score cutoffs
-#    """
-#    input:
-#        cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
-#    output:
-#        png = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool.png"
-#    shell:
-#        """
-#        hicCorrectMatrix diagnostic_plot -m {input.cool} -o {output.png}
-#        """
-#
-#rule cutoff_matrix:
-#    """
-#    Balances the matrix using the z-score cutoffs. Removes bins that are too dense or sparse
-#    """
-#    input:
-#        png = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool.png",
-#        cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
-#    output:
-#        balanced = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
-#    params:
-#        zmin = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmin"],
-#        zmax = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmax"],
-#        binsize = lambda wildcards: wildcards.binsize
-#    threads: 1
-#    shell:
-#        """
-#        if [ "{params.zmin}" -eq "0" ]; then
-#            echo "Set the {params.binsize} zmin to something other than 0";
-#            exit;
-#        fi
-#        if [ "{params.zmax}" -eq "0" ]; then
-#            echo "Set the {params.binsize} zmax to something other than 0";
-#            exit;
-#        fi
-#        hicCorrectMatrix correct -m {input.cool} \
-#             --filterThreshold {params.zmin} {params.zmax} \
-#             -o {output.balanced}
-#        """
-#
-##rule old_balance_matrix:
-##    """
-##    ## Matrix normalization/ balancing
-##    #cooler balance res.<binsize>.cool
-##    ## if any problems with creating output add "--force" option
-##    # this only works with --cis-only. Otherwise it drops a ton of bins
-##    """
-##    input:
-##        cool = config["tool"] + "/output/{nom}/{nom}.{binsize}.cool"
-##    output:
-##        cool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
-##    shell:
-##        """
-##        cp {input.cool} {output.cool}
-##        cooler balance --force {output.cool}
-##        """
-#
-#rule zoomify_matrix:
-#    """
-#    ## Aggregation (for HiGlass view)
-#      - This generates a *.mcool file from the balanced cool file
-#    """
-#    input:
-#        cool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
-#    output:
-#        mcool = config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.mcool"
-#    threads: 1
-#    shell:
-#        """
-#        cooler zoomify -o {output.mcool} {input.cool}
-#        """
-#
-## Now we get the Hi-C interaction matrix
-#rule make_hic_matrix_simple:
-#    input:
-#        cool =   config["tool"] + "/output/{nom}/{nom}_balanced.{binsize}.cool"
-#    output:
-#        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.gi.tsv"
-#    params:
-#        gi = config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.gi"
-#    threads: 1
-#    shell:
-#        """
-#        hicConvertFormat -m {input.cool} \
-#           --outFileName {params.gi} \
-#           --inputFormat cool \
-#           --outputFormat ginteractions
-#        """
-#
-#rule best_connected_scaffold:
-#    """
-#    Find which scaffold is the best connected to each.
-#      - This is most useful for placing scaffolds during manual edits
-#
-#    COW1    12000   14000   sca1    4000    6000    0.003780422975718399
-#    COW1    16000   18000   sca1    2000    4000    0.0013141025221723496
-#    COW1    32000   34000   sca1    0       2000    0.0012358846777278977
-#    """
-#    input:
-#        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.gi.tsv",
-#        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
-#    output:
-#        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}_balanced.{binsize}.best_connection.tsv"
-#    threads: 1
-#    run:
-#        scaf_sizes = {}
-#        # first we need to get the scaffold sizes without gaps
-#        for record in SeqIO.parse(input.assem, "fasta"):
-#            scaf_sizes[record.id] = len(str(record.seq).replace("N",
-#                                                "").replace("n", ""))
-#        contact_dict = {}
-#        # now we process the table
-#        with open(input.hicm, "r") as f:
-#            for line in f:
-#                line = line.strip()
-#                if line:
-#                    fields = line.split("\t")
-#                    scaf1 = fields[0]
-#                    scaf2 = fields[3]
-#                    if scaf1 != scaf2:
-#                        value = float(fields[6])
-#                        if scaf1 not in contact_dict:
-#                            contact_dict[scaf1] = {}
-#                        if scaf2 not in contact_dict:
-#                            contact_dict[scaf2] = {}
-#
-#                        if scaf1 not in contact_dict[scaf2]:
-#                            contact_dict[scaf2][scaf1] = 0
-#                        if scaf2 not in contact_dict[scaf1]:
-#                            contact_dict[scaf1][scaf2] = 0
-#                        contact_dict[scaf1][scaf2] += value
-#                        contact_dict[scaf2][scaf1] += value
-#
-#        ## now we correct for basepair area
-#        #for i in contact_dict:
-#        #    for j in contact_dict[i]:
-#        #        bp_i = scaf_sizes[i]
-#        #        bp_j = scaf_sizes[j]
-#        #        area = bp_i * bp_j
-#        #        value = contact_dict[i][j]
-#        #        #print("{}: {} * {}: {} = {} || {}/{} = {}".format(i, bp_i, j, bp_j, area, value, area, value/area))
-#        #        contact_dict[i][j] = value/bp_j
-#
-#        # now we print out the strongest connection
-#        outhandle = open(output.hicm, "w")
-#        for this_scaf in scaf_sizes:
-#            max_val = 0
-#            max_scaf = "NA"
-#            #print (this_scaf, contact_dict[this_scaf])
-#            #print()
-#            if this_scaf in contact_dict:
-#                for other_scaf in contact_dict[this_scaf]:
-#                    thisval = contact_dict[this_scaf][other_scaf]
-#                    if thisval > max_val:
-#                        max_val = thisval
-#                        max_scaf = other_scaf
-#                print("{}\t{}\t{}".format(this_scaf, max_scaf, max_val),
-#                                          file = outhandle)
-#            else:
-#                print("{}\t{}\t{}".format(this_scaf, "NA", "0"),
-#                                          file = outhandle)
-#
-#
-#
+
 ## Filter out the small chromosomes for further analyses/balancing/et cet
 #rule only_chromosomes:
 #    input:
@@ -1563,22 +1631,3 @@ rule JBAT_pairs_to_hic:
 ##        cat {input.giv} | python {input.gi_to_if_script} > {output.giv}
 ##        """
 #
-## This part makes a pretext map
-#rule make_pretextmap:
-#    input:
-#        bam   = expand(config["tool"] + "/input/bams/{{nom}}_{lib}_to_ref.sorted.bam", lib=config["libs"]),
-#    output:
-#        pretext = config["tool"] + "/output/{nom}/{nom}.pretext"
-#    threads: 1
-#    shell:
-#        """
-#        NUMBAM=$(echo "{input.bam}" | sed 's/ /\\n/g' | wc -l)
-#        if [ ${{NUMBAM}} -gt 1 ]
-#          then
-#            samtools cat -h {input.bam} | samtools view -h - | \
-#                PretextMap --sortby nosort -o {output.pretext}
-#          else
-#            samtools view -h {input.bam} | \
-#                PretextMap --sortby nosort -o {output.pretext}
-#        fi
-#        """
