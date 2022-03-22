@@ -128,7 +128,7 @@ rule index_ref:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
         chromap = os.path.join(filepath, "../bin/chromap/chromap")
     output:
-        index = config["tool"] + "/input/assembly/{nom}_input.fasta.index"
+        index = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.index")
     shell:
         """
         {input.chromap} -i -r {input.assem} -o {output.index}
