@@ -17,6 +17,10 @@ configfile: "config.yaml"
 config["tool"] = "GAP_hic_map5"
 qvals = [0,20]
 
+for x in config["assemblies"]:
+    if "_" in x:
+        raise IOError("You must not have any special characters in the assembly names: {}. Just use [A-Za-z0-9]+".format(x))
+
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 kmer_position_path=os.path.join(filepath, "../bin/kmer_positions.py")
 picard_path=os.path.join(filepath, "../bin/picard.jar")
