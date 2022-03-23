@@ -90,8 +90,11 @@ for key in config["kmers"]:
 print(config["kmers"])
 
 # make this dummy LR fastq file in case we don't actually want to map any reads
+toolpath = os.path.join(os.getcwd(), config["tool"])
+if not os.path.exists(toolpath):
+    os.mkdir(toolpath)
 if "LR" not in config:
-    config["LR"] = ["{}/temp_dont_delete_me.fastq.gz".format(os.path.join(os.getcwd(),config["tool"]))]
+    config["LR"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
     if not os.path.exists(config["LR"][0]):
         content = b""
         f = gzip.open(config["LR"][0], 'wb')
@@ -99,8 +102,11 @@ if "LR" not in config:
         f.close()
 
 # make this dummy transcript file in case we don't actually want to map any reads
+toolpath = os.path.join(os.getcwd(), config["tool"])
+if not os.path.exists(toolpath):
+    os.mkdir(toolpath)
 if "transcripts" not in config:
-    config["transcripts"] = ["{}/temp_dont_delete_me.fastq.gz".format(os.path.join(os.getcwd(),config["tool"]))]
+    config["transcripts"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
     if not os.path.exists(config["transcript"][0]):
         content = b""
         f = gzip.open(config["LR"][0], 'wb')
