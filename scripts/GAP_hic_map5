@@ -25,8 +25,8 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 kmer_position_path=os.path.join(filepath, "../bin/kmer_positions.py")
 picard_path=os.path.join(filepath, "../bin/picard.jar")
 chromappath = os.path.join(filepath, "../bin/chromap/chromap")
-bedsort_path=os.path.join(filepath, "../dependencies/kentutils/bedSort")
-bed2bw_path=os.path.join(filepath,  "../dependencies/kentutils/bedGraphToBigWig")
+bedsort_path=os.path.join(filepath, "../bin/bedSort")
+bed2bw_path=os.path.join(filepath,  "../bin/bedGraphToBigWig")
 
 def rc(seq):
     """
