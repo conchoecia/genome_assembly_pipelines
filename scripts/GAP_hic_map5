@@ -15,7 +15,7 @@ import sys
 minchromsize = 1000000
 configfile: "config.yaml"
 config["tool"] = "GAP_hic_map5"
-qvals = [0,20]
+qvals = [0,10]
 
 for x in config["assemblies"]:
     if "_" in x:
@@ -107,9 +107,9 @@ if not os.path.exists(toolpath):
     os.mkdir(toolpath)
 if "transcripts" not in config:
     config["transcripts"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
-    if not os.path.exists(config["transcript"][0]):
+    if not os.path.exists(config["transcripts"][0]):
         content = b""
-        f = gzip.open(config["LR"][0], 'wb')
+        f = gzip.open(config["transcripts"][0], 'wb')
         f.write(content)
         f.close()
 
@@ -117,7 +117,9 @@ if "transcripts" not in config:
 for thiskey in ["transcripts", "LR"]:
     for entry in config[thiskey]:
         good = False
-        for ending in [".fa", ".fa.gz", ".fasta", ".fasta.gz", ".fastq", ".fastq.gz"]:
+        for ending in [".fa", ".fa.gz", ".fasta",
+                       ".fasta.gz", ".fastq",
+                       ".fastq.gz", ".fq", ".fq.gz"]:
             if entry.endswith(ending):
                 good = True
         if not good:
@@ -152,7 +154,7 @@ rule all:
                nom = config["assemblies"], qval = qvals),
 
         # pretext view
-        expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
+        #expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
 
         # HiGlass version
         expand(config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.covstats",
