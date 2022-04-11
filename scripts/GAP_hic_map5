@@ -15,7 +15,7 @@ import sys
 minchromsize = 1000000
 configfile: "config.yaml"
 config["tool"] = "GAP_hic_map5"
-qvals = [0,10]
+qvals = [0,5]
 
 for x in config["assemblies"]:
     if "_" in x:
