@@ -30,10 +30,11 @@ rule print_out_temp_assembly_rewrap:
         outhandle = open(output.assem, "w")
         with open(input.assem, "rU") as handle:
             for record in SeqIO.parse(handle, "fasta"):
+                stripped = str(record.seq).strip("N")
                 newseq = ""
                 #Turn all gaps into size 100
                 inN = False
-                for thischar in record.seq:
+                for thischar in stripped:
                     if thischar.upper() != "N":
                         newseq += thischar
                         inN = False
