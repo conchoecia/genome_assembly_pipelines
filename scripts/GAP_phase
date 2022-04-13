@@ -56,13 +56,16 @@ if config["HIC_R1"] == "" or config["HIC_R2"] == "":
     if not os.path.exists(config["HIC_R2"]):
         os.mknod(config["HIC_R2"])
 
-if config["longread_bam"] == "":
+if config["LONGREAD_BAM"] == "":
     outstem = config["tool"] + "/output/bams/temp"
     if not os.path.exists(outstem):
         os.makedirs(outstem)
     config["longread_bam"] = outstem + "/longreads_sorted.bam"
     if not os.path.exists(config["longread_bam"]):
         os.mknod(config["longread_bam"])
+
+wildcard_constraints:
+    datatype="[A-Za-z0-9|.]+",
 
 rule all:
     input:
@@ -72,24 +75,24 @@ rule all:
                libtype = ["ill", "chi", "hic", "longreads"]),
         expand(config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai",
                libtype = ["ill", "chi", "hic", "longreads"]),
-        expand(config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag",
-               chrom = config["chroms"]),
-        expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
-               chrom = config["chroms"]),
+        #expand(config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag",
+        #       chrom = config["CHROMS"]),
+        #expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
+        #       chrom = config["CHROMS"]),
 
-        config["tool"] + "/output/final_output/complete_assembly.hap.gz",
-        config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz",
-        config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt",
-        config["tool"] + "/output/final_output/hapcut_largest_block_final_table.txt",
-        config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
-        expand(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom = config["chroms"])
+        #config["tool"] + "/output/final_output/complete_assembly.hap.gz",
+        #config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz",
+        #config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt",
+        #config["tool"] + "/output/final_output/hapcut_largest_block_final_table.txt",
+        #config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
+        #expand(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom = config["CHROMS"])
 
 ######################################################################
 #  Make a softlink of the assembly
 ######################################################################
 rule make_assem_softlink:
     input:
-        ref = config["reference"],
+        ref = config["REFERENCE"],
     output:
         assem = config["tool"] + "/input/assembly/input.fasta"
     threads: 1
@@ -143,7 +146,7 @@ rule make_hic_softlink:
 
 rule make_longreads_bam_softlink:
     params:
-        longreads = config["longread_bam"]
+        longreads = config["LONGREAD_BAM"]
     output:
         bam = config["tool"] + "/output/bams/temp/longreads_sorted.bam"
     shell:
@@ -267,7 +270,7 @@ rule split_vcf_into_chr_remainder:
         chrtxt = config["tool"] + "/output/vcf/chroms_filt.txt"
     output:
         vcf  = expand(config["tool"] + "/output/vcf/orig/split/{chrom}.vcf",
-                    chrom=config["chroms"])
+                    chrom=config["CHROMS"])
     params:
         outstub = config["tool"] + "/output/vcf/orig/split"
     threads: 1
@@ -378,7 +381,7 @@ rule split_bams:
         bai = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai"
     output:
         bams = expand(config["tool"] + "/output/bams/split/{{libtype}}.REF_{chrom}.bam",
-               chrom=config["chroms"])
+               chrom=config["CHROMS"])
     params:
         stub = config["tool"] + "/output/bams/split/{libtype}"
     threads: 1
@@ -511,9 +514,9 @@ rule sort_final_vcf:
     input:
         origvcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf",
         vcf = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap.phased.VCF",
-                     chrom = config["chroms"]),
+                     chrom = config["CHROMS"]),
         hap = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
-                     chrom = config["chroms"]),
+                     chrom = config["CHROMS"]),
     output:
         hap = temp(config["tool"] + "/output/final_output/complete_assembly.hap"),
         vcf = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf")
@@ -733,7 +736,7 @@ rule make_table_of_final_output:
     input:
         txt = config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt",
         gzi = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
-        chroms = expand(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom = config["chroms"]),
+        chroms = expand(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom = config["CHROMS"]),
         ref = config["tool"] + "/input/assembly/input.fasta"
     output:
         txt = config["tool"] + "/output/final_output/hapcut_largest_block_final_table.txt"
