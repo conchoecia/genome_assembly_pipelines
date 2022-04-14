@@ -66,26 +66,27 @@ if config["LONGREAD_BAM"] == "":
 
 wildcard_constraints:
     datatype="[A-Za-z0-9|.]+",
+    libtype="[A-Za-z]+"
 
 rule all:
     input:
-        #expand(config["tool"] + "/output/vcf/orig/split/{chrom}.vcf",
-        #            chrom=config["chroms"]),
+        expand(config["tool"] + "/output/vcf/orig/split/{chrom}.vcf",
+                    chrom=config["CHROMS"]),
         expand(config["tool"] + "/output/bams/temp/{libtype}_sorted.bam",
                libtype = ["ill", "chi", "hic", "longreads"]),
         expand(config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai",
                libtype = ["ill", "chi", "hic", "longreads"]),
-        #expand(config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag",
-        #       chrom = config["CHROMS"]),
-        #expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
-        #       chrom = config["CHROMS"]),
+        expand(config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag",
+               chrom = config["CHROMS"]),
+        expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
+               chrom = config["CHROMS"]),
 
-        #config["tool"] + "/output/final_output/complete_assembly.hap.gz",
-        #config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz",
-        #config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt",
-        #config["tool"] + "/output/final_output/hapcut_largest_block_final_table.txt",
-        #config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
-        #expand(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom = config["CHROMS"])
+        config["tool"] + "/output/final_output/complete_assembly.hap.gz",
+        config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz",
+        config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt",
+        config["tool"] + "/output/final_output/hapcut_largest_block_final_table.txt",
+        config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
+        expand(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom = config["CHROMS"])
 
 ######################################################################
 #  Make a softlink of the assembly
@@ -259,7 +260,7 @@ rule list_of_chroms_from_config:
             for line in f:
                 line = line.strip()
                 if line:
-                    if line in config["chroms"]:
+                    if line in config["CHROMS"]:
                         print(line, file = outhandle)
 
 # split all vcf files by chromosome
