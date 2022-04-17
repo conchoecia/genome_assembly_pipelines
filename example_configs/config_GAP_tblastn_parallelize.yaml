@@ -1,0 +1,2 @@
+assembly_db: /path/to/the/genome/assembly.fasta
+protein_query: /path/to/the/proteins.fasta
