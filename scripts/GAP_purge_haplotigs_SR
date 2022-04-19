@@ -21,7 +21,7 @@ filepath = os.path.dirname(os.path.realpath(__file__))
 fs_path=os.path.join(filepath, "../bin/fasta_stats")
 
 config["tool"] = "GAP_purge_haplotigs_SR"
-CUTOFFS = [90, 80, 70]
+CUTOFFS = [95, 90, 80, 70]
 
 configfile: "config.yaml"
 
@@ -38,11 +38,11 @@ rule all:
         expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.fasta", nom=config["assemblies"], CO=CUTOFFS),
         #clip
         expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta", nom=config["assemblies"], CO=CUTOFFS),
-        #now collect information about the clip
-        expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.permap.txt", nom=config["assemblies"], CO=CUTOFFS),
-        expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.flagstat", nom=config["assemblies"], CO=CUTOFFS),
-        expand("PH_pipeline/coverage_after_clip/plot_histo_SR_{nom}_CO{CO}.pdf", nom=config["assemblies"], CO=CUTOFFS),
-        "PH_pipeline/final_results/final_results.tsv"
+        ##now collect information about the clip
+        #expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.permap.txt", nom=config["assemblies"], CO=CUTOFFS),
+        #expand("PH_pipeline/after_PH/{nom}_CO{CO}_SR.flagstat", nom=config["assemblies"], CO=CUTOFFS),
+        #expand("PH_pipeline/coverage_after_clip/plot_histo_SR_{nom}_CO{CO}.pdf", nom=config["assemblies"], CO=CUTOFFS),
+        #"PH_pipeline/final_results/final_results.tsv"
 
 rule map_SR_to_assembly:
     input:
