@@ -9,7 +9,7 @@ This program uses a lot of RAM in favor of speed.
 """
 import subprocess
 configfile: "config.yaml"
-config["tool"] = "GAP_reorder_assembly"
+config["tool"] = "GAP_reorder_specify_names"
 
 rule all:
     input:
@@ -69,7 +69,7 @@ rule reorder_fasta:
         # now print out the specified scaffolds
         for entrypair in config["scaf_to_name"]:
             if not entrypair[0] in unprinted:
-                raise IOError(entrypair[0] + " not in dict.")
+                raise IOError(entrypair[0] + " not in dict. Check that you didn't put the same sequence header twice in the rename config.yaml file.")
             unprinted[entrypair[0]].id          = entrypair[1]
             unprinted[entrypair[0]].description = entrypair[1]
             SeqIO.write(unprinted[entrypair[0]], outhandle, 'fasta')
