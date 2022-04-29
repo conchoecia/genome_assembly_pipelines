@@ -25,9 +25,9 @@ rule all:
         expand(config["tool"] + "/output/paf/{assem}.idx",
                assem = [config["qname"], config["rname"]])
 
-rule reorder_fasta:
+rule split_query_fasta:
     """
-    this reorders the fasta files based on the length
+    this splits the assembly into smaller pieces to make the mapping faster
     """
     input:
         assem     = config["query"]
