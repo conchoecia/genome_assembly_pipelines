@@ -1,0 +1,36 @@
+# Author dts 2020
+# dts@ucsc.edu
+# dschultz@mbari.org
+#
+# This config file is for the script `config_GAP_hic_map5`
+#  https://github.com/conchoecia/genome_assembly_pipelines
+# To use this config file, copy it to the directory you
+#  want to run the hi-c analysis in, then rename it to
+#  config.yaml. Edit the config.yaml file and then run
+#  snakemake --snakfile /path/to/genome_assembly_pipelines/scripts/GAP_hic_map
+
+# The path to your assembly for which you want a Hi-C map goes here.
+assemblies:
+  code_name_for_this_assembly: "/path/to/assembly.fasta"
+
+chromosomes:
+  - Nameofchrom1
+  - CHR2
+  - chr3
+  - Chr4
+
+# The are the paths to the Hi-C files. You can
+#  have multiple fasta files per library.
+#  It doesn't matter how you do it now, because
+#  all of the libraries are concatenated together.
+libs:
+  HiC-lib1:
+    read1:
+    - /path/to/HiC-lib1_f.fastq.gz
+    read2:
+    - /path/to/HiC-lib1_r.fastq.gz
+  Another-HiC-lib:
+    read1:
+    - /path/to/Another-HiC-lib_f.fastq.gz
+    read2:
+    - /path/to/Another-HiC-lib_r.fastq.gz
