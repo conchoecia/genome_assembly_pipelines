@@ -1,0 +1,398 @@
+"""
+This snakefile maps all the HiC reads to a final genome assembly
+  - It also makes a pretextmap file for quickly looking at the hic-maps
+  - It also calculates the obs/exp matrix, and the pearson exp matrix of that
+  - It maps long reads to the assembly then makes a depth histogram that can be
+     viewed in HiGlass
+
+font is small here: https://patorjk.com/software/taag
+"""
+
+from Bio import SeqIO
+import gzip
+import os
+import sys
+minchromsize = 1000000
+configfile: "config.yaml"
+config["tool"] = "GAP_hic_map5"
+config["binsize"] = [50000]
+qvals = [0]
+
+for x in config["assemblies"]:
+    if "_" in x:
+        raise IOError("You must not have any special characters in the assembly names: {}. Just use [A-Za-z0-9]+".format(x))
+
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+kmer_position_path=os.path.join(filepath, "../bin/kmer_positions.py")
+picard_path=os.path.join(filepath, "../bin/picard.jar")
+chromappath = os.path.join(filepath, "../bin/chromap/chromap")
+bedsort_path=os.path.join(filepath, "../bin/bedSort")
+bed2bw_path=os.path.join(filepath,  "../bin/bedGraphToBigWig")
+
+def rc(seq):
+    """
+    reverse complement the sequence
+    """
+    this_complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+    return "".join(this_complement.get(base, base) for base in reversed(seq))
+
+def flatten(list_of_lists):
+    if len(list_of_lists) == 0:
+        return list_of_lists
+    if isinstance(list_of_lists[0], list):
+        return flatten(list_of_lists[0]) + flatten(list_of_lists[1:])
+    return list_of_lists[:1] + flatten(list_of_lists[1:])
+
+def nx(seq, n):
+    """
+    concats the sequence n times
+    """
+    return "".join([seq]*n)
+
+if "minimap2arg" not in config:
+    config["minimap2arg"] = "map-hifi"
+
+###
+###  KMER PARSING SECTION
+###
+# if kmers not specified in config, add
+if "kmers" not in config:
+    config["kmers"] = {}
+
+# if telomere kmers not specified in the config file, use regular metazoan seq
+if "telomere" not in config:
+    config["telomere_seqs"] = ["TTAGGG"]
+config["telomere_seqs"] = [x.upper() for x in config["telomere_seqs"]]
+
+# make sure that there are no reverse complements in the telomere_seqs
+#  we don't want this because we specifically define the revcomp in the
+#  next step
+for x in config["telomere_seqs"]:
+    if rc(x) in config["telomere_seqs"]:
+        raise IOError("Don't include the reverse reverse complement of the telomere sequences")
+config["telomere_seqs"] = {"{}5x".format(key.upper()):
+                           {"f":nx(key.upper(), 5),
+                            "r":nx(rc(key.upper()), 5)}
+                           for key in config["telomere_seqs"]}
+
+print(config["telomere_seqs"])
+
+# make sure all the kmers are uppercase and that the set is complete
+for key in config["kmers"]:
+    config["kmers"][key] = list(set([x.upper() for x in config["kmers"][key]] + \
+                           [reverse_complement(x.upper()) for x in config["kmers"][key]]))
+print(config["kmers"])
+
+# make this dummy LR fastq file in case we don't actually want to map any reads
+toolpath = os.path.join(os.getcwd(), config["tool"])
+if not os.path.exists(toolpath):
+    os.mkdir(toolpath)
+if "LR" not in config:
+    config["LR"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
+    if not os.path.exists(config["LR"][0]):
+        content = b""
+        f = gzip.open(config["LR"][0], 'wb')
+        f.write(content)
+        f.close()
+
+# make this dummy transcript file in case we don't actually want to map any reads
+toolpath = os.path.join(os.getcwd(), config["tool"])
+if not os.path.exists(toolpath):
+    os.mkdir(toolpath)
+if "transcripts" not in config:
+    config["transcripts"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
+    if not os.path.exists(config["transcripts"][0]):
+        content = b""
+        f = gzip.open(config["transcripts"][0], 'wb')
+        f.write(content)
+        f.close()
+
+# now we check the LR and transcript files to make sure they are fasta or fastq
+for thiskey in ["transcripts", "LR"]:
+    for entry in config[thiskey]:
+        good = False
+        for ending in [".fa", ".fa.gz", ".fasta",
+                       ".fasta.gz", ".fastq",
+                       ".fastq.gz", ".fq", ".fq.gz"]:
+            if entry.endswith(ending):
+                good = True
+        if not good:
+            raise IOError ("The LR or transcripts file {} must end with .fa, .fa.gz, .fasta, .fasta.gz, .fastq, or .fastq.gz.".format(entry))
+
+def get_chromosome_sizes(assembly_file, minsize):
+    """
+    returns a set of chromosomes to keep
+    """
+    chroms = []
+    with open(assembly_file) as handle:
+        for record in SeqIO.parse(handle, "fasta"):
+            if len(record.seq) >= minsize:
+                chroms.append(record.id)
+    return chroms
+
+wildcard_constraints:
+    datatype="[A-Za-z0-9]+",
+    kmer="[A-Za-z0-9]+",
+    nom="[A-Za-z0-9.]+",
+    telo="[A-Za-z0-9]+",
+    binsize="[0-9]+",
+    qval="[0-9]+",
+    telodir="[fr]"
+
+rule all:
+    input:
+        # chromsize
+        expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.tsv",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_output.fasta",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule chrom_size:
+    """
+    make a file with the chromosome sizes
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    threads: 1
+    shell:
+        """
+        bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
+        """
+
+#      _ ___   _ _____     _    _       __ _ _
+#   _ | | _ ) /_\_   _|   | |_ (_)__   / _(_) |___ ___
+#  | || | _ \/ _ \| |    _| ' \| / _| |  _| | / -_|_-<
+#   \__/|___/_/ \_\_|   (_)_||_|_\__| |_| |_|_\___/__/
+#
+rule compile_chromap:
+    """
+    compile chromap if it does not yet exist
+    """
+    output:
+        chromap = os.path.join(filepath, "../bin/chromap/chromap")
+    params:
+        mvdir = os.path.join(filepath, "../bin/")
+    threads: 1
+    shell:
+        """
+        git clone https://github.com/haowenz/chromap.git
+        cd chromap
+        make
+        cd ..
+        mv chromap/ {params.mvdir}
+        """
+
+rule index_ref:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        chromap = os.path.join(filepath, "../bin/chromap/chromap")
+    output:
+        index = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.index")
+    shell:
+        """
+        {input.chromap} -i -r {input.assem} -o {output.index}
+        """
+
+rule hic_to_pairs:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        index   = config["tool"] + "/input/assembly/{nom}_input.fasta.index",
+        chromap = chromappath,
+        left  = flatten([config["libs"][x]["read1"] for x in config["libs"]]),
+        right = flatten([config["libs"][x]["read2"] for x in config["libs"]])
+    output:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs"
+    params:
+        left  = " -1 ".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
+        right = " -2 ".join(flatten([config["libs"][x]["read2"] for x in config["libs"]])),
+        qval  = lambda wildcards: wildcards.qval
+    threads: workflow.cores - 2
+    shell:
+        """
+        {input.chromap} --preset hic -x {input.index} \
+            -r {input.assem} \
+            -1 {params.left}  \
+            -2 {params.right} \
+            -t {threads} \
+            -q {params.qval} \
+            -o {output.pairs}
+        """
+
+rule gzip_pairs:
+    input:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs"
+    output:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz"
+    threads: 1
+    shell:
+        """
+        bgzip -c {input.pairs} > {output.pairs}
+        """
+
+rule index_pairs:
+    """
+    indexing output. the *.pairs.gz suffix is important to parse the file correctly!
+    """
+    input:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz",
+    output:
+        index = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz.px2"
+    threads: 1
+    shell:
+        """
+        pairix -f {input.pairs}
+        """
+
+rule make_bins_individual:
+    """
+    This makes the matrix and bins everything
+    i.e. binsize: 5000 (high resolution), 500000 (lower resolution)
+    """
+    input:
+        final = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz",
+        index = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz.px2",
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
+    threads: 1
+    params:
+        bs = lambda wildcards: wildcards.binsize,
+        nom = lambda wildcards: wildcards.nom,
+        outname = lambda wildcards: "{tool}/output/{nom}/{nom}.q_{qval}.{binsize}.cool".format(
+            tool=config["tool"], nom = wildcards.nom,
+            binsize = wildcards.binsize,
+            qval = wildcards.qval)
+    threads: max(8, int((workflow.cores -1)/4))
+    shell:
+        """
+        cooler cload pairix --nproc {threads} {input.cs}:{params.bs} {input.final} {params.outname}
+        """
+
+# random stuff
+#  ___              _                _         __  __
+# | _ \__ _ _ _  __| |___ _ __    __| |_ _  _ / _|/ _|
+# |   / _` | ' \/ _` / _ \ '  \  (_-<  _| || |  _|  _|
+# |_|_\__,_|_||_\__,_\___/_|_|_| /__/\__|\_,_|_| |_|
+#
+
+# Now we get the Hi-C interaction matrix
+rule make_hic_matrix_simple:
+    input:
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
+    output:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.tsv"
+    params:
+        gi = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi"
+    threads: 1
+    shell:
+        """
+        hicConvertFormat -m {input.cool} \
+           --outFileName {params.gi} \
+           --inputFormat cool \
+           --outputFormat ginteractions
+        """
+
+rule hicmatrix_nonchroms:
+    """
+    Gets rid of the rows in the matrix that are chrom-chrom interactions or
+      scaf-scaf interactions. These aren't useful for sorting.
+    """
+    input:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.tsv"
+    output:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.tsv"
+    threads: 1
+    run:
+        outhandle = open(output.hicm, "w")
+        with open(input.hicm, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split()
+                    s1 = True if fields[0] in config["chromosomes"] else False
+                    s2 = True if fields[3] in config["chromosomes"] else False
+                    printme = True
+                    if s1 and s2:
+                        printme = False
+                    elif not s1 and not s2:
+                        printme = False
+                    if printme:
+                        if s1:
+                            linemod = "\t".join([str(x) for x in [
+                                 fields[3], fields[4], fields[5],
+                                 fields[0], fields[1], fields[2], fields[6]
+                                                                 ]])
+                            print(linemod, file = outhandle)
+                        elif s2:
+                            print(line, file = outhandle)
+                        else:
+                            raise IOError("Shouldn't be here")
+
+rule get_best_order:
+    """
+    Gets rid of the rows in the matrix that are chrom-chrom interactions or
+      scaf-scaf interactions. These aren't useful for sorting.
+    """
+    input:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.tsv"
+    output:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv"
+    threads: 1
+    shell:
+        """
+        sort -k1,1 -k7,7nr {input.hicm} | \
+          awk 'BEGIN{{prev = ""}} {{if ($1 != prev){{print($0)}}; prev = $1 }}' | \
+          sort -k4,4 -k5,5n -k7,7nr > {output.hicm}
+        """
+
+rule output_sorted_fasta:
+    """
+    Outputs a new fasta file with the scaffolds sorted by best
+     chromosome position
+    """
+    input:
+        hicm  = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv",
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+         assem = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_output.fasta"
+    threads: 1
+    run:
+        chrom_to_scaf_order = {}
+        with open(input.hicm, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    chrom  = fields[3]
+                    scaf   = fields[0]
+                    if chrom not in chrom_to_scaf_order:
+                        chrom_to_scaf_order[chrom] = []
+                    chrom_to_scaf_order[chrom].append(scaf)
+        #now read in the genome
+        chrom_order = []
+        scaf_dict = {}
+        with open(input.assem, "rU") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                scaf_dict[record.id] = record
+                if record.id in config["chromosomes"]:
+                    chrom_order.append(record.id)
+        outhandle = open(output.assem, "w")
+        # now print out everything
+        for thischrom in chrom_order:
+            SeqIO.write(scaf_dict[thischrom], outhandle, "fasta")
+        for thischrom in chrom_order:
+            for thisscaf in chrom_to_scaf_order[thischrom]:
+                SeqIO.write(scaf_dict[thisscaf], outhandle, "fasta")
