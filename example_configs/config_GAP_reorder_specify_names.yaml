@@ -18,5 +18,12 @@ scaf_to_name:
   - ["sca13", "c12"]
   - ["sca11", "c13"]
 
+# The program will first print out the scaffolds in the order above.
+# If you want the scaffolds to then be organized by length,
+#  use this parameter to specify that.
+# sort_scaffolds: True # means that the other scaffolds will be len sorted
+# sort_scaffolds: False means they won't be len sorted
+sort_scaffoldds: False
+
 # also add a GFF file if you want. Just comment out if not.
 gff: "/path/to/gff/file/annotation.gff"

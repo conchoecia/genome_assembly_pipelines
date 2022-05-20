@@ -11,6 +11,9 @@ import subprocess
 configfile: "config.yaml"
 config["tool"] = "GAP_reorder_specify_names"
 
+if "sort_scaffolds" not in config:
+    config["sort_scaffolds"] = True
+
 rule all:
     input:
         expand(config["tool"] + "/output/assembly/{nom}_output.fasta",
@@ -70,6 +73,7 @@ rule reorder_fasta:
         for record in SeqIO.parse(input.assem, "fasta"):
             unprinted[record.id] = record
         outhandle = open(output.assem, "w")
+
         # now print out the specified scaffolds
         for entrypair in config["scaf_to_name"]:
             if not entrypair[0] in unprinted:
@@ -80,25 +84,38 @@ rule reorder_fasta:
             SeqIO.write(unprinted[entrypair[0]], outhandle, 'fasta')
             del unprinted[entrypair[0]]
             already_printed.add(entrypair[0])
-        # now print out everything else
+        # get the sort list depending on whether things will be lensorted
+        sort_list = []
         scacounter = 1
-        with open(input.sort_list, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    scaf   = line.split()[0]
-                    if scaf in already_printed:
-                        pass
-                    elif scaf not in unprinted:
-                        raise IOError(scaf + " should have been in unprinted.")
-                    else:
-                        old_to_new[scaf]            = "sca{}".format(scacounter)
-                        unprinted[scaf].id          = old_to_new[scaf]
-                        unprinted[scaf].description = old_to_new[scaf]
-                        SeqIO.write(unprinted[scaf], outhandle, 'fasta')
-                        del unprinted[scaf]
-                        already_printed.add(scaf)
-                        scacounter += 1
+        if config["sort_scaffolds"]:
+            # print them out based on seq length
+            with open(input.sort_list, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        scaf   = line.split()[0]
+                        if scaf in already_printed:
+                            pass
+                        else:
+                            old_to_new[scaf]            = "sca{}".format(scacounter)
+                            sort_list.append(scaf)
+                            scacounter += 1
+        else:
+            # just print them out as they occur in the fasta file
+            for record in SeqIO.parse(input.assem, "fasta"):
+                if record.id in already_printed:
+                    pass
+                else:
+                    old_to_new[record.id] = "sca{}".format(scacounter)
+                    sort_list.append(record.id)
+                    scacounter += 1
+
+        # now print out everything else
+        for scaf in sort_list:
+            unprinted[scaf].id          = old_to_new[scaf]
+            unprinted[scaf].description = old_to_new[scaf]
+            SeqIO.write(unprinted[scaf], outhandle, 'fasta')
+            del unprinted[scaf]
         outhandle.close()
         # we're done with the new assembly now.
         # now rename the gff file if it exists. If not, just print a blank file.
@@ -117,6 +134,8 @@ rule reorder_fasta:
                                     raise IOError("The scaffold {} in the gff is not in the assembly".format(fields[1]))
                                 fields[1] = old_to_new[fields[1]]
                                 print(" ".join(fields), file = outhandle)
+                            else:
+                                print(line, file = outhandle)
                         else:
                             # this must be an annotation line. Just change the scaffold
                             fields = line.split("\t")
@@ -124,6 +143,8 @@ rule reorder_fasta:
                                 raise IOError("The scaffold {} in the gff is not in the assembly".format(fields[0]))
                             fields[0] = old_to_new[fields[0]]
                             print("\t".join(fields), file = outhandle)
+            else:
+                raise IOError("The gff file you specified in the config does not exist")
         else:
             print("no gff provided in the config file.", file = outhandle)
         outhandle.close()
