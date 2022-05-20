@@ -14,6 +14,8 @@ config["tool"] = "GAP_reorder_specify_names"
 rule all:
     input:
         expand(config["tool"] + "/output/assembly/{nom}_output.fasta",
+               nom=config["assemblies"]),
+        expand(config["tool"] + "/output/assembly/{nom}_output.gff",
                nom=config["assemblies"])
 
 # make softlinks of the input files
@@ -57,12 +59,14 @@ rule reorder_fasta:
         sort_list = config["tool"] + "/input/sort_list/{nom}_sort_list.txt"
     output:
         assem = config["tool"] + "/output/assembly/{nom}_output.fasta",
+        gff   = config["tool"] + "/output/assembly/{nom}_output.gff"
     threads: 1
     run:
         from Bio import SeqIO
-
+        # set up the run
         unprinted = {}
         already_printed = set()
+        old_to_new = {}
         for record in SeqIO.parse(input.assem, "fasta"):
             unprinted[record.id] = record
         outhandle = open(output.assem, "w")
@@ -70,8 +74,9 @@ rule reorder_fasta:
         for entrypair in config["scaf_to_name"]:
             if not entrypair[0] in unprinted:
                 raise IOError(entrypair[0] + " not in dict. Check that you didn't put the same sequence header twice in the rename config.yaml file.")
-            unprinted[entrypair[0]].id          = entrypair[1]
-            unprinted[entrypair[0]].description = entrypair[1]
+            old_to_new[entrypair[0]] = entrypair[1]
+            unprinted[entrypair[0]].id          = old_to_new[entrypair[0]]
+            unprinted[entrypair[0]].description = old_to_new[entrypair[0]]
             SeqIO.write(unprinted[entrypair[0]], outhandle, 'fasta')
             del unprinted[entrypair[0]]
             already_printed.add(entrypair[0])
@@ -87,10 +92,38 @@ rule reorder_fasta:
                     elif scaf not in unprinted:
                         raise IOError(scaf + " should have been in unprinted.")
                     else:
-                        newscaid = "sca{}".format(scacounter)
-                        unprinted[scaf].id          = newscaid
-                        unprinted[scaf].description = newscaid
+                        old_to_new[scaf]            = "sca{}".format(scacounter)
+                        unprinted[scaf].id          = old_to_new[scaf]
+                        unprinted[scaf].description = old_to_new[scaf]
                         SeqIO.write(unprinted[scaf], outhandle, 'fasta')
                         del unprinted[scaf]
                         already_printed.add(scaf)
                         scacounter += 1
+        outhandle.close()
+        # we're done with the new assembly now.
+        # now rename the gff file if it exists. If not, just print a blank file.
+        outhandle = open(output.gff, "w")
+        if "gff" in config:
+            if os.path.exists(config["gff"]):
+                inhandle = open(config["gff"], "r")
+                for line in inhandle:
+                    line = line.strip()
+                    if line:
+                        if line[0] == "#":
+                            # we know that this is a comment line. Replace everything that we see that can be replaced. 
+                            fields = line.split(" ")
+                            if "sequence-region" in fields[0]:
+                                if fields[1] not in old_to_new:
+                                    raise IOError("The scaffold {} in the gff is not in the assembly".format(fields[1]))
+                                fields[1] = old_to_new[fields[1]]
+                                print(" ".join(fields), file = outhandle)
+                        else:
+                            # this must be an annotation line. Just change the scaffold
+                            fields = line.split("\t")
+                            if fields[0] not in old_to_new:
+                                raise IOError("The scaffold {} in the gff is not in the assembly".format(fields[0]))
+                            fields[0] = old_to_new[fields[0]]
+                            print("\t".join(fields), file = outhandle)
+        else:
+            print("no gff provided in the config file.", file = outhandle)
+        outhandle.close()

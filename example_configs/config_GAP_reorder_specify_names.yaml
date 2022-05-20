@@ -17,3 +17,6 @@ scaf_to_name:
   - ["sca6", "c11"]
   - ["sca13", "c12"]
   - ["sca11", "c13"]
+
+# also add a GFF file if you want. Just comment out if not.
+gff: "/path/to/gff/file/annotation.gff"
