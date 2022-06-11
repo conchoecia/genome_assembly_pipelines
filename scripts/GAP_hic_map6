@@ -406,7 +406,7 @@ rule JBAT_pairs_to_hic:
         longsuffix = ".long",
         mvprefix  = config["tool"] + "/output/{nom}/{nom}_allLibs_q_",
         mvsuffix  = ".hic",
-        qvalsp = " ".join([str(x) for x in sorted(qvals, reverse=True)])
+        qvalsp = " ".join([str(x) for x in sorted(config["qvals"], reverse=True)])
     threads: 1
     shell:
         """
