@@ -13,6 +13,13 @@ config["tool"] = "GAP_specify_names"
 if "scaf_to_name" not in config:
     raise IOError("You need to specify some example names to change with the scaf_to_name field")
 
+if "rename_other_scafs" not in config:
+    raise IOError("You need to specify 'rename_other_scafs: True' or 'rename_other_scafs: False' in the config.yaml")
+
+if config["rename_other_scafs"]:
+    if "prefix" not in config:
+        config["prefix"] = "scaf"
+
 rule all:
     input:
         expand(config["tool"] + "/output/{nom}_output.fasta",
@@ -68,9 +75,17 @@ rule reorder_fasta:
             printed.add(entrypair[0])
 
         #now print out everything else
+        scafcounter = 1
         for record in SeqIO.parse(input.assem, "fasta"):
-            if record.id not in printed:
-                SeqIO.write(record, outhandle, 'fasta')
+            if not config["rename_other_scafs"]:
+                if record.id not in printed:
+                    SeqIO.write(record, outhandle, 'fasta')
+                    scafcounter += 1
+            else:
+                if record.id not in printed:
+                    record.id = "{}{}".format(config["prefix"], scafcounter)
+                    SeqIO.write(record, outhandle, 'fasta')
+                    scafcounter += 1
             printed.add(record.id)
 
         outhandle.close()
