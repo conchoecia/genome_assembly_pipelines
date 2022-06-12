@@ -1,6 +1,15 @@
 assemblies:
   your_assem_name: "/path/to/assembly/to/rename/reorder.fasta"
 
+# Sometimes you may want to rename all of the other scaffolds in ascending order.
+# Set this variable to True if so.
+# If you only want to rename the scaffolds specified below, set to False.
+rename_other_scafs: False
+
+# This will be the prefix for the automatically renamed scafs, if you choose to rename them.
+# This is only for the scaffolds not specified below
+prefix: "scaf"
+
 # The format here is a list of the orders in which to
 #  output the scaffolds, and the name it will become
 # nothing else is renamed! The order is not changed at all
