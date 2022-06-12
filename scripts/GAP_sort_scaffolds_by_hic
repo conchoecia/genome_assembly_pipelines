@@ -330,6 +330,7 @@ rule hicmatrix_nonchroms:
                     elif not s1 and not s2:
                         printme = False
                     if printme:
+                        # this always prints the chromosome in the second column
                         if s1:
                             linemod = "\t".join([str(x) for x in [
                                  fields[3], fields[4], fields[5],
@@ -341,21 +342,38 @@ rule hicmatrix_nonchroms:
                         else:
                             raise IOError("Shouldn't be here")
 
+rule summarize_matrix_by_chromosome_coordinate:
+    """
+    Each scaffold must now be represented by a single value along the axis of
+      chromosome coordinates.
+    """
+    input:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.tsv"
+    output:
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.summed.tsv"
+    threads: 1
+    run:
+        import pandas as pd
+        df = pd.read_csv(input.hicm, sep = "\t", header = None)
+        df.columns = ["scaf", "start", "stop", "chrom", "cstart", "cstop", "count"]
+        grouped_df = df.groupby(["scaf", "chrom", "cstart", "cstop"], as_index = False)["count"].sum()
+        grouped_df.to_csv(output.hicm, sep = "\t", header = None, index = None)
+
 rule get_best_order:
     """
     Gets rid of the rows in the matrix that are chrom-chrom interactions or
       scaf-scaf interactions. These aren't useful for sorting.
     """
     input:
-        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.tsv"
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.summed.tsv"
     output:
         hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv"
     threads: 1
     shell:
         """
-        sort -k1,1 -k7,7nr {input.hicm} | \
+        sort -k1,1 -k5,5nr {input.hicm} | \
           awk 'BEGIN{{prev = ""}} {{if ($1 != prev){{print($0)}}; prev = $1 }}' | \
-          sort -k4,4 -k5,5n -k7,7nr > {output.hicm}
+          sort -k2,2 -k3,3n -k5,5nr > {output.hicm}
         """
 
 rule output_sorted_fasta:
@@ -371,16 +389,18 @@ rule output_sorted_fasta:
     threads: 1
     run:
         chrom_to_scaf_order = {}
+        # get the order of chromosomes as they occur in the assembly
         with open(input.hicm, "r") as f:
             for line in f:
                 line = line.strip()
                 if line:
                     fields = line.split("\t")
-                    chrom  = fields[3]
+                    chrom  = fields[1]
                     scaf   = fields[0]
                     if chrom not in chrom_to_scaf_order:
                         chrom_to_scaf_order[chrom] = []
                     chrom_to_scaf_order[chrom].append(scaf)
+        print(chrom_to_scaf_order)
         #now read in the genome
         chrom_order = []
         scaf_dict = {}
