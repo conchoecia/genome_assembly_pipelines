@@ -400,7 +400,6 @@ rule output_sorted_fasta:
                     if chrom not in chrom_to_scaf_order:
                         chrom_to_scaf_order[chrom] = []
                     chrom_to_scaf_order[chrom].append(scaf)
-        print(chrom_to_scaf_order)
         #now read in the genome
         chrom_order = []
         scaf_dict = {}
