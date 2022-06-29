@@ -14,7 +14,7 @@ import os
 import sys
 minchromsize = 1000000
 configfile: "config.yaml"
-config["tool"] = "GAP_hic_map5"
+config["tool"] = "GAP_sort_scaffolds_by_hic"
 config["binsize"] = [50000]
 qvals = [0]
 
@@ -413,5 +413,6 @@ rule output_sorted_fasta:
         for thischrom in chrom_order:
             SeqIO.write(scaf_dict[thischrom], outhandle, "fasta")
         for thischrom in chrom_order:
-            for thisscaf in chrom_to_scaf_order[thischrom]:
-                SeqIO.write(scaf_dict[thisscaf], outhandle, "fasta")
+            if thischrom in chrom_to_scaf_order:
+                for thisscaf in chrom_to_scaf_order[thischrom]:
+                    SeqIO.write(scaf_dict[thisscaf], outhandle, "fasta")
