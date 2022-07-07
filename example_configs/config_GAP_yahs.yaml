@@ -1,0 +1,19 @@
+assemblies:
+  assembly1: "/path/to/assembly1/to/scaffold.fasta"
+  some_other_assem: "/this/path/is/to/the/second/assembly/we/want/to/scaffold.fasta"
+
+# Change this to be whatever junction sites were used with all the libraries
+#  below. See the instructions here: https://github.com/marbl/SALSA#restriction-enzyme-input
+junctions: "GATC,AATT"
+
+# the number of rounds that the scaffolding will go through
+rounds: 20
+
+# The libraries can be either Chicago or Hi-C. Only run one type at a time.
+libraries:
+  ChicagoLib1:
+    read1: "/path/to/ChicagoLib1_f.fastq.gz"
+    read2: "/path/to/ChicagoLib1_r.fastq.gz"
+  OtherChicagoLib:
+    read1: "/path/to/the/other/AwesomeChicagoLib_R1.fastq.gz"
+    read2: "/path/to/the/other/AwesomeChicagoLib_R2.fastq.gz"
