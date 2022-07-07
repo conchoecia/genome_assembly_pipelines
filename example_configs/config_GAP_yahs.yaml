@@ -10,7 +10,7 @@ junctions: "GATC,AATT"
 rounds: 20
 
 # The libraries can be either Chicago or Hi-C. Only run one type at a time.
-libraries:
+libs:
   ChicagoLib1:
     read1: "/path/to/ChicagoLib1_f.fastq.gz"
     read2: "/path/to/ChicagoLib1_r.fastq.gz"

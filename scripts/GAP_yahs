@@ -1,0 +1,287 @@
+"""
+YAHS
+font is small here: https://patorjk.com/software/taag
+"""
+
+from Bio import SeqIO
+import gzip
+import os
+import sys
+minchromsize = 1000000
+configfile: "config.yaml"
+config["tool"] = "GAP_yahs"
+
+for x in config["assemblies"]:
+    if "_" in x:
+        raise IOError("You must not have any special characters in the assembly names: {}. Just use [A-Za-z0-9]+".format(x))
+
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+chromappath = os.path.join(filepath, "../bin/chromap/chromap")
+
+def rc(seq):
+    """
+    reverse complement the sequence
+    """
+    this_complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+    return "".join(this_complement.get(base, base) for base in reversed(seq))
+
+def flatten(list_of_lists):
+    if len(list_of_lists) == 0:
+        return list_of_lists
+    if isinstance(list_of_lists[0], list):
+        return flatten(list_of_lists[0]) + flatten(list_of_lists[1:])
+    return list_of_lists[:1] + flatten(list_of_lists[1:])
+
+def nx(seq, n):
+    """
+    concats the sequence n times
+    """
+    return "".join([seq]*n)
+
+if "minimap2arg" not in config:
+    config["minimap2arg"] = "map-hifi"
+
+###
+###  KMER PARSING SECTION
+###
+# if kmers not specified in config, add
+if "kmers" not in config:
+    config["kmers"] = {}
+
+# if telomere kmers not specified in the config file, use regular metazoan seq
+if "telomere" not in config:
+    config["telomere_seqs"] = ["TTAGGG"]
+config["telomere_seqs"] = [x.upper() for x in config["telomere_seqs"]]
+
+# make sure that there are no reverse complements in the telomere_seqs
+#  we don't want this because we specifically define the revcomp in the
+#  next step
+for x in config["telomere_seqs"]:
+    if rc(x) in config["telomere_seqs"]:
+        raise IOError("Don't include the reverse reverse complement of the telomere sequences")
+config["telomere_seqs"] = {"{}5x".format(key.upper()):
+                           {"f":nx(key.upper(), 5),
+                            "r":nx(rc(key.upper()), 5)}
+                           for key in config["telomere_seqs"]}
+
+## now add tracks for contiguous stretches of two, three
+#for n in [2]:
+#    config["telomere_seqs"].update(
+#        {"{}{}x".format(key.upper(), n):
+#                  {"f":nx(key.upper(), n),
+#                   "r":nx(rc(key.upper()), n)}
+#                  for key in config["telomere_seqs"]})
+
+print(config["telomere_seqs"])
+
+# make sure all the kmers are uppercase and that the set is complete
+for key in config["kmers"]:
+    config["kmers"][key] = list(set([x.upper() for x in config["kmers"][key]] + \
+                           [reverse_complement(x.upper()) for x in config["kmers"][key]]))
+print(config["kmers"])
+
+# make this dummy LR fastq file in case we don't actually want to map any reads
+toolpath = os.path.join(os.getcwd(), config["tool"])
+if not os.path.exists(toolpath):
+    os.mkdir(toolpath)
+if "LR" not in config:
+    config["LR"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
+    if not os.path.exists(config["LR"][0]):
+        content = b""
+        f = gzip.open(config["LR"][0], 'wb')
+        f.write(content)
+        f.close()
+
+# make this dummy transcript file in case we don't actually want to map any reads
+toolpath = os.path.join(os.getcwd(), config["tool"])
+if not os.path.exists(toolpath):
+    os.mkdir(toolpath)
+if "transcripts" not in config:
+    config["transcripts"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
+    if not os.path.exists(config["transcripts"][0]):
+        content = b""
+        f = gzip.open(config["transcripts"][0], 'wb')
+        f.write(content)
+        f.close()
+
+# now we check the LR and transcript files to make sure they are fasta or fastq
+for thiskey in ["transcripts", "LR"]:
+    for entry in config[thiskey]:
+        good = False
+        for ending in [".fa", ".fa.gz", ".fasta",
+                       ".fasta.gz", ".fastq",
+                       ".fastq.gz", ".fq", ".fq.gz"]:
+            if entry.endswith(ending):
+                good = True
+        if not good:
+            raise IOError ("The LR or transcripts file {} must end with .fa, .fa.gz, .fasta, .fasta.gz, .fastq, or .fastq.gz.".format(entry))
+
+def get_chromosome_sizes(assembly_file, minsize):
+    """
+    returns a set of chromosomes to keep
+    """
+    chroms = []
+    with open(assembly_file) as handle:
+        for record in SeqIO.parse(handle, "fasta"):
+            if len(record.seq) >= minsize:
+                chroms.append(record.id)
+    return chroms
+
+wildcard_constraints:
+    datatype="[A-Za-z0-9]+",
+    kmer="[A-Za-z0-9]+",
+    nom="[A-Za-z0-9.]+",
+    telo="[A-Za-z0-9]+",
+    binsize="[0-9]+",
+    qval="[0-9]+",
+    telodir="[fr]"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs",
+               nom = config["assemblies"], qval = [0])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule chrom_size:
+    """
+    make a file with the chromosome sizes
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    threads: 1
+    shell:
+        """
+        bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
+        """
+
+#      _ ___   _ _____     _    _       __ _ _
+#   _ | | _ ) /_\_   _|   | |_ (_)__   / _(_) |___ ___
+#  | || | _ \/ _ \| |    _| ' \| / _| |  _| | / -_|_-<
+#   \__/|___/_/ \_\_|   (_)_||_|_\__| |_| |_|_\___/__/
+#
+rule compile_chromap:
+    """
+    compile chromap if it does not yet exist
+    """
+    output:
+        chromap = os.path.join(filepath, "../bin/chromap/chromap")
+    params:
+        mvdir = os.path.join(filepath, "../bin/")
+    threads: 1
+    shell:
+        """
+        git clone https://github.com/haowenz/chromap.git
+        cd chromap
+        make
+        cd ..
+        mv chromap/ {params.mvdir}
+        """
+
+rule check_assembly:
+    """
+    Check that there are no duplicate seqnames in the assembly.
+    This will fail silently in JBAT and waste time.
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check"
+    threads: 1
+    run:
+        chromlist = set()
+        with open(input.assem) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                if record.id in chromlist:
+                    raise IOError("There are some sequence IDs that are duplicated in the fasta file. Please make sure that each file has a unique ID and restart the pipeline")
+                chromlist.add(record.id)
+        with open(output.check, "w") as outhandle:
+            print("fasta headers are all unique", file = outhandle)
+
+rule index_ref:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        chromap = os.path.join(filepath, "../bin/chromap/chromap")
+    output:
+        index = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.index")
+    shell:
+        """
+        {input.chromap} -i -r {input.assem} -o {output.index}
+        """
+
+rule generate_assembly_for_hic_gen:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        awkscript= os.path.abspath(os.path.join( filepath, "../bin/generate-assembly-file-from-fasta.awk"))
+    output:
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta.assembly"
+    threads: 1
+    shell:
+        """
+        awk -f {input.awkscript} {input.assem} > {output.assembly}
+        """
+
+rule editable_assembly_file:
+    """
+    from https://bitbucket.org/bredeson/artisanal/src/master/
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        assemfromfasta= os.path.abspath(os.path.join( filepath, "../bin/assembly-from-fasta.py"))
+    output:
+        assembly = config["tool"] + "/output/{nom}/{nom}.assembly"
+    params:
+        outprefix = lambda wildcards: config["tool"] + "/output/{d}/{d}".format(
+                     d=wildcards.nom)
+    threads: 1
+    shell:
+        """
+        python {input.assemfromfasta} -c {input.assem} {params.outprefix}
+        """
+
+rule hic_to_pairs:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        index   = config["tool"] + "/input/assembly/{nom}_input.fasta.index",
+        chromap = chromappath,
+        left  = flatten([config["libs"][x]["read1"] for x in config["libs"]]),
+        right = flatten([config["libs"][x]["read2"] for x in config["libs"]])
+    output:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs"
+    params:
+        left  = " -1 ".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
+        right = " -2 ".join(flatten([config["libs"][x]["read2"] for x in config["libs"]])),
+        qval  = lambda wildcards: wildcards.qval
+    threads: workflow.cores - 2
+    shell:
+        """
+        {input.chromap} --preset hic -x {input.index} \
+            -r {input.assem} \
+            -1 {params.left}  \
+            -2 {params.right} \
+            -t {threads} \
+            -q {params.qval} \
+            -o {output.pairs}
+        """
+
+#rule gzip_pairs:
+#    input:
+#        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs"
+#    output:
+#        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz"
+#    threads: 1
+#    shell:
+#        """
+#        bgzip -c {input.pairs} > {output.pairs}
+#        """
