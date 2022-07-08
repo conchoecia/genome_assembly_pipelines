@@ -1,0 +1,125 @@
+"""
+This pipeline polishes the genomes using short reads and pilon.
+"""
+
+from Bio import SeqIO
+
+configfile: "config.yaml"
+
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+pilon_path=os.path.join(filepath, "../bin/pilon-1.23.jar")
+
+config["tool"] = "GAP_hic_map3"
+contig["assem_scaffolds"] = {}
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+def get_the_contigs(nom):
+    assem = config["tool"] + "/input/{}_pilon_input.fasta".format(nom)
+    scaffolds = set()
+    with open(assem, "rU") as handle:
+        for record in SeqIO.parse(handle, "fasta"):
+            #if nom not in config["assem_scaffolds"]:
+            #    config["assem_scaffolds"][nom] = set()
+            #config["assem_scaffolds"][nom].add(record.id)
+            scaffolds.add(record.id)
+    return scaffolds
+
+rule all:
+    input:
+        dynamic(config["tool"] + "/input/bams/split/shot_to_{nom}.REF_{chrom}.bam"),
+        #expand(config["tool"] + "/output/{nom}_pilon_output.fasta", nom=config["assemblies"]),
+
+rule pilon_index:
+    """
+    pilon is the last step
+    """
+    input:
+        assem = lambda wildcards: config["assemblies"][wildcards.nom]
+    output:
+        assem = config["tool"] + "/input/{nom}_pilon_input.fasta",
+        amb   = config["tool"] + "/input/{nom}_pilon_input.fasta.amb",
+        ann   = config["tool"] + "/input/{nom}_pilon_input.fasta.ann",
+        bwt   = config["tool"] + "/input/{nom}_pilon_input.fasta.bwt",
+        pac   = config["tool"] + "/input/{nom}_pilon_input.fasta.pac",
+    threads:
+        1
+    shell:
+        """
+        ln -s {input.assem} {output.assem}
+        bwa index -a is {output.assem}
+        """
+
+rule pilon_map:
+    input:
+        assem = config["tool"] + "/input/{nom}_pilon_input.fasta",
+        amb   = config["tool"] + "/input/{nom}_pilon_input.fasta.amb",
+        ann   = config["tool"] + "/input/{nom}_pilon_input.fasta.ann",
+        bwt   = config["tool"] + "/input/{nom}_pilon_input.fasta.bwt",
+        pac   = config["tool"] + "/input/{nom}_pilon_input.fasta.pac",
+        shotf = config["shotf"],
+        shotr = config["shotr"],
+    output:
+        bam = config["tool"] + "/input/bams/shot_to_{nom}_pilon_input.sorted.bam",
+    threads:
+        workflow.cores
+    shell:
+        """
+        bwa mem -t {threads} {input.assem} \
+                 {input.shotf} {input.shotr} | \
+                 samtools view -hb -@ {threads} - | \
+                 samtools sort -@ {threads} - > {output.bam}
+        """
+
+rule pilon_indexbam:
+    input:
+        bam = config["tool"] + "/input/bams/shot_to_{nom}_pilon_input.sorted.bam",
+    output:
+        bai = config["tool"] + "/input/bams/shot_to_{nom}_pilon_input.sorted.bam.bai",
+    threads:
+        1
+    shell:
+        """
+        samtools index {input.bam}
+        """
+
+# split bam files by chromosome
+rule split_bams_after_mapping:
+    input:
+        bam = config["tool"] + "/input/bams/shot_to_{nom}_pilon_input.sorted.bam",
+    output:
+        outbams = dynamic(config["tool"] + "/input/bams/split/shot_to_{nom}.REF_{chrom}.bam")
+    params:
+        stub = config["tool"] + "/input/bams/split/shot_to_{nom}"
+    shell:
+        """
+        bamtools split -in {input.bam} -reference -stub {params.stub}
+        """
+
+rule pilon_piloncorrect:
+    input:
+        assem = config["tool"] + "/input/{nom}_pilon_input.fasta",
+        bam   = config["tool"] + "/input/bams/shot_to_{nom}_pilon_input.sorted.bam",
+        bai   = config["tool"] + "/input/bams/shot_to_{nom}_pilon_input.sorted.bam.bai",
+        pilon = pilon_path
+    output:
+        assem = config["tool"] + "/output/{nom}_pilon_output.fasta"
+    params:
+        outdir     = config["tool"] + "/output/",
+        out_prefix = lambda wildcards: "{}_pilon_output".format(wildcards.nom),
+        sed_path   = lambda wildcards: config["tool"] + "/output/{}_pilon_output.fasta".format(wildcards.nom)
+    threads:
+        workflow.cores
+    shell:
+        """
+        java -Xmx100G -jar {input.pilon} --genome {input.assem} \
+                 --frags {input.bam} \
+                 --outdir {params.outdir} \
+                 --output {params.out_prefix} \
+                 --threads {threads}
+        sed -i 's/_pilon//g' {params.sed_path}
+        """
