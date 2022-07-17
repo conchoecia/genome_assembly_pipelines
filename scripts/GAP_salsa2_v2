@@ -1,0 +1,170 @@
+"""
+- This script runs SALSA2 using proximity ligation data.
+ - It also outputs a report of the genome quality before and after
+    scaffolding.
+
+Now, this maps the reads using chromap instead of bwa mem. It is faster
+ and produces better mapping results than I was getting with bwa_mem.
+"""
+
+configfile: "config.yaml"
+
+config["tool"] = "GAP_salsa"
+
+import sys
+
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+salsa_path=os.path.join(filepath, "../dependencies/SALSA/run_pipeline.py")
+chromappath = os.path.join(filepath, "../bin/chromap/chromap")
+
+def flatten(list_of_lists):
+    if len(list_of_lists) == 0:
+        return list_of_lists
+    if isinstance(list_of_lists[0], list):
+        return flatten(list_of_lists[0]) + flatten(list_of_lists[1:])
+    return list_of_lists[:1] + flatten(list_of_lists[1:])
+
+
+rule all:
+    input:
+        # run salsa 1
+        expand("GAP_salsa/output/{nom}/scaffolds_FINAL.fasta", nom = config["assemblies"])
+
+rule clean_assembly:
+    """
+    salsa doesn't like input fasta files that have the : character in the header
+    """
+    input:
+        assembly = lambda wildcards: config["assemblies"][wildcards.nom],
+    output:
+        assem = "GAP_salsa/input/{nom}_salsa_input.fasta"
+    threads: 1
+    run:
+        out_handle = open(output.assem, "w")
+        new_counter = 1
+        with open(input.assembly, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    if line[0] == ">":
+                        print(">salsainput{}".format(new_counter), file=out_handle)
+                        new_counter += 1
+                    else:
+                        print(line, file = out_handle)
+        out_handle.close()
+
+rule compile_chromap:
+    """
+    compile chromap if it does not yet exist
+    """
+    output:
+        chromap = os.path.join(filepath, "../bin/chromap/chromap")
+    params:
+        mvdir = os.path.join(filepath, "../bin/")
+    threads: 1
+    shell:
+        """
+        git clone https://github.com/haowenz/chromap.git
+        cd chromap
+        make
+        cd ..
+        mv chromap/ {params.mvdir}
+        """
+
+rule index_ref:
+    input:
+        assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
+        chromap = os.path.join(filepath, "../bin/chromap/chromap")
+    output:
+        index = "GAP_salsa/input/{nom}_salsa_input.fasta.index",
+    shell:
+        """
+        {input.chromap} -i -r {input.assem} -o {output.index}
+        """
+
+rule hic_to_pairs:
+    input:
+        assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
+        index = "GAP_salsa/input/{nom}_salsa_input.fasta.index",
+        chromap = chromappath,
+        left  = flatten([config["libs"][x]["read1"] for x in config["libs"]]),
+        right = flatten([config["libs"][x]["read2"] for x in config["libs"]])
+    output:
+        pairs = "GAP_salsa/output/pairs/{nom}/{nom}.pairs"
+    params:
+        left  = " -1 ".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
+        right = " -2 ".join(flatten([config["libs"][x]["read2"] for x in config["libs"]]))
+    threads: workflow.cores - 1
+    shell:
+        """
+        {input.chromap} --preset hic -x {input.index} \
+            -r {input.assem} \
+            -1 {params.left}  \
+            -2 {params.right} \
+            -t {threads} \
+            -o {output.pairs}
+        """
+
+rule pairs_to_bed:
+    input:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}.pairs"
+    output:
+        bed = config["tool"] + "/output/pairs/{nom}/{nom}.bed"
+    threads: 1
+    shell:
+        """
+        grep -v '#' {input.pairs} | \
+           awk '{{ if ($2$3$4$5 != prev){{print($0); prev=$2$3$4$5}} }}' | \
+           sort -k1,1 | \
+           awk '{{printf("%s\\t%d\\t%d\\t%s/1\\t35\\t%s\\n",
+                          $2, $3, $3 + 75, $1,       $6);
+                  printf("%s\\t%d\\t%d\\t%s/2\\t35\\t%s\\n",
+                          $4, $5, $5 + 75, $1,       $7)
+                }}' > {output.bed}
+        """
+
+rule SALSA_faidx:
+    input:
+        assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
+    output:
+        fai = "GAP_salsa/input/{nom}_salsa_input.fasta.fai",
+    threads:
+        1
+    shell:
+        """
+        samtools faidx {input.assem}
+        """
+
+rule SALSA_salsa:
+    """
+    in this case, the rest_site in params is all-caps. This is the param fed to
+      salsa to tell it the restriction site.
+    """
+    input:
+        salsa = salsa_path,
+        assem = "GAP_salsa/input/{nom}_salsa_input.fasta",
+        fai = "GAP_salsa/input/{nom}_salsa_input.fasta.fai",
+        bed = config["tool"] + "/output/pairs/{nom}/{nom}.bed"
+    output:
+        cleaned = "GAP_salsa/output/{nom}/assembly.cleaned.fasta",
+        final = "GAP_salsa/output/{nom}/scaffolds_FINAL.fasta"
+    params:
+        out = lambda w: "GAP_salsa/output/{}".format(w.nom),
+        rounds = config["rounds"],
+        rest_site = config["junctions"].upper()
+    shell:
+        """
+        set +eu
+        source activate py27
+        python2 {input.salsa} \
+          -a {input.assem} \
+          -l {input.fai} \
+          -b {input.bed} \
+          -m no \
+          -p yes \
+          -i {params.rounds} \
+          -e {params.rest_site} \
+          -o {params.out}
+        conda deactivate
+        set -eu
+        """
