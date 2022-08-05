@@ -1,11 +1,20 @@
 """
-This snakefile maps all the HiC reads to a final genome assembly
-  - It also makes a pretextmap file for quickly looking at the hic-maps
-  - It also calculates the obs/exp matrix, and the pearson exp matrix of that
-  - It maps long reads to the assembly then makes a depth histogram that can be
-     viewed in HiGlass
+This snakefile sorts small scaffolds in a genome assembly based on their best
+  possible location relative to the chromosome-scale scaffolds. This makes it
+  easier later to curate the assembly.
 
-font is small here: https://patorjk.com/software/taag
+The chromosomes must be specified in the config file like this:
+
+chromosomes:
+  - Scaffold1
+  - Scaffold2
+  - Scaffold3
+  - Chr4
+  - Chr_et_cetera
+
+The output of this snakefile is a fasta file in which the chromosome-scale
+  scaffolds are in the same order as the assembly, and the small scaffolds
+  are sorted.
 """
 
 from Bio import SeqIO
@@ -350,31 +359,40 @@ rule summarize_matrix_by_chromosome_coordinate:
     input:
         hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.tsv"
     output:
-        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.summed.tsv"
+        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv"
     threads: 1
     run:
         import pandas as pd
         df = pd.read_csv(input.hicm, sep = "\t", header = None)
         df.columns = ["scaf", "start", "stop", "chrom", "cstart", "cstop", "count"]
         grouped_df = df.groupby(["scaf", "chrom", "cstart", "cstop"], as_index = False)["count"].sum()
-        grouped_df.to_csv(output.hicm, sep = "\t", header = None, index = None)
 
-rule get_best_order:
-    """
-    Gets rid of the rows in the matrix that are chrom-chrom interactions or
-      scaf-scaf interactions. These aren't useful for sorting.
-    """
-    input:
-        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.summed.tsv"
-    output:
-        hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv"
-    threads: 1
-    shell:
-        """
-        sort -k1,1 -k5,5nr {input.hicm} | \
-          awk 'BEGIN{{prev = ""}} {{if ($1 != prev){{print($0)}}; prev = $1 }}' | \
-          sort -k2,2 -k3,3n -k5,5nr > {output.hicm}
-        """
+        gb = grouped_df.groupby(["scaf", "chrom"], as_index = False)
+
+        keeps = []
+        for name, group in gb:
+            # This makes a rolling window sum of the counts to get a more accurate
+            # estimate of the best position
+            pd.set_option('display.max_rows', 5000)
+            group["window"] = group["count"].shift(-4).rolling(7).sum().fillna(0)
+            temp = group.sort_values(["window", "count"], ascending = [False, False])
+            keeps.append(temp.iloc[0])
+
+        newdf = pd.DataFrame(keeps, columns=["scaf", "chrom", "cstart", "cstop", "count", "window"])
+        newdf = newdf.reset_index(drop = True)
+
+        # get the best chrom for each scaffold
+        gb = newdf.groupby(["scaf"], as_index = False)
+        keeps = []
+        for name, group in gb:
+            temp = group.sort_values(["window", "count"], ascending = [False, False])
+            keeps.append(temp.iloc[0])
+
+        newdf = pd.DataFrame(keeps, columns=["scaf", "chrom", "cstart", "cstop", "count", "window"])
+        newdf = newdf.sort_values(["chrom", "cstart", "cstop"], ascending = [True, True, True])
+        newdf = newdf.reset_index(drop = True)
+
+        newdf.to_csv(output.hicm, sep = "\t", header = None, index = None)
 
 rule output_sorted_fasta:
     """
