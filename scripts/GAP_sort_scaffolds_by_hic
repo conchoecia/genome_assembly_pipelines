@@ -420,17 +420,31 @@ rule output_sorted_fasta:
                     chrom_to_scaf_order[chrom].append(scaf)
         #now read in the genome
         chrom_order = []
+        unprinted = []
         scaf_dict = {}
         with open(input.assem, "rU") as handle:
             for record in SeqIO.parse(handle, "fasta"):
                 scaf_dict[record.id] = record
                 if record.id in config["chromosomes"]:
                     chrom_order.append(record.id)
+                else:
+                    unprinted.append(record.id)
         outhandle = open(output.assem, "w")
         # now print out everything
         for thischrom in chrom_order:
             SeqIO.write(scaf_dict[thischrom], outhandle, "fasta")
+            # this is redundant but just run it anyway. None of these should
+            # be in the list
+            if thischrom in unprinted:
+                unprinted.remove(thischrom)
+        # now write the other scaffolds
         for thischrom in chrom_order:
             if thischrom in chrom_to_scaf_order:
                 for thisscaf in chrom_to_scaf_order[thischrom]:
                     SeqIO.write(scaf_dict[thisscaf], outhandle, "fasta")
+                    if thisscaf in unprinted:
+                        unprinted.remove(thisscaf)
+        # now write the scaffolds that didn't have any Hi-C connections to anything
+        for thisscaf in unprinted:
+            SeqIO.write(scaf_dict[thisscaf], outhandle, "fasta")
+        outhandle.close()
