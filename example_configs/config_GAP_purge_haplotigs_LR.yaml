@@ -2,6 +2,10 @@
 assemblies:
    assembly_name: "/path/to/your/assembly/here.fasta"
 
+# change this depending on the type of read you have. map-hifi, map-pb, or map-ont
+#  see this website https://github.com/lh3/minimap2
+minimap2arg: ["map-hifi"]
+
 # Just the path to the fastq file of the long reads
 #  supports one pair of paired WGS files.
 LR:
