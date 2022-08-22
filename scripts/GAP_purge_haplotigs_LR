@@ -34,15 +34,15 @@ rule all:
         #get the histogram pdf
         expand("PH_pipeline/coverage/plot_histo_LR_{nom}.pdf", nom=config["assemblies"]),
         expand("PH_pipeline/PH_hist/LR_to_{nom}.sorted.bam.gencov", nom=config["assemblies"]),
-        #purge
-        expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.fasta", nom=config["assemblies"], CO=CUTOFFS),
-        #clip
-        expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta", nom=config["assemblies"], CO=CUTOFFS),
-        ##now collect information about the clip
-        #expand("PH_pipeline/after_PH/{nom}_CO{CO}_LR.permap.txt", nom=config["assemblies"], CO=CUTOFFS),
-        #expand("PH_pipeline/after_PH/{nom}_CO{CO}_LR.flagstat", nom=config["assemblies"], CO=CUTOFFS),
-        #expand("PH_pipeline/coverage_after_clip/plot_histo_LR_{nom}_CO{CO}.pdf", nom=config["assemblies"], CO=CUTOFFS),
-        #"PH_pipeline/final_results/final_results.tsv"
+        ##purge
+        #expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.fasta", nom=config["assemblies"], CO=CUTOFFS),
+        ##clip
+        #expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta", nom=config["assemblies"], CO=CUTOFFS),
+        ###now collect information about the clip
+        ##expand("PH_pipeline/after_PH/{nom}_CO{CO}_LR.permap.txt", nom=config["assemblies"], CO=CUTOFFS),
+        ##expand("PH_pipeline/after_PH/{nom}_CO{CO}_LR.flagstat", nom=config["assemblies"], CO=CUTOFFS),
+        ##expand("PH_pipeline/coverage_after_clip/plot_histo_LR_{nom}_CO{CO}.pdf", nom=config["assemblies"], CO=CUTOFFS),
+        ##"PH_pipeline/final_results/final_results.tsv"
 
 rule symlink_the_LRs:
     """
@@ -152,11 +152,19 @@ rule percent_of_data_mapping_before:
         blank_counter = 0
         while True:
             line = process.stdout.readline().rstrip().decode("utf-8").strip()
-            if (len(added) % 1000) == 0:
-               sys.stdout.write("  {0:.3f}% Done. {1:.3f}% of data mapped.\r".format(
-                                100 * (len(added)/num_reads),
-                                100 * (tot_mapped/tot_size)))
-               sys.stdout.flush()
+            try:
+                if (len(added) % 1000) == 0:
+                    percent_of_reads_observed = 100 * (len(added)/num_reads)
+                    percent_of_data_mapped = 100 * (tot_mapped/tot_size)
+                    differential = 100 * ((percent_of_reads_observed - percent_of_data_mapped)/percent_of_reads_observed)
+                    sys.stdout.write("  {0:.3f}% Done. {1:.3f}% of data mapped. {2:.3f}% has not mapped.  \r".format(
+                                    percent_of_reads_observed,
+                                    percent_of_data_mapped,
+                                    differential
+                                   ))
+                    sys.stdout.flush()
+            except:
+                pass
             if not line.strip():
                 blank_counter += 1
                 if blank_counter > 99999:
@@ -207,8 +215,8 @@ rule PH_hist:
         gc  = "PH_pipeline/PH_hist/LR_to_{nom}.sorted.bam.gencov",
         pdf = "PH_pipeline/PH_hist/LR_to_{nom}.sorted.bam.histogram.png"
     params:
-        gc  = lambda wildcards: "LR_to_{}.sorted.bam.gencov".format(wildcards.nom),
-        pdf = lambda wildcards: "LR_to_{}.sorted.bam.histogram.png".format(wildcards.nom)
+        gc  = lambda wildcards: "LR_to_{}.bam.gencov".format(wildcards.nom),
+        pdf = lambda wildcards: "LR_to_{}.bam.histogram.png".format(wildcards.nom)
     threads:
         10
     shell:
