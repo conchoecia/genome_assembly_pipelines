@@ -20,10 +20,29 @@ import functions
 filepath = os.path.dirname(os.path.realpath(__file__))
 fs_path=os.path.join(filepath, "../bin/fasta_stats")
 
-config["tool"] = "PH_pipeline"
-CUTOFFS = [95, 90, 80, 70]
-
 configfile: "config.yaml"
+
+config["tool"] = "PH_pipeline"
+
+# we require that a few specific things must be in the config file, or else we
+#  don't have enough information to move forward with the assembly
+required_list = ["cutoffs", "QC_results", "assemblies"]
+for this in required_list:
+    if this not in config:
+        raise IOError("you must specify {} in the config file but you did not.".format(this))
+
+CUTOFFS = config["cutoffs"]
+
+QC_files = []
+if config["QC_results"]:
+    ##now collect information about the clip
+    for nom in config["assemblies"]:
+        for CO in CUTOFFS:
+            QC_files.append("PH_pipeline/after_PH/{nom}_CO{CO}_LR.permap.txt".format( nom=config["assemblies"], CO=CUTOFFS))
+            QC_files.append("PH_pipeline/after_PH/{nom}_CO{CO}_LR.flagstat".format( nom=config["assemblies"], CO=CUTOFFS))
+            QC_files.append("PH_pipeline/coverage_after_clip/plot_histo_LR_{nom}_CO{CO}.pdf".format(nom=config["assemblies"], CO=CUTOFFS))
+    QC_files.append("PH_pipeline/final_results/final_results.tsv")
+
 
 rule all:
     input:
@@ -38,11 +57,8 @@ rule all:
         expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}.fasta", nom=config["assemblies"], CO=CUTOFFS),
         #clip
         expand("PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta", nom=config["assemblies"], CO=CUTOFFS),
-        ##now collect information about the clip
-        expand("PH_pipeline/after_PH/{nom}_CO{CO}_LR.permap.txt", nom=config["assemblies"], CO=CUTOFFS),
-        expand("PH_pipeline/after_PH/{nom}_CO{CO}_LR.flagstat", nom=config["assemblies"], CO=CUTOFFS),
-        expand("PH_pipeline/coverage_after_clip/plot_histo_LR_{nom}_CO{CO}.pdf", nom=config["assemblies"], CO=CUTOFFS),
-        "PH_pipeline/final_results/final_results.tsv"
+        # if we specify in the contig that we want to QC the resulting assemblies, do that here
+        QC_files
 
 rule symlink_the_LRs:
     """
@@ -339,7 +355,7 @@ rule PH_clip:
 rule map_LR_to_purged:
     input:
         #assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        assem = lambda wildcards: config["assemblies"][wildcards.nom],
+        assem = "PH_pipeline/PH_purge/{nom}_assemblies/PH_purge_{nom}_CO{CO}/PH_purge_{nom}_CO{CO}_clip.fasta",
         LRs = expand(config["tool"] + "/input/longreads/{LR}",
                        LR = [os.path.basename(x) for x in config["LR"]])
     output:

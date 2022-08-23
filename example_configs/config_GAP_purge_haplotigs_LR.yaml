@@ -6,6 +6,15 @@ assemblies:
 #  see this website https://github.com/lh3/minimap2
 minimap2arg: ["map-hifi"]
 
+# These are the identity cutoffs used in determining whether something is repetitive
+# or not. 95 means 95% identity, 80 means 80% identity, et cetera.
+cutoffs: [95, 90, 80, 70]
+
+# If you want to be thorough about QCing the final results we must map the long reads
+#  back to the assembly to see how many reads still map compared to the original
+#  This is just a binary True or False.
+QC_results: True
+
 # Just the path to the fastq file of the long reads
 #  supports one pair of paired WGS files.
 LR:
