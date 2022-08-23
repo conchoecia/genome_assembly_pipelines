@@ -2,12 +2,18 @@
 # dts@ucsc.edu
 # dschultz@mbari.org
 #
-# This config file is for the script `config_GAP_hic_map5`
+# This config file is for the script `GAP_sort_scaffolds_by_hic`
 #  https://github.com/conchoecia/genome_assembly_pipelines
 # To use this config file, copy it to the directory you
-#  want to run the hi-c analysis in, then rename it to
+#  want to run the analysis in, then rename it to
 #  config.yaml. Edit the config.yaml file and then run
 #  snakemake --snakfile /path/to/genome_assembly_pipelines/scripts/GAP_hic_map
+
+# This program works by sorting all the little scaffolds in a genome assembly
+#  based on their best location relative to the chromosome-scale scaffolds.
+#  You must specify which are the chromosome-scale scaffolds. They will be
+#  printed out in the fasta file in the order that you specify. The other
+#  scaffolds will be printed out next in the Hi-C sorted order.
 
 # The path to your assembly for which you want a Hi-C map goes here.
 assemblies:

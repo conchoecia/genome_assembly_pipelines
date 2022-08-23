@@ -13,7 +13,7 @@ chromosomes:
   - Chr_et_cetera
 
 The output of this snakefile is a fasta file in which the chromosome-scale
-  scaffolds are in the same order as the assembly, and the small scaffolds
+  scaffolds are in the order specified in the config, and the small scaffolds
   are sorted.
 """
 
@@ -372,7 +372,8 @@ rule summarize_matrix_by_chromosome_coordinate:
         keeps = []
         for name, group in gb:
             # This makes a rolling window sum of the counts to get a more accurate
-            # estimate of the best position
+            #  estimate of the best position. It centers the value and sums up
+            # 10 windows around it.
             pd.set_option('display.max_rows', 5000)
             group["window"] = group["count"].shift(-4).rolling(7).sum().fillna(0)
             temp = group.sort_values(["window", "count"], ascending = [False, False])
@@ -403,11 +404,11 @@ rule output_sorted_fasta:
         hicm  = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv",
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
     output:
-         assem = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_output.fasta"
+        assem = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_output.fasta"
     threads: 1
     run:
         chrom_to_scaf_order = {}
-        # get the order of chromosomes as they occur in the assembly
+        # get the order of chromosomes as they occur in the config
         with open(input.hicm, "r") as f:
             for line in f:
                 line = line.strip()
@@ -419,16 +420,22 @@ rule output_sorted_fasta:
                         chrom_to_scaf_order[chrom] = []
                     chrom_to_scaf_order[chrom].append(scaf)
         #now read in the genome
-        chrom_order = []
+        chrom_order = config["chromosomes"]
+        unseen_chromosomes = config["chromosomes"]
         unprinted = []
         scaf_dict = {}
         with open(input.assem, "rU") as handle:
             for record in SeqIO.parse(handle, "fasta"):
                 scaf_dict[record.id] = record
                 if record.id in config["chromosomes"]:
-                    chrom_order.append(record.id)
+                    unseen_chromosomes.remove(thischrom)
                 else:
                     unprinted.append(record.id)
+        # potentially an error here. Read this message
+        if len(unseen_chromosomes) > 0:
+            raise IOError("You specified these chromosomes but they were not in the fasta file: {}".format(unseen_chromosomes))
+
+        # Should be safe to move forward now
         outhandle = open(output.assem, "w")
         # now print out everything
         for thischrom in chrom_order:
