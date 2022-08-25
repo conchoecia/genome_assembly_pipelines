@@ -420,25 +420,27 @@ rule output_sorted_fasta:
                         chrom_to_scaf_order[chrom] = []
                     chrom_to_scaf_order[chrom].append(scaf)
         #now read in the genome
-        chrom_order = config["chromosomes"]
-        unseen_chromosomes = config["chromosomes"]
-        unprinted = []
+        chrom_order = [x for x in config["chromosomes"]]
+        unseen_chromosomes = [x for x in config["chromosomes"]]
+        unprintes  = []
         scaf_dict = {}
         with open(input.assem, "rU") as handle:
             for record in SeqIO.parse(handle, "fasta"):
                 scaf_dict[record.id] = record
                 if record.id in config["chromosomes"]:
-                    unseen_chromosomes.remove(thischrom)
+                    unseen_chromosomes.remove(record.id)
                 else:
                     unprinted.append(record.id)
         # potentially an error here. Read this message
         if len(unseen_chromosomes) > 0:
             raise IOError("You specified these chromosomes but they were not in the fasta file: {}".format(unseen_chromosomes))
 
+        print(chrom_order)
         # Should be safe to move forward now
         outhandle = open(output.assem, "w")
         # now print out everything
         for thischrom in chrom_order:
+            print("printing ", thischrom)
             SeqIO.write(scaf_dict[thischrom], outhandle, "fasta")
             # this is redundant but just run it anyway. None of these should
             # be in the list
