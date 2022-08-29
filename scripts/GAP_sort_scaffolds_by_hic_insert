@@ -169,8 +169,17 @@ rule all:
                nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
         expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv",
                nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+        # now generate the assembly
         expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_output.fasta",
                nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_inserted_scaffolds.tsv",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_appended_scaffolds.tsv",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_unseen_scaffolds.txt",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_insertion_stats.tsv",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"])
 
 # make softlinks of the input files
 # files end up here:
@@ -589,7 +598,11 @@ rule output_sorted_fasta:
         hicm  = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv",
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
     output:
-        assem = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_output.fasta"
+        assem = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_output.fasta",
+        inserted_scafs     = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_inserted_scaffolds.tsv",
+        appended_scafs = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_appended_scaffolds.tsv",
+        unseen_scafs   = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_unseen_scaffolds.txt",
+        insertion_stats = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_insertion_stats.tsv"
     params:
         strength_fraction = config["strength_fraction"],
         min_insert_size   = config["min_insert_size"],
@@ -615,6 +628,8 @@ rule output_sorted_fasta:
                     scaffold_dict[record.id] = record
                     scaffold_order.append(record.id)
                     unseen_scafs.append(record.id)
+        num_scaffolds = len(scaffold_dict)
+
 
         # potentially an error here. Read this message
         if len(unseen_chromosomes) > 0:
@@ -633,6 +648,11 @@ rule output_sorted_fasta:
                              (df["scafsize"] >= params.min_insert_size)), ]
         insert_df.reset_index(drop = True, inplace = True)
         append_df.reset_index(drop = True, inplace = True)
+
+        # now print out those DFs to files so we can check them later
+        insert_df.to_csv(output.inserted_scafs, sep = "\t", index = False)
+        append_df.to_csv(output.appended_scafs, sep = "\t", index = False)
+
 
         # These contigs we insert into the scaffold to be printed in between
         #  the other scaffolds
@@ -665,7 +685,71 @@ rule output_sorted_fasta:
                     unseen_scafs.remove(thisscaf.id)
                 except:
                     pass
+        non_insert_handle = open(output.unseen_scafs, "w")
         # now write the scaffolds that didn't have any Hi-C connections to anything
         for thisscaf in unseen_scafs:
             SeqIO.write(scaffold_dict[thisscaf], outhandle, "fasta")
+            print(thisscaf, file = non_insert_handle)
         outhandle.close()
+        non_insert_handle.close()
+
+        # at the end we print out some information about the fate of all the chromosomes
+        s_num_scaffolds = num_scaffolds
+        s_med_scaf_size = df["scafsize"].median()
+        s_med_strength  = df["count_per_bases_squared"].median()
+        scafs_larger_than_min   = len(df.loc[df["scafsize"] >= params.min_insert_size,])
+        scafs_stronger_than_min = len(df.loc[df["count_per_bases_squared"] >= min_strength,])
+        of = open(output.insertion_stats, "w")
+        os = ""
+        os += "******* STATS ABOUT GENOME ASSEMBLY *******\n"
+        os += " Assembly file = {}\n".format(input.assem)
+        os += " Best Hi-C hits: {}\n".format(input.hicm)
+        os += "\n"
+        os += " There were {} chromosomes specified in the config file.\n".format(len(config["chromosomes"]))
+        os += " There were {} chromosomes found in the assembly file.\n".format(len(chrom_order))
+        os += "\n"
+        os += " There were {} scaffolds found in the genome fasta file.\n".format(s_num_scaffolds)
+        os += "\n"
+        os += " Approx median scaffold size (not including chroms): {} bp\n".format(int(s_med_scaf_size))
+        os += " Approx HiC-to-chrom strength:  {} count/(bases^2)\n".format(s_med_strength)
+        os += "\n"
+        os += " The minimum scaffold size we will insert into the genome is: {}bp\n".format(params.min_insert_size)
+        os += "   - There are {} out of {} ({:.2f}%) scaffolds with this minimum length.\n".format(
+               scafs_larger_than_min, s_num_scaffolds,
+               100*(scafs_larger_than_min/s_num_scaffolds))
+        os += " The minimum Hi-C strength that will be inserted into the genome is: {}\n".format(min_strength)
+        os += "   - There are {} out of {} ({:.2f}%) scaffolds with this minimum Hi-C strength.\n".format(
+               scafs_stronger_than_min, s_num_scaffolds,
+               100*(scafs_stronger_than_min/s_num_scaffolds))
+        os += "\n"
+        os += " When selecting for the min Hi-C strength and min length:\n"
+        os += "   There are {} out of {} ({:.2f}%) scaffolds.\n".format(
+                len(insert_df), s_num_scaffolds,
+                100* (len(insert_df)/s_num_scaffolds))
+        os += "\n"
+        os += " Scaffolds that were appended to the end of the fasta:\n"
+        os += "   - {} out of {} ({:.2f}%) scaffolds.\n".format(
+                len(append_df), s_num_scaffolds,
+                100* (len(append_df)/s_num_scaffolds))
+        os += "\n"
+        os += " Scaffolds that didn't appear in the Hi-C but were added to the end of the assembly:\n"
+        os += "   - {} out of {} ({:.2f}%) scaffolds.\n".format(
+                len(unseen_scafs), s_num_scaffolds,
+                100* (len(unseen_scafs)/s_num_scaffolds))
+        os += "\n"
+        os += " Adding everything up:\n"
+        #os += "   - {} chromosomes\n".format(len(chromosome_dict))
+        os += "   - {} inserted\n".format(len(insert_df))
+        os += "   - {} appended\n".format(len(append_df))
+        os += "   - {} placed at end\n".format(len(unseen_scafs))
+        os += "  ---------------------------\n".format(len(unseen_scafs))
+        os += "   - {} out of {} ({:.2f}%) scaffolds.\n".format(
+            len(insert_df) + \
+            len(append_df) + \
+            len(unseen_scafs),
+            s_num_scaffolds,
+            100 * (len(insert_df) + len(append_df) + len(unseen_scafs))/s_num_scaffolds)
+        print()
+        print(os)
+        print(os, file = of)
+        of.close()
