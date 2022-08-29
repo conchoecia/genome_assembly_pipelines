@@ -181,12 +181,6 @@ rule all:
         expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_insertion_stats.tsv",
                nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
 
-        #TESTING
-        expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.TEST.tsv",
-               nom = config["assemblies"], qval = qvals, binsize=config["binsize"])
-
-
-
 # make softlinks of the input files
 # files end up here:
 #   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
