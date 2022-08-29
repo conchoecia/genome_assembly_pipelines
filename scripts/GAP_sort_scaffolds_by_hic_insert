@@ -451,7 +451,16 @@ rule summarize_matrix_by_chromosome_coordinate:
 
 class Chromosome:
     """
-    This takes in a seqio record object
+    This takes in a seqio record object.
+    First construct the object, providing a SeqIO record,
+      the minimum gap length to consider as a gap,
+      and the size of the gaps when printing out.
+
+    - Then add new contigs with .insert()
+    - Then add contigs that correspond to chromosomes, but don't have
+       a place with .append()
+    - Then run gen_chrom to set self.SeqRecord
+    - Then you can acces the SeqRecord of the object to print it out.
     """
     def __init__(self, record, min_gap_len, new_gap_length):
         self.new_gap_length = new_gap_length
@@ -541,6 +550,10 @@ class Chromosome:
         self.non_inserted_scafs.append(record)
 
     def contig_ranges(self, seq, sub):
+        """
+        This script takes in a sequence and determines out the
+         ranges to get the contigs.
+        """
         indices = list(self.find_all(seq, sub))
         gap_starts = []
         gap_stops  = []
@@ -711,7 +724,7 @@ rule output_sorted_fasta:
         os += " There were {} scaffolds found in the genome fasta file.\n".format(s_num_scaffolds)
         os += "\n"
         os += " Approx median scaffold size (not including chroms): {} bp\n".format(int(s_med_scaf_size))
-        os += " Approx HiC-to-chrom strength:  {} count/(bases^2)\n".format(s_med_strength)
+        os += " Approx HiC-to-chrom strength:  {} count/(MB^2)\n".format(s_med_strength)
         os += "\n"
         os += " The minimum scaffold size we will insert into the genome is: {}bp\n".format(params.min_insert_size)
         os += "   - There are {} out of {} ({:.2f}%) scaffolds with this minimum length.\n".format(
