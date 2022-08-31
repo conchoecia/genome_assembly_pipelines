@@ -13,6 +13,12 @@ snakemake --snakefile genome_assembly_pipelines/scripts/GAP_sort_scaffolds_by_hi
 
 - [Getting Started](#started)
 - [Users' Guide](#uguide)
+  - [Installation](#install)
+  - [General usage](#general)
+  - [Use cases](#cases)
+    - [Insert small scaffolds into chromosome-scale scaffolds](#insert-scaffolds-hic)
+  - [Getting help](#help)
+  - [Citing GAP](#cite)
 
 ## <a name="uguide"></a>Users' Guide
 
