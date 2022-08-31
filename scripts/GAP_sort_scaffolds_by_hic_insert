@@ -425,7 +425,7 @@ rule summarize_matrix_by_chromosome_coordinate:
       6: window_count
       7: rolling_window_count
       8: window area
-      9: count_per_bases_squared
+      9: count_per_gigabase_squared
     """
     input:
         hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.tsv",
@@ -473,18 +473,20 @@ rule summarize_matrix_by_chromosome_coordinate:
         # modify each row
         newdf["scafsize"] = newdf["scaf"].map(scaf_to_size)
         newdf["area"] = 0
-        newdf["count_per_MB_squared"] = 0
+        newdf["count_per_gigabase_squared"] = 0
         for index, row in newdf.iterrows():
             thissize = row["scafsize"]
             if row["scafsize"] >= (7 * config["binsize"][0]):
                 thissize = (7 * config["binsize"][0])
-            thisarea = (thissize * config["binsize"][0])/1000000
+            thisarea = (thissize * config["binsize"][0])/1000000000
             thiscount = row["window"] / thisarea
             newdf.loc[index, "area"] = thisarea
-            newdf.loc[index, "count_per_bases_squared"] = thiscount
+            # 20kb scaffold by 50kb window = 1Gb. Gb is the most appropriate
+            #  unit to use here
+            newdf.loc[index, "count_per_gigabase_squared"] = thiscount
 
         newdf = newdf[["scaf", "scafsize", "chrom", "cstart", "cstop", "count",
-                       "window", "area", "count_per_bases_squared"]]
+                       "window", "area", "count_per_gigabase_squared"]]
 
         newdf.to_csv(output.hicm, sep = "\t", index = None)
 
@@ -691,12 +693,12 @@ rule output_sorted_fasta:
         # read in the scafs
         df = pd.read_csv(input.hicm, sep = "\t")
         # get the quantile
-        min_strength = float(df["count_per_bases_squared"].quantile(1 - params.strength_fraction))
+        min_strength = float(df["count_per_gigabase_squared"].quantile(1 - params.strength_fraction))
 
         # These contigs we insert into the chromosomes
-        insert_df = df.loc[((df["count_per_bases_squared"] >= min_strength) & \
+        insert_df = df.loc[((df["count_per_gigabase_squared"] >= min_strength) & \
                             (df["scafsize"] >= params.min_insert_size)), ]
-        append_df = df.loc[~((df["count_per_bases_squared"] >= min_strength) & \
+        append_df = df.loc[~((df["count_per_gigabase_squared"] >= min_strength) & \
                              (df["scafsize"] >= params.min_insert_size)), ]
         insert_df.reset_index(drop = True, inplace = True)
         append_df.reset_index(drop = True, inplace = True)
@@ -748,9 +750,9 @@ rule output_sorted_fasta:
         # at the end we print out some information about the fate of all the chromosomes
         s_num_scaffolds = num_scaffolds
         s_med_scaf_size = df["scafsize"].median()
-        s_med_strength  = df["count_per_bases_squared"].median()
+        s_med_strength  = df["count_per_gigabase_squared"].median()
         scafs_larger_than_min   = len(df.loc[df["scafsize"] >= params.min_insert_size,])
-        scafs_stronger_than_min = len(df.loc[df["count_per_bases_squared"] >= min_strength,])
+        scafs_stronger_than_min = len(df.loc[df["count_per_gigabase_squared"] >= min_strength,])
         of = open(output.insertion_stats, "w")
         os = ""
         os += "******* STATS ABOUT GENOME ASSEMBLY *******\n"
