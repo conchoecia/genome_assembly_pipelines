@@ -1,5 +1,17 @@
-# name of two assemblies and their paths
-qname: /path/to/assembly/one.fasta
-query: "my_assem_one"
-rname: /path/to/assembly/two.fasta
-reference: "my_assem_two"
+# This program takes two genome assemblies and quickly aligns them
+#  and outputs the results into a format that can be easily uploaded
+#  to D-genies.
+#
+# This program runs faster than running minimap2 on the whole genomes
+#  because it splits the query into many smaller sequences.
+#
+# qname is the name of the query assembly.
+# Really it doesn't matter which assembly you pick, but the query
+#  is the one that will be split up and aligned to the reference.
+qname: "my_assem_one"
+# query is the path of the fasta file of the query assembly
+query: /path/to/assembly/one.fasta
+# rname is whatever you want to call the reference assembly
+rname: "my_assem_two"
+# reference is the path to the fasta file of the reference assembly
+reference: /path/to/assembly/two.fasta
