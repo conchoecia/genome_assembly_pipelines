@@ -1,0 +1,14 @@
+# This is the example config file for GAP_miniprot_annotate
+#  uses protein files from other species to generate gffs
+#  of those protein coordinates in another genome.
+
+# you can annotate multiple assemblies with the same protein set
+assemblies:
+  assem1: "/path/to/assem1.fasta"
+  assem2: "/path/to/assem2.fasta"
+
+# these are the proteins that will be used to annotate the genome
+proteins:
+  sp1_proteins:       "/path/to/sp1_proteins.fasta"
+  more_proteins:      "/path/to/more_proteins.fasta"
+  even_more_proteins: "/path/to/even_more_proteins.fasta"

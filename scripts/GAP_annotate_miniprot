@@ -1,0 +1,103 @@
+"""
+Uses miniprot to annotate a genome with proteomes from closely-related species
+"""
+configfile: "config.yaml"
+config["tool"] = "GAP_annotate_miniprot"
+
+from Bio import SeqIO
+import sys
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/miniprots/{assem}_and_{prot}_mapped.gff",
+               assem = config["assemblies"], prot = config["proteins"]),
+        expand(config["tool"] + "/output/{assem}.chrom",
+               assem = config["assemblies"]),
+        expand(config["tool"] + "/output/{assem}.pep",
+               assem = config["assemblies"])
+
+# make softlink of the input files
+rule softlink_assembly:
+    """
+    make a softlink of the assembly
+    """
+    input:
+        assem = lambda wildcards: config["assemblies"][wildcards.assem]
+    output:
+        assem = config["tool"] + "/input/assembly/{assem}.fasta"
+    threads:
+        1
+    shell:
+        """
+        ln -s {input.assem} {output.assem}
+        """
+
+rule tblastn:
+    """
+    Just runs miniprot for one file
+    """
+    input:
+        query = lambda wildcards: config["proteins"][wildcards.prot],
+        assem = config["tool"] + "/input/assembly/{assem}.fasta",
+    output:
+        query = config["tool"] + "/output/miniprots/{assem}_and_{prot}_mapped.gff"
+    threads: workflow.cores - 1
+    shell:
+        """
+        miniprot -t {threads} --gff {input.assem} {input.query} > {output.query}
+        """
+
+rule make_a_chrom_file:
+    """
+    cat the tblastn results to make a .chrom file. Used in the odp pipeline.
+    """
+    input:
+        query = expand(config["tool"] + "/output/miniprots/{{assem}}_and_{prot}_mapped.gff",
+                       prot = config["proteins"])
+    output:
+        chrom = config["tool"] + "/output/{assem}.chrom"
+    threads: 1
+    run:
+        import pandas as pd
+
+        entries = []
+        for thisfile in input.query:
+            with open(thisfile, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("##PAF"):
+                        fields = line.split("\t")
+                        protein = fields[1]
+                        chrom   = fields[6]
+                        direc   = fields[5]
+                        start   = int(fields[8])
+                        stop    = int(fields[9])
+                        entries.append({"protein":protein, "chrom":chrom, "direc":direc, "start":start, "stop":stop})
+        df = pd.DataFrame.from_dict(entries)
+        df = df.sort_values(by = ["chrom", "start", "direc", "stop", "protein"],
+                            ascending = [True, True, True, True, True])
+        # drop exact duplicates
+        df = df.drop_duplicates(subset=["chrom", "start", "direc", "stop"])
+        df.to_csv(output.chrom, sep = "\t", header = False, index = None)
+
+rule make_pep_files:
+    input:
+        chrom = config["tool"] + "/output/{assem}.chrom",
+        query = [config["proteins"][x] for x in config["proteins"]]
+    output:
+        pep   = config["tool"] + "/output/{assem}.pep"
+    threads: 1
+    run:
+        prot_dict = {}
+        for thispep in input.query:
+            with open(thispep) as handle:
+                for record in SeqIO.parse(handle, "fasta"):
+                    prot_dict[record.id] = record
+        outhandle = open(output.pep, "w")
+        with open(input.chrom, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    prot = line.split("\t")[0]
+                    SeqIO.write(prot_dict[prot], outhandle, "fasta")
+        outhandle.close()
