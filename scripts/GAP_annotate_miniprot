@@ -1,13 +1,14 @@
 """
 Uses miniprot to annotate a genome with proteomes from closely-related species
 """
+from Bio import SeqIO
 configfile: "config.yaml"
 config["tool"] = "GAP_annotate_miniprot"
 
 # Make this break if one fasta is empty
 for thisassem in config["assemblies"]:
     bases = 0
-    for record in SeqIO.parse(thisassem, "fasta"):
+    for record in SeqIO.parse(config["assemblies"][thisassem], "fasta"):
         bases += len(record.seq)
     if bases == 0:
         raise IOError("there are no bases in {}".format(thisassem))
@@ -23,6 +24,8 @@ rule all:
         expand(config["tool"] + "/output/{assem}.chrom",
                assem = config["assemblies"]),
         expand(config["tool"] + "/output/{assem}.pep",
+               assem = config["assemblies"]),
+        expand(config["tool"] + "/output/{assem}_sample_similarity.pdf",
                assem = config["assemblies"])
 
 # make softlink of the input files
@@ -56,6 +59,84 @@ rule tblastn:
         miniprot -t {threads} --gff {input.assem} {input.query} > {output.query}
         """
 
+def flag_nested(df):
+    """
+    returns a dataframe of proteins that are not nested,
+      and a list of things that are nested
+    """
+    df = df.sort_values(
+        by        = ["chrom", "start", "stop", "np",  "ms",  "AS"],
+        ascending = [True,    True,    True,   False, False, False])
+    df.reset_index(drop=True, inplace = True)
+    nested = set()
+    prevsize = -1
+    done = False
+    while not done:
+        drop_these_rows = set()
+        prevstart = 0
+        prevstop = 0
+        for index, row in df.iterrows():
+            thisstart = row["start"]
+            thisstop  = row["stop"]
+            # check if they are nested
+            if thisstart >= prevstart and thisstop <= prevstop:
+                # this is nested, so remove
+                nested.add(row["protein"])
+                drop_these_rows.add(index)
+            prevstart = thisstart
+            prevstop = thisstop
+        df = df.loc[~df.index.isin(drop_these_rows), ]
+        print("df size: ", len(df))
+        if len(df) == prevsize:
+            done = True
+        prevsize = len(df)
+    return df, list(nested)
+
+rule sp_to_similarity:
+    """
+    makes a plot showing protein similarity.
+    """
+    input:
+        query = expand(config["tool"] + "/output/miniprots/{{assem}}_and_{prot}_mapped.gff",
+                       prot = config["proteins"])
+    output:
+        pdf = config["tool"] + "/output/{assem}_sample_similarity.pdf"
+    params:
+        assem = lambda wildcards: wildcards.assem
+    threads: 1
+    run:
+        sp_to_scores = {entry: [] for entry in config["proteins"]}
+        for entry in config["proteins"]:
+            gff = "{}/output/miniprots/{}_and_{}_mapped.gff".format(
+                config["tool"], params.assem, entry)
+            with open(gff, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("##PAF"):
+                        #sp_to_scores[entry].append(int(line.split("\t")[15].replace("np:i:","")))
+                        sp_to_scores[entry].append(int(line.split("\t")[13].replace("AS:i:","")))
+
+
+        print({x:sum(sp_to_scores[x])/len(sp_to_scores[x]) for x in sp_to_scores})
+        import seaborn as sns, matplotlib.pyplot as plt, operator as op
+
+        # sort keys and values together
+        sorted_keys, sorted_vals = zip(*sorted(sp_to_scores.items(), key=op.itemgetter(1)))
+
+        # almost verbatim from question
+        sns.set(context='notebook', style='whitegrid')
+        bp =  sns.boxplot(data=sorted_vals)
+        bp.set_yscale("log")
+
+        # category labels
+        plt.xticks(plt.xticks()[0], sorted_keys, rotation = 45)
+
+        fig = bp.get_figure()
+        plt.xlabel("Groups")
+        plt.ylabel("Pos hits")
+        plt.tight_layout()
+        fig.savefig(output.pdf)
+
 rule make_a_chrom_file:
     """
     cat the tblastn results to make a .chrom file. Used in the odp pipeline.
@@ -81,14 +162,55 @@ rule make_a_chrom_file:
                         direc   = fields[5]
                         start   = int(fields[8])
                         stop    = int(fields[9])
-                        entries.append({"protein":protein, "chrom":chrom, "direc":direc, "start":start, "stop":stop})
+                        AS      = int(fields[13].replace("AS:i:",""))
+                        AS      = int(fields[13].replace("AS:i:",""))
+                        ms      = int(fields[14].replace("ms:i:",""))
+                        np      = int(fields[15].replace("np:i:",""))
+                        entries.append({"protein":protein, "chrom":chrom, "direc":direc, "start":start, "stop":stop, "AS":AS, "ms": ms, "np":np})
         df = pd.DataFrame.from_dict(entries)
-        print(df)
-        df = df.sort_values(by = ["chrom", "start", "direc", "stop", "protein"],
-                            ascending = [True, True, True, True, True])
+
         # drop exact duplicates
+        df = df.sort_values(by =        ["chrom", "start", "direc", "stop",  "np",  "ms",  "AS"],
+                            ascending = [True,    True,    True,    True,    False, False, False])
+        #print(df.loc[df.duplicated(subset=["chrom", "direc", "stop", "start"], keep = False)])
+        #sys.exit()
         df = df.drop_duplicates(subset=["chrom", "start", "direc", "stop"])
+
+        # drop things that have the same end, keep the one with the best score
+        df = df.sort_values(by =        ["chrom", "stop", "direc", "np",  "ms",  "AS"],
+                            ascending = [True,    True,    True,    False, False, False])
+        #print(df.loc[df.duplicated(subset=["chrom", "direc", "stop"], keep = False)])
+        df = df.drop_duplicates(subset=["chrom", "direc", "stop"])
+
+        # drop things that have the same beginning, keep the one with the best score
+        print(df)
+        df = df.sort_values(by =        ["chrom", "start", "direc", "np",  "ms",  "AS"],
+                            ascending = [True,    True,    True,    False, False, False])
+        #print(df.loc[df.duplicated(subset=["chrom", "direc", "start"], keep = False)])
+        df = df.drop_duplicates(subset=["chrom", "direc", "start"])
+
+        ## forward_direc
+        #ff = df.loc[df["direc"] == "+", ].sort_values(
+        #    by        = ["chrom", "start", "stop", "np",  "ms",  "AS"],
+        #    ascending = [True,    True,    True,   False, False, False])
+        #rf = df.loc[df["direc"] == "-", ].sort_values(
+        #    by        = ["chrom", "start", "stop", "np",  "ms",  "AS"],
+        #    ascending = [True,    True,    True,   False, False, False])
+        #ff, nested_f = flag_nested(ff)
+        #rf, nested_r = flag_nested(rf)
+
+        #print("len nested ff", len(nested_f))
+        #print("len nested rf", len(nested_r))
+
+        #newdf = pd.concat([rr,rf])
+        #newdf = df.sort_values(by =    ["chrom", "start", "stop", "direc", "np",  "ms",  "AS"],
+        #                    ascending = [True,    True,    True,   True,    False, False, False])
+        #newdf = newdf.reset_index(drop=True)
+        #print(newdf)
+        df = df.reset_index(drop=True)
+        df = df[["protein", "chrom", "direc", "start", "stop"]]
         df.to_csv(output.chrom, sep = "\t", header = False, index = None)
+
 
 rule make_pep_files:
     input:
