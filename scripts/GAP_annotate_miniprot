@@ -4,6 +4,15 @@ Uses miniprot to annotate a genome with proteomes from closely-related species
 configfile: "config.yaml"
 config["tool"] = "GAP_annotate_miniprot"
 
+# Make this break if one fasta is empty
+for thisassem in config["assemblies"]:
+    bases = 0
+    for record in SeqIO.parse(thisassem, "fasta"):
+        bases += len(record.seq)
+    if bases == 0:
+        raise IOError("there are no bases in {}".format(thisassem))
+
+
 from Bio import SeqIO
 import sys
 
@@ -74,6 +83,7 @@ rule make_a_chrom_file:
                         stop    = int(fields[9])
                         entries.append({"protein":protein, "chrom":chrom, "direc":direc, "start":start, "stop":stop})
         df = pd.DataFrame.from_dict(entries)
+        print(df)
         df = df.sort_values(by = ["chrom", "start", "direc", "stop", "protein"],
                             ascending = [True, True, True, True, True])
         # drop exact duplicates
