@@ -1,11 +1,17 @@
 """
+title: GAP_NCBI_contamination
+author: dts (github: @conchoecia)
+
 This takes a contamination file from an NCBI genome upload and
   removes the contaminating sequences/regions.
+
+At the end, it normalizes all the gaps of Ns to 100bp.
 """
+
 import subprocess
+import sys
 configfile: "config.yaml"
 config["tool"] = "GAP_NCBI_contamination"
-
 
 if "contamination_file" not in config:
     raise IOError("You must have the field contamination_file in the config")
@@ -63,6 +69,9 @@ rule trim_contamination:
                 else:
                     inN    = False
                     newseq = ""
+                    # this block is also in GAP_homogenize_gaps
+                    # it simultaneously omits the regions from the NCBI contam
+                    #  report while making all the gaps 100bp
                     for i in range(len(record.seq)):
                         pos = i+1
                         if pos not in trim_regions[record.id]:
