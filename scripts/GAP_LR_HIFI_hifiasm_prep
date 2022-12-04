@@ -11,6 +11,7 @@ configfile: "config.yaml"
 import pandas as pd
 from pathlib import Path
 import pysam
+import textwrap
 
 config["tool"] = "GAP_hifiasm_prep"
 
@@ -128,6 +129,13 @@ rule get_largest_50x_lists:
                 if not os.path.exists(outfile):
                     Path(outfile).touch()
 
+
+def fold_string_to_80_chars(inp_string):
+    """
+    folds the input string to 80 characters wide
+    """
+    return textwrap.fill(inp_string, width = 80)
+
 rule fasta_file_of_filtered:
     """
     Get a fasta file of the filtered reads. Use pysam
@@ -138,3 +146,15 @@ rule fasta_file_of_filtered:
     output:
         reads = config["tool"] + "/reads/LR/{sample}_{bamfile}_read_list.{size}xPerHapkeep.fasta.gz"
     threads: 1
+    run:
+        # get the reads to keep
+        with open(input.readlist, "r") as f:
+            reads = [x.strip() for x in f.readlines()]
+        # get the reads from the bam
+        bam = pysam.AlignmentFile(input.bam, "rb")
+        with gzip.open(output.reads, "wt") as f:
+            for read in bam.fetch():
+                if read.query_name in reads:
+                    print(">" + read.query_name, file = f)
+                    # fold the reads to 80 characters
+                    print(fold_string_to_80_chars(read.query_sequence), file = f)
