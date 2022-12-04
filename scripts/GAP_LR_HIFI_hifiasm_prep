@@ -9,6 +9,7 @@ Also gets all the CCS reads together.
 configfile: "config.yaml"
 
 import pandas as pd
+import gzip
 from pathlib import Path
 import pysam
 import textwrap
@@ -35,7 +36,7 @@ for key in config["subread_bams"]:
 
 rule all:
     input:
-        expand(config["tool"] + "/reads/LR/{sample}_{bamfile}_read_list.{size}xPerHapkeep.fasta.gz"
+        expand(config["tool"] + "/reads/LR/{sample}_{bamfile}_read_list.{size}xPerHapkeep.fasta.gz",
                sample = config["sample"], bamfile = config["subread_bams"], size = [25,50,75]),
         #expand(config["tool"] + "/{sample}_hifiasm_LR.fasta.gz", sample = config["sample"])
 
@@ -151,7 +152,7 @@ rule fasta_file_of_filtered:
         with open(input.readlist, "r") as f:
             reads = [x.strip() for x in f.readlines()]
         # get the reads from the bam
-        bam = pysam.AlignmentFile(input.bam, "rb")
+        bam = pysam.AlignmentFile(input.bam, mode = "rb", check_sq= False, until_eof=True)
         with gzip.open(output.reads, "wt") as f:
             for read in bam.fetch():
                 if read.query_name in reads:
