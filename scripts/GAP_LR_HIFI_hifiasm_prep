@@ -1,0 +1,140 @@
+"""
+Prep a dataset of subread bam files to use for hifiasm with LR read mode
+
+Attempts to get 50x per haplotype of long reads >= 50kb
+
+Also gets all the CCS reads together.
+"""
+
+configfile: "config.yaml"
+
+import pandas as pd
+from pathlib import Path
+import pysam
+
+config["tool"] = "GAP_hifiasm_prep"
+
+if "minLRsize" not in config["tool"]:
+    config["minLRsize"] = 25000
+
+if "genomesize1n" not in config:
+    raise IOError("You must suppy the genome size (1n) in the config file with the arg 'genomesize1n'. Use actual bp, not Mbp, Gbp.")
+
+if "_" in config["sample"]:
+    raise IOError("You must not include a '_' character in the sample name.")
+
+# clean up the read names
+for key in config["subread_bams"]:
+    oldkey = key
+    if "_" in oldkey:
+        print("found a '_' character in {}, replacing it with a '-' character".format(oldkey))
+        newkey = key.replace("_", "-")
+        config["subread_bams"][newkey] = config["subread_bams"][oldkey]
+        del config["subread_bams"][oldkey]
+
+rule all:
+    input:
+        expand(config["tool"] + "/readlists/2_filt/{sample}_{bamfile}_read_list.25xPerHapkeep.txt",
+               sample = config["sample"], bamfile = config["subread_bams"])
+        #expand(config["tool"] + "/{sample}_hifiasm_LR.fasta.gz", sample = config["sample"])
+
+rule get_read_list:
+    """
+    get a list of the reads and output them to a file to parse later
+    """
+    input:
+        bam = lambda wildcards: config["subread_bams"][wildcards.bamfile]
+    output:
+        olist = config["tool"] + "/readlists/1_raw/{sample}_{bamfile}_read_list.txt.gz"
+    threads: 1
+    params:
+        mincontig = config["minLRsize"]
+    shell:
+        """
+        samtools view {input.bam} | awk '{{if (length($10) >= {params.mincontig}){{printf("%s\\t%d\\n",$1, length($10))}}}}' | \
+          sort -k2,2nr | gzip > {output.olist}
+        """
+
+rule get_largest_50x_lists:
+    """
+    gets the longest reads, up to 50x coverage per haplotype if possible
+    """
+    input:
+        lists =    expand(config["tool"] + "/readlists/1_raw/{{sample}}_{bamfile}_read_list.txt.gz",
+                          bamfile = config["subread_bams"])
+    output:
+        lists = expand(config["tool"] + "/readlists/2_filt/{{sample}}_{bamfile}_read_list.{size}xPerHapkeep.txt",
+                       bamfile = config["subread_bams"], size = [25, 50, 75])
+    params:
+        gensize = config["genomesize1n"]
+    threads: 1
+    run:
+        # get all the dfs
+        dfs = []
+        for thisfile in input.lists:
+            bamname = thisfile.split("/")[-1].split("_")[1]
+            df = pd.read_csv(thisfile, sep = "\t", header = None)
+            df.columns = ["readname", "length"]
+            df["bamfile"] = bamname
+            dfs.append(df)
+        # concatenate the dfs
+        df = pd.concat(dfs)
+        df = df.sort_values(by = "length", ascending = False).reset_index(drop=True)
+        df["cumsum"] = df["length"].cumsum()
+
+        # get the sizecutoffs
+        co_25xPerHap = int(config["genomesize1n"]) * 25 * 2
+        co_50xPerHap = int(config["genomesize1n"]) * 50 * 2
+        co_75xPerHap = int(config["genomesize1n"]) * 75 * 2
+
+        ix_25x = len(df)
+        ix_50x = len(df)
+        ix_75x = len(df)
+
+        if max(df["cumsum"]) < co_25xPerHap:
+            pass
+        else:
+            ix_25x = df[df["cumsum"] >= co_25xPerHap].index[0]
+
+        if max(df["cumsum"]) < co_50xPerHap:
+            pass
+        else:
+            ix_50x = df[df["cumsum"] >= co_50xPerHap].index[0]
+
+        if max(df["cumsum"]) < co_75xPerHap:
+            pass
+        else:
+            ix_75x = df[df["cumsum"] >= co_75xPerHap].index[0]
+
+        analyses = {"read_list.25xPerHapkeep.txt": ix_25x,
+                    "read_list.50xPerHapkeep.txt": ix_50x,
+                    "read_list.75xPerHapkeep.txt": ix_75x}
+
+        # print all the reads to keep to a normal text file
+        for k in analyses:
+            subset = df.iloc[0:analyses[k], ]
+            groups = subset.groupby(by = "bamfile")
+            for name, group in groups:
+                outfile = config["tool"] + "/readlists/2_filt/{}_{}_{}".format(
+                    config["sample"], name, k)
+                keeps = list(sorted(group["readname"]))
+                with open(outfile, "w") as f:
+                    for entry in keeps:
+                        print(entry, file = f)
+            # check to see if all the files exist
+            for entry in config["subread_bams"]:
+                outfile = config["tool"] + "/readlists/2_filt/{}_{}_{}".format(
+                    config["sample"], entry, k)
+                if not os.path.exists(outfile):
+                    Path(outfile).touch()
+
+rule fasta_file_of_filtered:
+    """
+    Get a fasta file of the filtered reads. Use pysam
+    """
+    input:
+        bam = lambda wildcards: config["subread_bams"][wildcards.bamfile],
+        readlist = config["tool"] + "/readlists/2_filt/{sample}_{bamfile}_read_list.{size}xPerHapkeep.txt"
+    output:
+        reads = config["tool"] + "/reads/LR/{sample}_{bamfile}_read_list.{size}xPerHapkeep.fasta.gz"
+    threads: 1
