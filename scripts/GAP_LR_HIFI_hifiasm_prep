@@ -13,6 +13,7 @@ import gzip
 from pathlib import Path
 import pysam
 import textwrap
+import subprocess
 
 config["tool"] = "GAP_hifiasm_prep"
 
@@ -137,9 +138,21 @@ def fold_string_to_80_chars(inp_string):
     """
     return textwrap.fill(inp_string, width = 80)
 
+def open_bam_file_read_line_by_line(bampath):
+    """
+    opens a bam file with samtools and returns a generator that returns the lines
+    """
+    with subprocess.Popen(["samtools", "view", bampath], stdout = subprocess.PIPE) as proc:
+        while True:
+            line = proc.stdout.readline()
+            if line != b'':
+                yield line
+            else:
+                break
+
 rule fasta_file_of_filtered:
     """
-    Get a fasta file of the filtered reads. Use pysam
+    Get a fasta file of the filtered reads. Use open_bam_file_read_line_by_line to process 
     """
     input:
         bam = lambda wildcards: config["subread_bams"][wildcards.bamfile],
@@ -150,12 +163,12 @@ rule fasta_file_of_filtered:
     run:
         # get the reads to keep
         with open(input.readlist, "r") as f:
-            reads = [x.strip() for x in f.readlines()]
-        # get the reads from the bam
-        bam = pysam.AlignmentFile(input.bam, mode = "rb", check_sq= False, until_eof=True)
+            reads_to_keep = set([x.strip() for x in f.readlines()])
+        # get the reads from the bam file
         with gzip.open(output.reads, "wt") as f:
-            for read in bam.fetch():
-                if read.query_name in reads:
-                    print(">" + read.query_name, file = f)
-                    # fold the reads to 80 characters
-                    print(fold_string_to_80_chars(read.query_sequence), file = f)
+            for line in open_bam_file_read_line_by_line(input.bam):
+                line = line.decode("utf-8")
+                readname = line.split("\t")[0]
+                if readname in reads_to_keep:
+                    print(">" + readname, file = f)
+                    print(fold_string_to_80_chars(line.split("\t")[9]), file = f)
