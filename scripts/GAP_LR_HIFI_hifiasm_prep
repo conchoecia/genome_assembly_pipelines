@@ -35,10 +35,8 @@ for key in config["subread_bams"]:
 
 rule all:
     input:
-        #expand(config["tool"] + "/readlists/2_filt/{sample}_{bamfile}_read_list.25xPerHapkeep.txt",
-        #       sample = config["sample"], bamfile = config["subread_bams"])
         expand(config["tool"] + "/reads/LR/{sample}_{bamfile}_read_list.{size}xPerHapkeep.fasta.gz"
-               sample = config["sample"], bamfile = config["subread_bams"], size = [25,50,75])
+               sample = config["sample"], bamfile = config["subread_bams"], size = [25,50,75]),
         #expand(config["tool"] + "/{sample}_hifiasm_LR.fasta.gz", sample = config["sample"])
 
 rule get_read_list:
