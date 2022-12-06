@@ -37,9 +37,11 @@ for key in config["subread_bams"]:
 
 rule all:
     input:
-        expand(config["tool"] + "/reads/LR/{sample}_{bamfile}_read_list.{size}xPerHapkeep.fasta.gz",
-               sample = config["sample"], bamfile = config["subread_bams"], size = [25,50,75]),
-        #expand(config["tool"] + "/{sample}_hifiasm_LR.fasta.gz", sample = config["sample"])
+        # get the longread sets for each haplotype coverage target
+        expand(config["tool"] + "/reads/LR_final/{sample}.{size}xPerHapkeep.fasta.gz"
+               sample = config["sample"], size = [25,50,75]),
+        #expand(config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.fastq.gz",
+        #       sample = config["sample"], bamfile = config["subread_bams"].keys())
 
 rule get_read_list:
     """
@@ -153,6 +155,8 @@ def open_bam_file_read_line_by_line(bampath):
 rule fasta_file_of_filtered:
     """
     Get a fasta file of the filtered reads. Use open_bam_file_read_line_by_line to process 
+    This needs to be optimized to only run through each file once. Right now it iterates through
+      each file for as many sizes there are.
     """
     input:
         bam = lambda wildcards: config["subread_bams"][wildcards.bamfile],
@@ -172,3 +176,33 @@ rule fasta_file_of_filtered:
                 if readname in reads_to_keep:
                     print(">" + readname, file = f)
                     print(fold_string_to_80_chars(line.split("\t")[9]), file = f)
+
+rule cat_reads_by_size:
+    """
+    For each size class, cat the reads into a single file
+    """
+    input:
+        reads = expand(config["tool"] + "/reads/LR/{{sample}}_{bamfile}_read_list.{{size}}xPerHapkeep.fasta.gz",
+                       bamfile = config["subread_bams"])
+    output:
+        reads = config["tool"] + "/reads/LR_final/{sample}.{size}xPerHapkeep.fasta.gz"
+    threads: 1
+    shell:
+        """
+        cat {input.reads} > {output.reads}
+        """
+
+# section: get the ccs reads from each bam file
+
+rule call_ccs_reads_from_subreads:
+    input:
+        bam = lambda wildcards: config["subread_bams"][wildcards.bamfile]
+    output:
+        ccs =    config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.fastq.gz",
+        report = config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.report",
+        log =    config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.log"
+    threads: workflow.threads - 1
+    shell:
+        """
+        ccs {input.bam} {output.ccs} -j {threads} --log-file {output.log} --report-file {output.report} {input.bam} {output.ccs}
+        """
