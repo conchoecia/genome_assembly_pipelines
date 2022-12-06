@@ -41,6 +41,8 @@ rule all:
         expand(config["tool"] + "/reads/LR_final/{sample}.{size}xPerHapkeep.fasta.gz",
                sample = config["sample"], size = [25,50,75]),
         expand(config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.fastq.gz",
+               sample = config["sample"], bamfile = config["subread_bams"]),
+        expand(config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.all.fastq.gz",
                sample = config["sample"], bamfile = config["subread_bams"])
 
 rule get_read_list:
@@ -205,4 +207,18 @@ rule call_ccs_reads_from_subreads:
     shell:
         """
         ccs -j {threads} --log-file {output.log} --report-file {output.report} {input.bam} {output.ccs}
+        """
+
+# make a rule to run ccs, this time outputting data from all ZMWs
+rule call_ccs_reads_from_subreads_all:
+    input:
+        bam = lambda wildcards: config["subread_bams"][wildcards.bamfile]
+    output:
+        ccs =    config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.all.fastq.gz",
+        report = config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.all.report",
+        log =    config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.all.log"
+    threads: workflow.cores - 1
+    shell:
+        """
+        ccs -j {threads} --log-file {output.log} --report-file {output.report} --all {input.bam} {output.ccs}
         """
