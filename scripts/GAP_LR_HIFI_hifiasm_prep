@@ -38,10 +38,10 @@ for key in config["subread_bams"]:
 rule all:
     input:
         # get the longread sets for each haplotype coverage target
-        expand(config["tool"] + "/reads/LR_final/{sample}.{size}xPerHapkeep.fasta.gz"
+        expand(config["tool"] + "/reads/LR_final/{sample}.{size}xPerHapkeep.fasta.gz",
                sample = config["sample"], size = [25,50,75]),
-        #expand(config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.fastq.gz",
-        #       sample = config["sample"], bamfile = config["subread_bams"].keys())
+        expand(config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.fastq.gz",
+               sample = config["sample"], bamfile = config["subread_bams"])
 
 rule get_read_list:
     """
@@ -201,8 +201,8 @@ rule call_ccs_reads_from_subreads:
         ccs =    config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.fastq.gz",
         report = config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.report",
         log =    config["tool"] + "/reads/CCS/{sample}_{bamfile}.ccs.log"
-    threads: workflow.threads - 1
+    threads: workflow.cores - 1
     shell:
         """
-        ccs {input.bam} {output.ccs} -j {threads} --log-file {output.log} --report-file {output.report} {input.bam} {output.ccs}
+        ccs -j {threads} --log-file {output.log} --report-file {output.report} {input.bam} {output.ccs}
         """
