@@ -222,3 +222,4 @@ rule call_ccs_reads_from_subreads_all:
         """
         ccs -j {threads} --log-file {output.log} --report-file {output.report} --all {input.bam} {output.ccs}
         """
+
