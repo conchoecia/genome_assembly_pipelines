@@ -14,7 +14,7 @@ import os
 import sys
 minchromsize = 1000000
 configfile: "config.yaml"
-config["tool"] = "GAP_hic_map6"
+config["tool"] = "GAP_hic_map7"
 
 for x in config["assemblies"]:
     if "_" in x:
@@ -147,14 +147,14 @@ wildcard_constraints:
 
 rule all:
     input:
-        # Juicebox Assembly Tools part
-        expand(config["tool"] + "/output/{nom}/{nom}.assembly",
-               nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_allLibs_q_{qval}.hic",
-               nom = config["assemblies"], qval = config["qvals"]),
-
         # pretext view
-        #expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
+
+        ## Juicebox Assembly Tools part
+        #expand(config["tool"] + "/output/{nom}/{nom}.assembly",
+        #       nom = config["assemblies"]),
+        #expand(config["tool"] + "/output/{nom}/{nom}_allLibs_q_{qval}.hic",
+        #       nom = config["assemblies"], qval = config["qvals"]),
 
         # HiGlass version
         expand(config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.covstats",
@@ -173,7 +173,7 @@ rule all:
         # mcool from balanced and unbalanced
         expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.mcool",
                nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
-        expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.balanced.mcool",
+        expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.mcool",
                nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
         # get an interaction matrix and the best connected scaffolds
         expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.tsv",
@@ -181,33 +181,33 @@ rule all:
         expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.best_connection.tsv",
                nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
 
-        # get read depths
-        expand(config["tool"] + "/output/{nom}/{nom}_{datatype}.bw",
-               datatype = ["TXdepth", "LRdepth"],
-               nom = config["assemblies"]),
-        ## LR telomere bams
-        expand(config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5",
-               telo = config["telomere_seqs"], nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5",
-               telo = config["telomere_seqs"], nom = config["assemblies"]),
-
-        # abandoned code
-        ## read_depth_positions
-        ##expand(config["tool"] + "/output/{nom}/{nom}_kmer_{kmer}.bw",
-        ##       kmer = config["kmers"], nom = config["assemblies"]),
-        ##expand(config["tool"] + "/output/{nom}/{nom}_kmerInLR_{kmer}.bw",
-        ##       kmer = config["kmers"], nom = config["assemblies"]),
-        ##expand(config["tool"] + "/output/{nom}/{nom}_kmerInSR_{kmer}.bw",
-        ##       kmer = config["kmers"], nom = config["assemblies"]),
-        #expand(config["tool"] + "/output/{nom}/{nom}_telomereSRDepth_{telo}.bw.mv5",
+        ## get read depths
+        #expand(config["tool"] + "/output/{nom}/{nom}_{datatype}.bw",
+        #       datatype = ["TXdepth", "LRdepth"],
+        #       nom = config["assemblies"]),
+        ### LR telomere bams
+        #expand(config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5",
         #       telo = config["telomere_seqs"], nom = config["assemblies"]),
-        ## plots of AB compartmentalization
-        #expand(config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf",
-        #       nom = config["assemblies"],
-        #       binsize = [x for x in config["binsize"] if int(x) >= 50000]),
-        ### output interaction matrix used for running the Lorentz 3DGR problem
-        ##expand(config["tool"] + "/output/{nom}/3DGR/{nom}_balanced.{binsize}.if.tsv",
-        ##       nom = config["assemblies"], binsize=config["binsize"]),
+        #expand(config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5",
+        #       telo = config["telomere_seqs"], nom = config["assemblies"]),
+
+        ## abandoned code
+        ### read_depth_positions
+        ###expand(config["tool"] + "/output/{nom}/{nom}_kmer_{kmer}.bw",
+        ###       kmer = config["kmers"], nom = config["assemblies"]),
+        ###expand(config["tool"] + "/output/{nom}/{nom}_kmerInLR_{kmer}.bw",
+        ###       kmer = config["kmers"], nom = config["assemblies"]),
+        ###expand(config["tool"] + "/output/{nom}/{nom}_kmerInSR_{kmer}.bw",
+        ###       kmer = config["kmers"], nom = config["assemblies"]),
+        ##expand(config["tool"] + "/output/{nom}/{nom}_telomereSRDepth_{telo}.bw.mv5",
+        ##       telo = config["telomere_seqs"], nom = config["assemblies"]),
+        ### plots of AB compartmentalization
+        ##expand(config["tool"] + "/output/{nom}/ABcompartments/{nom}_balanced.{binsize}.onlychr.obsexplieb.pearson.plot.pdf",
+        ##       nom = config["assemblies"],
+        ##       binsize = [x for x in config["binsize"] if int(x) >= 50000]),
+        #### output interaction matrix used for running the Lorentz 3DGR problem
+        ###expand(config["tool"] + "/output/{nom}/3DGR/{nom}_balanced.{binsize}.if.tsv",
+        ###       nom = config["assemblies"], binsize=config["binsize"]),
 
 # make softlinks of the input files
 # files end up here:
@@ -533,6 +533,19 @@ rule diagnostic_plot:
         hicCorrectMatrix diagnostic_plot -m {input.cool} -o {output.png}
         """
 
+rule normalize_matrix:
+    """
+    normalizes the matrix between 0-1. Can be used to compare matrices.
+    """
+    input:
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
+    output:
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.cool"
+    shell:
+        """
+        hicNormalize -m {input.cool} --normalize norm_range -o {output.cool}
+        """
+
 rule balance_matrix:
     """
     ## Matrix normalization/ balancing
@@ -540,54 +553,24 @@ rule balance_matrix:
     ## if any problems with creating output add "--force" option
     """
     input:
-        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.cool"
     output:
-        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.balanced.cool"
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.cool"
     shell:
         """
         cp {input.cool} {output.cool}
         cooler balance --force {output.cool}
         """
 
-# This was commented out in version 7
-#rule cutoff_matrix:
-#    """
-#    Balances the matrix using the z-score cutoffs. Removes bins that are too dense or sparse
-#    """
-#    input:
-#        png = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool.png",
-#        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
-#    output:
-#        balanced = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.balanced.cool"
-#    params:
-#        zmin = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmin"],
-#        zmax = lambda wildcards: config["binsize"][int(wildcards.binsize)]["zmax"],
-#        binsize = lambda wildcards: wildcards.binsize
-#    threads: 1
-#    shell:
-#        """
-#        if [ "{params.zmin}" -eq "0" ]; then
-#            echo "Set the {params.binsize} zmin to something other than 0";
-#            exit;
-#        fi
-#        if [ "{params.zmax}" -eq "0" ]; then
-#            echo "Set the {params.binsize} zmax to something other than 0";
-#            exit;
-#        fi
-#        hicCorrectMatrix correct -m {input.cool} \
-#             --filterThreshold {params.zmin} {params.zmax} \
-#             -o {output.balanced}
-#        """
-
-rule zoomify_balanced_matrix:
+rule zoomify_normalized_and_balanced_matrix:
     """
     ## Aggregation (for HiGlass view)
       - This generates a *.mcool file from the balanced cool file
     """
     input:
-        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.balanced.cool"
+        cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.cool"
     output:
-        mcool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.balanced.mcool"
+        mcool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.mcool"
     threads: 1
     shell:
         """
@@ -633,7 +616,7 @@ rule make_pretextmap:
             --split-alignment --pairs \
             --SAM \
             -o /dev/stdout | \
-        PretextMap --sortby nosort -o {output.pretext}
+        PretextMap --mapq 0 --sortby nosort -o {output.pretext}
         """
 
 #   ___  _   _              _  _ _  ___ _              ___ _         __  __
