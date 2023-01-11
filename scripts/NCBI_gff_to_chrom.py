@@ -20,6 +20,10 @@ parser.add_argument("-g", "--gff",
 parser.add_argument("-p", "--proteins",
                     type=argparse.FileType('r'),
                     help="the path to the proteins")
+parser.add_argument("-r", "--rename",
+                    type=argparse.FileType('r'),
+                    required = False,
+                    help="A path to a two-column tsv file. First col orig fasta header, second col new name")
 parser.add_argument("-o", "--output",
                     type=str,
                     required=True,
@@ -40,6 +44,15 @@ for f in files_to_check:
         print("ERROR: {} already exists! Rename the output -o option to be something else.".format(f))
         sys.exit()
 
+# if the rename is in the args, build a dict
+rename_dict = {}
+if "rename" in args:
+    for line in args.rename:
+        line = line.strip()
+        if line:
+            fields = line.split("\t")
+            rename_dict[fields[0]] = fields[1]
+
 # get all the protein lengths
 prot_to_len = {}
 for record in SeqIO.parse(args.proteins, "fasta"):
@@ -48,7 +61,11 @@ for record in SeqIO.parse(args.proteins, "fasta"):
 # get all the scaffold lengths with seqIO
 scaf_to_len = {}
 for record in SeqIO.parse(args.assembly, "fasta"):
-    scaf_to_len[record.id] = len(record.seq)
+    thisrecord = record.id
+    if record.id in rename_dict:
+        thisrecord = rename_dict[thisrecord]
+    scaf_to_len[thisrecord] = len(record.seq)
+
 
 # save all the protein IDs and their locations
 prot_dicts = {}
@@ -61,6 +78,8 @@ for line in args.gff:
             protid = [x for x in fields[8].split(";")
                       if "protein_id=" in x][0].replace("protein_id=","")
             scaf = fields[0]
+            if scaf in rename_dict:
+                scaf = rename_dict[scaf]
             if scaf in scaf_to_len:
                 direc = fields[6]
                 start = int(fields[3])
