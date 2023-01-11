@@ -66,7 +66,6 @@ for record in SeqIO.parse(args.assembly, "fasta"):
         thisrecord = rename_dict[thisrecord]
     scaf_to_len[thisrecord] = len(record.seq)
 
-
 # save all the protein IDs and their locations
 prot_dicts = {}
 # now get the protein ID lines
@@ -121,5 +120,8 @@ with open(proteins, "w") as protfile:
 # just copy the file args.assembly to assembly - don't do any special filtering
 with open(assembly, "w") as outfile:
     args.assembly.seek(0)
-    for line in args.assembly:
-        print(line, file=outfile, end="")
+    for record in SeqIO.parse(args.assembly, "fasta"):
+        if record.id in rename_dict:
+            record.id = rename_dict[record.id]
+            # write with SeqIO
+            SeqIO.write(record, outfile, "fasta")
