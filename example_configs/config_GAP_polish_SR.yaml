@@ -1,0 +1,6 @@
+assemblies:
+  assembly1: "/path/to/the/first/assembly/to/polish.fasta"
+  anotherone: "/path/to/another/assembly/to/polish.fasta"
+
+shotf: "/bigdata/user/darrin/tjalfie/reads/shot/Tj_shot_f.nonMT.fq.gz"
+shotr: "/bigdata/user/darrin/tjalfie/reads/shot/Tj_shot_r.nonMT.fq.gz"
