@@ -1,10 +1,15 @@
 ## <a name="started"></a>Getting Started
 
 ```sh
+# INSTALLATION
 git clone https://github.com/conchoecia/genome_assembly_pipelines
 cd genome_assembly_pipelines && make
-# insert small scaffolds into chromosomes with Hi-C data
+
+# EXAMPLE RUN 
+# We want to insert small scaffolds into chromosomes with Hi-C data.
+#  First we must copy the example config file to the directory in which we want to run the program.
 cp genome_assembly_pipelines/example_configs/config_GAP_sort_scaffolds_by_hic.yaml ./config.yaml
+# then we run snakemake using the associated Snakefile. All the files are saved in the current directory.
 snakemake --snakefile genome_assembly_pipelines/scripts/GAP_sort_scaffolds_by_hic_insert
 ```
 
