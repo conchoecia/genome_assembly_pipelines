@@ -457,9 +457,10 @@ rule output_sorted_fasta:
         #now read in the genome
         chrom_order = [x for x in config["chromosomes"]]
         unseen_chromosomes = [x for x in config["chromosomes"]]
-        unprintes  = []
+        unprinted  = []
         scaf_dict = {}
-        with open(input.assem, "rU") as handle:
+        # this syntax is safe for newer versions of python, don't use "rU" anymore
+        with open(input.assem, newline = "") as handle:
             for record in SeqIO.parse(handle, "fasta"):
                 scaf_dict[record.id] = record
                 if record.id in config["chromosomes"]:
