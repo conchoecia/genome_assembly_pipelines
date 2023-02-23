@@ -357,10 +357,12 @@ rule get_possible_contams:
 
         nonmetaz_taxa = [
             "Actinobacteria",
+            "Apicomplexa",
             "Ascomycota",
             "Bacteria-undef",
             "Bacteroidetes",
             "Basidiomycota",
+            "Blastocladiomycota",
             "Candidatus Bathyarchaeota",
             "Candidatus Moranbacteria",
             "Candidatus Tectomicrobia",
@@ -397,8 +399,10 @@ rule get_possible_contams:
                          "Platyhelminthes",
                          "Placozoa",
                          "Priapulida",
+                         "Rotifera",
                          "Tardigrada",
-                         "undef"]
+                         "undef",
+                         "unresolved"]
 
         not_seen_before = set()
         metazoa_or_not_dict = {}

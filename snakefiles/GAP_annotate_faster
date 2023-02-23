@@ -1,0 +1,1149 @@
+"""
+This fastest version of the annotate script doesn't run STAR and doesn't run prothint.
+
+This is the genome annotation script, originally designed for a ctenophores genome.
+Its benefits are that it relies on the protein sequences from de novo transcriptomes
+ rather than the sequence in the genome sequence. This overcomes haplotype switches
+ that arise when trying to assemble a diploid genome into a haploid sequence.
+
+It works by:
+   1. Mapping all of the transcripts to the ref genome (rule map_transcripts_to_ref)
+   2. Convert all of the txome alignments to a gff file (rule run_pinfish_bam2gff)
+   3. Merge these alignments to irreducible transcripts with stringtie merge
+        (rule run_stringtie_merge)
+   4. Convert stringtie's merged gtf back to a gff file (rule gtf_to_gff)
+   5. Extract these transcripts from the genome (rule transcripts_from_gtf)
+   6. For each of these, blast the transcriptome to find the best match
+        (rule blast_transcripts_to_transcriptome)
+   7. The best hit will have a very small evalue, less than 1E-100,
+        also just select the best hit in the transcriptome for each
+        transcript from the genome. (rule first_filtering_of_blastn)
+   8. Filter the data such that each transcriptome transcript only
+        occurs once. Drop the hit with the worse evalue.
+        (rule get_list_of_transcripts_to_extract)
+   9. Now that we have the list of transcripts of interest, extract from
+        the transcriptome. (rule extract_seqs_from_txome)
+  10. Rename the txome-extracted transcripts to match their hits from the genome
+        (rule rename_txome_hits)
+  11. Translate all of these proteins using prottrans.py (rule translate_txome_hits)
+  12. Do a quick filtering to remove proteins that are exact duplicates of
+        one another (find_duplicate_prots_and_filter)
+  13. Now that we've filtered the proteins based on duplicates, we now filter
+        the annotation gff to only keep the sequences that remain in the prot
+        file. (rule filter_final_gff_based_on_prot_results)
+  14. Also, filter out the nucleotide fasta file based on the filtered proteins.
+        (rule filter_fasta_based_on_output)
+  15. Now that we've filtered down to transcripts that we want, and removed
+        what appear to be duplicates, use stringtie to merge and cluster
+        the remaining transcripts. (rule generate_stringtie_clusters_from_draft2)
+  16. Convert the stringtie's gtf format back to gff (rule round2_gtf_to_gff)
+  17. Extract transcripts from the genome now that we've narrowed down
+        what we want (rule second_gff_transcripts_from_gtf)
+  18. Now that we have the final transcript list, blast these to transcriptome.
+        (rule blast_new_transcripts_to_transcriptome)
+  19. Filter out the best hit for each transcript in the genome, evalue > 1E-100
+        and best hit (rule round2_transcript_first_filtering_of_blastn)
+  20. Save the best hit into its own fasta file, rename.
+        (rule print_and_rename_round2_seqs)
+  21. Translate these renamed txome seqs into proteins.
+        (rule translate_txome_hits_from_round2_blast)
+   .... this would be a good place to add proteins from other sources ....
+  22. Copy everything to the final annotation (rule cp_things_to_final)
+"""
+
+import copy
+import sys
+from Bio import SeqIO
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+
+def gtf_to_gff_renumber(gtf_in, gff_out, prefix = None, version=None):
+    """
+    This converts a gtf file to a gff file and renumbers.
+     Just does this with a totally raw gtf file from stringtie.
+    """
+    # first define the gene starts and stops
+    tx_start_stop = {}
+    with open(gtf_in, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line and line[0] != "#":
+                splitd = line.split("\t")
+                if splitd[2] == "exon":
+                    gene_id = [x for x in splitd[8].split(";") if "gene_id" in x][0].split("\"")[1]
+                    start = int(splitd[3])
+                    stop = int(splitd[4])
+                    if gene_id not in tx_start_stop:
+                        tx_start_stop[gene_id] = [start, stop]
+                    else:
+                        if stop > tx_start_stop[gene_id][1]:
+                            tx_start_stop[gene_id][1] = stop
+                        if start < tx_start_stop[gene_id][0]:
+                            tx_start_stop[gene_id][0] = start
+
+
+    # now that we've defined the start print out the genes
+    prev_scaf = ""
+    prev_gene = 0
+    gene_counter = 0
+    out_handle = open(gff_out, "w")
+    first_comment = False
+    with open(gtf_in, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line and line[0] != "#":
+                splitd = line.split("\t")
+                sca = splitd[0]
+                if sca != prev_scaf:
+                    gene_counter = 0
+                    prev_gene = 0
+                    prev_scaf = sca
+                splitd[5] = "." #changes the score into nothing
+                gene_id = splitd[8].split(";")[0].split("\"")[1]
+                if splitd[2] == "transcript":
+                    gene_counter_ticker = int(splitd[8].split(";")[0].split(".")[-1].split("\"")[0])
+                    if gene_counter_ticker != prev_gene:
+                        gene_counter += 1
+                        prev_gene = gene_counter_ticker
+                    # first print out the gene
+                    gene_line_info = copy.deepcopy(splitd)
+                    gene_line_info[2] = "gene"
+                    gene_line_info[3] = tx_start_stop[gene_id][0]
+                    gene_line_info[4] = tx_start_stop[gene_id][1]
+                    GFF_geneID = "{}.av{}.{}.g{}".format(
+                                    prefix, version,
+                                    gene_line_info[0], gene_counter)
+                    annotfield = "ID={};Name={}".format(GFF_geneID, GFF_geneID)
+                    gene_line_info[8] = annotfield
+                    print("\t".join([str(x) for x in gene_line_info]),
+                          file = out_handle)
+                    # now print out the transcript info
+                    transcript_line_info = copy.deepcopy(splitd)
+                    transcript_index = splitd[8].split(";")[1].split("\"")[1].split(".")[-1]
+                    annotfield = "ID={}.i{};Parent={}".format(
+                        GFF_geneID, transcript_index, GFF_geneID)
+                    transcript_line_info[8] = annotfield
+                    print("\t".join([str(x) for x in transcript_line_info]),
+                          file = out_handle)
+                elif splitd[2] == "exon":
+                    exon_line_info = copy.deepcopy(splitd)
+                    transcript_index = splitd[8].split(";")[1].split("\"")[1].split(".")[-1]
+                    annotfield = "Parent={}.i{}".format(
+                        GFF_geneID, transcript_index)
+                    exon_line_info[8] = annotfield
+                    print("\t".join([str(x) for x in exon_line_info]),
+                          file = out_handle)
+    out_handle.close()
+
+configfile: "config.yaml"
+
+rule all:
+    input:
+        #expand("output/{prefix}_to_ref.filtered.sorted.bam",
+        #       prefix = config["PREFIX"]),
+        #expand("output/{prefix}_txome_bam_to_ref.gff",
+        #       prefix = config["PREFIX"]),
+        #expand("output/{prefix}_pinfish_clusters.tsv",
+        #       prefix = config["PREFIX"]),
+        #expand("output/{prefix}_clustered_pinfish.gff",
+        #       prefix = config["PREFIX"]),
+        #expand("output/{prefix}_transcripts_to_txome.filterd2.blastn",
+        #       prefix = config["PREFIX"]),
+        #expand("final/{prefix}_av{version}.gff",
+        #       prefix = config["PREFIX"],
+        #       version = config["VERSION"])
+        #expand("output/{prefix}_av{version}_txome_prots_deduped.pep",
+        #       prefix = config["PREFIX"],
+        #       version = config["VERSION"]),
+        #expand("output/{prefix}_av{version}_round2_reclustered.gff",
+        #       prefix = config["PREFIX"],
+        #       version = config["VERSION"]),
+        #expand("output/{prefix}_av{version}_round2_reclustered_sequences_from_blast.fasta",
+        #       prefix = config["PREFIX"],
+        #       version = config["VERSION"]),
+        #expand("output/{prefix}_av{version}_round1gff_to_round2gff.txt",
+        #       prefix = config["PREFIX"],
+        #       version = config["VERSION"])
+        expand("{prefix}_av{version}.tar.gz",
+               prefix = config["PREFIX"],
+               version = config["VERSION"]),
+
+        # now the star section
+        expand("output/other_transcriptome_bams/{othertxome}_to_ref.sorted.bam", othertxome = config["other_transcriptomes"]),
+        # run augustus
+        "output/braker/augustus.hints.aa",
+        #"output/braker/GeneMark-ETP/genemark.aa",
+        #"output/braker/augustus.hints.gtf.bed"
+
+        # interpret the augustus output
+        #"output/blastdb/all_refprots.pal",
+        "output/braker_filter/augustus.hints.filtered.gtf",
+        "output/braker_filter/augustus.hints.filtered.aa",
+        expand("output/braker_filter/augustus.hints.filtered.aa_to_{prefix}_av{version}_round2_reclustered_seqs_from_blast.blastp.besthit",
+               prefix = config["PREFIX"],
+               version = config["VERSION"]),
+        # augustus hits that overlap with the round2 annotation
+        expand("output/braker_filter/augustus.hints.filtered_overlapping_with_{prefix}_av{version}_round2_reclustered.txt",
+               prefix = config["PREFIX"],
+               version = config["VERSION"]),
+        "output/braker_filter/augustus.hints.filtered.bed",
+        expand("output/{prefix}_av{version}_round2_reclustered.gff.bed",
+               prefix = config["PREFIX"],
+               version = config["VERSION"]),
+        expand("output/braker_filter/augustus.hints.filtered.aa_to_{prefix}_av{version}_round2_reclustered_seqs_from_blast.blastp.besthit_and_overlaps",
+               prefix = config["PREFIX"],
+               version = config["VERSION"]),
+        expand("output/braker_filter/augustus.hints.filtered.toround3_{prefix}_av{version}.aa",
+               prefix = config["PREFIX"],
+               version = config["VERSION"]),
+        # now transform that into a new annotation
+        expand("output/{prefix}_av{version}_round3.gff",
+               prefix = config["PREFIX"],
+               version = config["VERSION"]),
+
+rule minimap2_txome_to_genome:
+    input:
+        assem = config["REF"],
+        txome = config["TXOME"]
+    output:
+        bam = "output/{prefix}_av{version}_to_ref.filtered.sorted.bam"
+    threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/5)
+    shell:
+        """
+        minimap2 -t {threads} -ax splice {input.assem} {input.txome} | \
+           samtools view -F 4 -q 10 -hb -@ {params.sort_threads} - | \
+           samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+rule minimap2_long_to_genome:
+    input:
+        assem = config["REF"],
+        txome = config["LONGREADS"]
+    output:
+        bam = "output/long_to_ref.filtered.sorted.bam"
+    threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/5)
+    shell:
+        """
+        minimap2 -t {threads} -ax splice:hq {input.assem} {input.txome} | \
+           samtools view -F 4 -q 10 -hb -@ {params.sort_threads} - | \
+           samtools sort -@ {params.sort_threads} - > {output.bam}
+        """
+
+
+rule run_pinfish_bam2gff:
+    input:
+        bam = "output/{prefix}_av{version}_to_ref.filtered.sorted.bam",
+        pinfish_dir = config["PINFISHDIR"]
+    output:
+        gtf = "output/{prefix}_av{version}_txome_bam_to_ref.gff"
+    params:
+        pinfish_dir = config["PINFISHDIR"]
+    threads:
+        workflow.cores
+    shell:
+        """
+        {params.pinfish_dir}/spliced_bam2gff/spliced_bam2gff -t {threads} \
+          -s -M {input.bam} > {output.gtf}
+        """
+
+rule run_stringtie_merge:
+    input:
+        stringtieprg = config["STRINGTIE"],
+        pinfish = "output/{prefix}_av{version}_txome_bam_to_ref.gff"
+    output:
+        gtf = "output/{prefix}_av{version}_pinfish_merged.gtf"
+    params:
+        label = "{}.av{}".format(config["PREFIX"], config["VERSION"])
+    shell:
+        """
+        {input.stringtieprg} --merge {input.pinfish} \
+             -o {output.gtf} -l {params.label}
+        """
+
+rule gtf_to_gff:
+    input:
+        gtf = "output/{prefix}_av{version}_pinfish_merged.gtf",
+    output:
+        gff = "output/{prefix}_av{version}_round1.gff",
+    params:
+        prefix = config["PREFIX"],
+        version = config["VERSION"]
+    threads: 1
+    run:
+        gtf_to_gff_renumber(input.gtf, output.gff,
+            prefix=params.prefix, version=params.version)
+
+#c1      Hcv1    gene    4348    5664    .       -       .       ID=Hcv1.av86.c1.g1;Name=Hcv1.av86.c1.g1
+#c1      Hcv1    transcript      4348    5664    .       -       .       ID=Hcv1.av86.c1.g1.i1;Parent=Hcv1.av86.c1.g1;source_program=pinfish;source_ID=d2a44d46-9637-48b1-a92a-56f50d7cf4f6
+#c1      Hcv1    exon    4348    5664    .       -       .       Parent=Hcv1.av86.c1.g1.i1
+
+rule transcripts_from_gtf:
+    input:
+        gff = "output/{prefix}_av{version}_round1.gff",
+        ref = config["REF"]
+    output:
+        fasta = "output/{prefix}_av{version}_transcripts_from_gtf_and_ref.fasta"
+    shell:
+        """
+        gffread -w {output.fasta} -g {input.ref} {input.gff}
+        """
+
+rule blast_transcripts_to_transcriptome:
+    input:
+        fasta = "output/{prefix}_av{version}_transcripts_from_gtf_and_ref.fasta",
+        txome = config["TXOME"]
+    output:
+        blastn = "output/{prefix}_av{version}_transcripts_to_txome.blastn"
+    threads:
+        workflow.cores
+    shell:
+        """
+        blastn -db {input.txome} -query {input.fasta} \
+          -num_threads {threads} -outfmt 6 > {output.blastn}
+        """
+
+rule first_filtering_of_blastn:
+    input:
+        blastn = "output/{prefix}_av{version}_transcripts_to_txome.blastn"
+    output:
+        blastn = "output/{prefix}_av{version}_transcripts_to_txome.filterd1.blastn"
+    shell:
+        """
+        cat {input.blastn} | \
+          awk '{{if ($11 == "0.0" || ($11 + 0) < 1E-100){{print($0)}} }}' | \
+          awk 'BEGIN{{ PREV=""}} {{if ($1 != PREV){{print($0)}}; PREV=$1}}' > {output.blastn}
+        """
+
+rule second_filtering_of_blastn:
+    """
+    this makes sure each target protein only occurs once
+    """
+    input:
+        blastn = "output/{prefix}_av{version}_transcripts_to_txome.filterd1.blastn"
+    output:
+        blastn = "output/{prefix}_av{version}_transcripts_to_txome.filterd2.blastn"
+    run:
+        import sys
+        import pandas as pd
+
+        df = pd.read_csv(input.blastn, header=None, sep = "\t")
+        df = df.sort_values([1, 10], ascending=[False, True])
+        df = df.drop_duplicates(subset=[1])
+        df.to_csv(output.blastn, sep="\t", header=None, index=False)
+
+rule get_list_of_transcripts_to_extract:
+    input:
+        blastn = "output/{prefix}_av{version}_transcripts_to_txome.filterd2.blastn"
+    output:
+        seqlist = "output/{prefix}_av{version}_extract_these_sequences.txt"
+    shell:
+        """
+        cat {input.blastn} | cut -f2 > {output.seqlist}
+        """
+
+rule extract_seqs_from_txome:
+    input:
+        seqlist = "output/{prefix}_av{version}_extract_these_sequences.txt",
+        txome = config["TXOME"]
+    output:
+        txome_hits = "output/{prefix}_av{version}_hits.fasta"
+    shell:
+        """
+        seqtk subseq {input.txome} {input.seqlist} > {output.txome_hits}
+        """
+
+rule rename_txome_hits:
+    input:
+        txome_hits = "output/{prefix}_av{version}_hits.fasta",
+        blastn = "output/{prefix}_av{version}_transcripts_to_txome.filterd2.blastn"
+    output:
+        fasta = "output/{prefix}_av{version}_hits_renamed.fasta"
+    run:
+        # this script just renames everything in the fasta file to match the gff
+        transcript_to_gff = {}
+        with open(input.blastn, "r") as f:
+            for line in f:
+                line=line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    if splitd[1] in transcript_to_gff:
+                        raise IOError("This was already in the dict")
+                    transcript_to_gff[splitd[1]] = splitd[0]
+
+        out_handle = open(output.fasta, "w")
+        with open(input.txome_hits, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    if line[0] == ">":
+                        lookup = line[1:].split("\t")[0]
+                        print(lookup, transcript_to_gff[lookup])
+                        print(">{}".format(transcript_to_gff[lookup]),
+                              file=out_handle)
+                    else:
+                        print(line, file=out_handle)
+        out_handle.close()
+
+rule translate_txome_hits:
+    input:
+        fasta = "output/{prefix}_av{version}_hits_renamed.fasta",
+        ptp = os.path.join(filepath, "prottrans.py")
+    output:
+        final_peps = "output/{prefix}_av{version}_txome_prots_step1.pep"
+    shell:
+        """
+        python2 {input.ptp} -r -a 50 {input.fasta} | \
+            cut -d'_' -f1 > {output.final_peps}
+        """
+
+rule find_duplicate_prots_and_filter:
+    """
+    The process we have used so far will result in many duplicated proteins.
+    Let's find them and remove them.
+       For now just print out the number of duplicated sequences
+    """
+    input:
+        final_peps = "output/{prefix}_av{version}_txome_prots_step1.pep",
+        blastn = "output/{prefix}_av{version}_transcripts_to_txome.filterd2.blastn"
+    output:
+        pep = "output/{prefix}_av{version}_txome_prots_deduped.pep"
+    params:
+        prefix = config["PREFIX"],
+        version = config["VERSION"]
+    run:
+        seq_dict = {}
+        id_to_record = {}
+        for record in SeqIO.parse(input.final_peps, "fasta"):
+            thisseq= str(record.seq)
+            if str(record.seq) not in seq_dict:
+                seq_dict[thisseq] = [str(record.id)]
+            else:
+                seq_dict[thisseq].append(str(record.id))
+            id_to_record[str(record.id)] = record
+
+        # now figure out which blast results to pull
+        keep_these_seqs = set()
+        transcript_to_blast_results = {}
+        for key in seq_dict:
+            if len(seq_dict[key]) > 1:
+                for entry in seq_dict[key]:
+                    transcript_to_blast_results[entry] = ""
+            elif len(seq_dict[key]) == 1:
+                keep_these_seqs.add(seq_dict[key][0])
+
+        # now pull the blast results for each entry
+        with open(input.blastn, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    if splitd[0] in transcript_to_blast_results:
+                        transcript_to_blast_results[splitd[0]] = line
+
+        # now finish picking the sequences to keep
+        for key in seq_dict:
+            if len(seq_dict[key]) > 1:
+                # use the bitscore to pick the best match
+                pick_from_these = {}
+                for entry in seq_dict[key]:
+                    pick_from_these[entry] = transcript_to_blast_results[entry].split("\t")[-1]
+                    #print(transcript_to_blast_results[entry])
+                picked = sorted(pick_from_these.items(),
+                                key=lambda x: x[1], reverse=True)[0][0]
+                keep_these_seqs.add(picked)
+
+        maxi = max([int(x.split('.')[-1].replace("i","")) for x in keep_these_seqs])
+        maxg = max([int(x.split('.')[-2].replace("g","")) for x in keep_these_seqs])
+        maxsca = max([int(x.split('.')[-3].replace("sca","")) for x in keep_these_seqs if "sca" in x])
+        try:
+            maxchr = max([int(x.split('.')[-3].replace("chr", "")) for x in keep_these_seqs if "chr" in x])
+        except:
+            maxchr = 0
+        print("maxi: ", maxi)
+        print("maxg: ", maxg)
+        print("maxsca: ", maxsca)
+        print("maxchr: ", maxchr)
+        out_handle = open(output.pep, "w")
+        for thischr in range(1, maxchr +1):
+            for g in range(1, maxg + 1):
+                for i in range(1, maxi + 1):
+                    query = "{}.av{}.chr{}.g{}.i{}".format(
+                              params.prefix,
+                              params.version,
+                              thischr, g, i)
+                    if query in id_to_record:
+                        SeqIO.write(id_to_record[query], out_handle, "fasta")
+        for sca in range(1, maxsca +1):
+            for g in range(1, maxg + 1):
+                for i in range(1, maxi + 1):
+                    query = "{}.av{}.sca{}.g{}.i{}".format(
+                              params.prefix,
+                              params.version,
+                              sca, g, i)
+                    if query in id_to_record:
+                        SeqIO.write(id_to_record[query], out_handle, "fasta")
+        out_handle.close()
+
+rule filter_final_gff_based_on_prot_results:
+    input:
+        gff = "output/{prefix}_av{version}_round1.gff",
+        pep = "output/{prefix}_av{version}_txome_prots_deduped.pep"
+    output:
+        finalgff = "output/{prefix}_av{version}_round1_transfilter.gff",
+    run:
+        keep_these = set()
+        with open(input.pep, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and line[0] == ">":
+                    pull_transcript = line.replace(">","")
+                    keep_these.add(pull_transcript)
+        print(keep_these)
+        out_handle = open(output.finalgff, "w")
+        with open(input.gff, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    if splitd[2] in ["exon", "transcript"]:
+                        ID = splitd[8].split(";")[0].replace("ID=", "").replace("Parent=", "")
+                        if ID in keep_these:
+                            print(line, file=out_handle)
+        out_handle.close()
+
+rule filter_fasta_based_on_output:
+    input:
+        fasta = "output/{prefix}_av{version}_transcripts_from_gtf_and_ref.fasta",
+        pep = "output/{prefix}_av{version}_txome_prots_deduped.pep"
+    output:
+        fasta = "output/{prefix}_av{version}_transcripts_from_gtf_and_ref_deduped.fasta",
+    run:
+        keep_these = set()
+        with open(input.pep, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and line[0] == ">":
+                    pull_transcript = line.replace(">","")
+                    keep_these.add(pull_transcript)
+        out_handle = open(output.fasta, "w")
+        for record in SeqIO.parse(input.fasta, "fasta"):
+            thisseq = str(record.id)
+            if thisseq in keep_these:
+                SeqIO.write(record, out_handle, "fasta")
+        out_handle.close()
+
+rule generate_stringtie_clusters_from_draft2:
+    input:
+        gff = "output/{prefix}_av{version}_round1_transfilter.gff",
+    output:
+        gtf = "output/{prefix}_av{version}_round2_reclustered.gtf",
+    params:
+        prefix = config["PREFIX"],
+        version = config["VERSION"]
+    shell:
+        """
+        stringtie --merge -o {output.gtf} \
+          -l {params.prefix}.av{params.version} {input.gff}
+        """
+
+rule round2_gtf_to_gff:
+    input:
+        gtf = "output/{prefix}_av{version}_round2_reclustered.gtf",
+    output:
+        gff = "output/{prefix}_av{version}_round2_reclustered.gff",
+    params:
+        version = config["VERSION"],
+        prefix = config["PREFIX"]
+    run:
+        gtf_to_gff_renumber(input.gtf, output.gff,
+            prefix=params.prefix, version=params.version)
+
+
+rule second_gff_transcripts_from_gtf:
+    input:
+        gff = "output/{prefix}_av{version}_round2_reclustered.gff",
+        ref = config["REF"]
+    output:
+        fasta = "output/{prefix}_av{version}_round2_reclustered.fasta"
+    shell:
+        """
+        gffread -w {output.fasta} -g {input.ref} {input.gff}
+        """
+
+rule blast_new_transcripts_to_transcriptome:
+    input:
+        fasta = "output/{prefix}_av{version}_round2_reclustered.fasta",
+        txome = config["TXOME"]
+    output:
+        blastn = "output/{prefix}_av{version}_round2_reclustered_to_txome.blastn"
+    threads:
+        workflow.cores
+    shell:
+        """
+        blastn -db {input.txome} -query {input.fasta} \
+          -num_threads {threads} -outfmt 6 > {output.blastn}
+        """
+
+rule round2_transcript_first_filtering_of_blastn:
+    input:
+        blastn = "output/{prefix}_av{version}_round2_reclustered_to_txome.blastn"
+    output:
+        blastn = "output/{prefix}_av{version}_round2_reclustered.filtered1.blastn"
+    shell:
+        """
+        cat {input.blastn} | \
+          awk '{{if ($11 == "0.0" || ($11 + 0) < 1E-100){{print($0)}} }}' | \
+          awk 'BEGIN{{ PREV=""}} {{if ($1 != PREV){{print($0)}}; PREV=$1}}' > {output.blastn}
+        """
+
+rule print_and_rename_round2_seqs:
+    input:
+        blastn = "output/{prefix}_av{version}_round2_reclustered.filtered1.blastn",
+        txome = config["TXOME"]
+    output:
+        fasta = "output/{prefix}_av{version}_round2_reclustered_sequences_from_blast.fasta"
+    shell:
+        """
+        rm -f {output.fasta}
+        samtools faidx {input.txome}
+        while IFS= read -r line; do
+            echo "${{line}}"
+            NEWID=$(echo $line | awk '{{print($1)}}')
+            SEARCH=$(echo $line | awk '{{print($2)}}')
+            samtools faidx {input.txome} ${{SEARCH}} | \
+              sed "s/$SEARCH/$NEWID/g" >> {output.fasta}
+        done < {input.blastn}
+        """
+
+rule translate_txome_hits_from_round2_blast:
+    input:
+        fasta = "output/{prefix}_av{version}_round2_reclustered_sequences_from_blast.fasta",
+        ptp = os.path.join(filepath, "prottrans.py")
+    output:
+        final_peps = "output/{prefix}_av{version}_round2_reclustered_seqs_from_blast.pep"
+    shell:
+        """
+        python2 {input.ptp} -r -a 50 {input.fasta} | \
+            cut -d'_' -f1 > {output.final_peps}
+        """
+
+rule map_other_transcriptomes_to_reference:
+    """
+    Highly unlikely that transcripts from other species
+     will map to the genome, but mapping them anyway as
+     another source of evidence to find genes.
+    """
+    input:
+        assem = config["REF"],
+        transcriptome = lambda wildcards: config["other_transcriptomes"][wildcards.othertxome]
+    output:
+        txome_bam = "output/other_transcriptome_bams/{othertxome}_to_ref.sorted.bam"
+    threads: workflow.cores - 1
+    params:
+        sort_threads = int(workflow.cores/5)
+    shell:
+        """
+        minimap2 -t {threads} -ax splice {input.assem} {input.transcriptome} | \
+           samtools view -F 4 -q 10 -hb -@ {params.sort_threads} - | \
+           samtools sort -@ {params.sort_threads} - > {output.txome_bam}
+        """
+
+
+rule run_braker:
+    input:
+        other_txomes = expand("output/other_transcriptome_bams/{othertxome}_to_ref.sorted.bam", othertxome = config["other_transcriptomes"]),
+        assem = config["REF"],
+        long_bam = "output/long_to_ref.filtered.sorted.bam"
+    output:
+        augustus_aa        = "output/braker/augustus.hints.aa",
+        augustus_codingseq = "output/braker/augustus.hints.codingseq",
+        augustus_hints     = "output/braker/augustus.hints.gtf",
+        genemark_gtf       = "output/braker/GeneMark-ETP/genemark.gtf",
+    params:
+        prefix = config["PREFIX"],
+        bamsarg = ",".join(expand("output/other_transcriptome_bams/{othertxome}_to_ref.sorted.bam", othertxome = config["other_transcriptomes"]))
+    threads: min(47, workflow.cores - 1)
+    shell:
+        """
+        braker.pl --species={params.prefix} --cores={threads} \
+           --augustus_args="--singlestrand=true" \
+           --genome={input.assem} \
+           --bam={params.bamsarg}
+        rsync -r braker/ output/braker/
+        """
+
+#rule make_blast_db_with_all_supporting_pep_files:
+#    input:
+#        protlist = [config["other_proteins"][x] for x in config["other_proteins"]]
+#    output:
+#        dbalias = "output/blastdb/all_refprots.pal"
+#    params:
+#        dblist = "\"" + " ".join([config["other_proteins"][x] for x in config["other_proteins"]]) + "\"",
+#        outstem = "output/blastdb/all_refprots"
+#    threads: 1
+#    shell:
+#        """
+#        blastdb_aliastool -dblist {params.dblist} -dbtype prot \
+#            -out {params.outstem} -title "all_refprots"
+#        """
+
+#rule blast_augustus_results_to_cteno_proteins:
+#    """
+#    I looked at these blast results, and the worst-quality hits were 1e-10,
+#     even though the blast cutoff was 1e-3. 1e-9 is a fine upper limit for
+#     evalue to filter blast results in the future
+#    """
+#    input:
+#        augustus_aa = "output/braker/augustus.hints.aa",
+#        dbalias = "output/blastdb/all_refprots.pal"
+#    output:
+#        blastresults = "output/blastresults/augustus_to_ref_proteomes.blastp"
+#    params:
+#        dbalias = "output/blastdb/all_refprots"
+#    threads: workflow.cores - 1
+#    shell:
+#        """
+#        blastp -db {params.dbalias} -query {input.augustus_aa} \
+#            -evalue 0.001 -num_threads {threads} \
+#            -outfmt 6 > {output.blastresults}
+#        """
+
+rule diamond_blast_augustus_results_to_cteno_proteins:
+    """
+    I looked at these blast results, and the worst-quality hits were 1e-10,
+     even though the blast cutoff was 1e-3. 1e-20 is a fine upper limit for
+     evalue to filter blast results in the future
+    """
+    input:
+        augustus_aa = "output/braker/augustus.hints.aa",
+        dmnd_db = lambda wildcards: config["other_proteins"][wildcards.othertxome].replace(".pep", ".dmnd"),
+    output:
+        blastresults = "output/blastresults/augustus_to_{othertxome}.blastp"
+    threads: workflow.cores - 1
+    shell:
+        """
+        diamond blastp --db {input.dmnd_db} \
+            --query {input.augustus_aa} \
+            --evalue 1E-20 --threads {threads} \
+            --outfmt 6 --out {output.blastresults}
+        """
+
+rule filter_augustus_diamond_blastp_results:
+    """
+    This looks through the augustus blastp results, and gets the hits
+     with an evalue of less than 1e-9.
+    Then, it pulls those out of the gtf file. The file output is the filtered gtf.
+    """
+    input:
+        blastresults = expand("output/blastresults/augustus_to_{othertxome}.blastp", othertxome = config["other_proteins"]),
+        augustus_hints     = "output/braker/augustus.hints.gtf"
+    output:
+        filtered_augustus_gtf = "output/braker_filter/augustus.hints.filtered.gtf"
+    threads: 1
+    params:
+        cutoff = "1e-9"
+    run:
+        keep_these_augustus_hits = set()
+        # go through and get all of the hits that match the cutoff
+        for thisfile in input.blastresults:
+            with open(thisfile, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        splitd = line.split("\t")
+                        if float(splitd[10]) < float(params.cutoff):
+                            keep_these_augustus_hits.add(splitd[0])
+        # now we go through the gtf and get all of the entries
+        outhandle = open(output.filtered_augustus_gtf, "w")
+        with open(input.augustus_hints, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and line[0] != "#":
+                    splitd = line.split("\t")
+                    if splitd[2] == "gene":
+                       if splitd[8] in keep_these_augustus_hits:
+                           print(line, file=outhandle)
+                    else:
+                        txid = splitd[8].split(";")[0].split('"')[1]
+                        if txid in keep_these_augustus_hits:
+                           print(line, file=outhandle)
+        outhandle.close()
+
+rule get_filtered_proteins_from_augustus:
+    """
+    This takes the filtered augustus hits and gets the proteins.
+    """
+    input:
+        filtered_augustus_gtf = "output/braker_filter/augustus.hints.filtered.gtf",
+        augustus_aa        = "output/braker/augustus.hints.aa"
+    output:
+        filtered_augustus_aas = "output/braker_filter/augustus.hints.filtered.aa",
+    threads: 1
+    shell:
+        """
+        cat {input.filtered_augustus_gtf} | \
+          awk '{{if ($3 == "transcript"){{print($0)}} }}' | \
+          cut -f9 | cut -d ';' -f1 | \
+          cut -d '"' -f2 | sort | uniq > {output.filtered_augustus_aas}.temp
+        seqtk subseq {input.augustus_aa} {output.filtered_augustus_aas}.temp > {output.filtered_augustus_aas}
+        rm {output.filtered_augustus_aas}.temp
+        """
+
+rule blast_filtered_augustus_hits_to_annotation:
+    """
+    Now that we have a filtered set of Augustus hits that seem real,
+    blast against the transcriptome-based annotation to see what can
+    be matched up on a 1-to-1 per-gene.
+    """
+    input:
+        filtered_augustus_aas = "output/braker_filter/augustus.hints.filtered.aa",
+        round2_peps = "output/{prefix}_av{version}_round2_reclustered_seqs_from_blast.pep"
+    output:
+        blastp_results = "output/braker_filter/augustus.hints.filtered.aa_to_{prefix}_av{version}_round2_reclustered_seqs_from_blast.blastp",
+    threads: workflow.cores - 1
+    shell:
+        """
+        makeblastdb -in {input.round2_peps} -dbtype prot
+        blastp -db {input.round2_peps} -query {input.filtered_augustus_aas} \
+            -evalue 0.001 -num_threads {threads} \
+            -outfmt 6 > {output.blastp_results}
+        """
+
+rule augustus_gene_to_best_hit:
+    """
+    Just filters the blast results of aug->round2 to get the best
+     hit for each augustus transcript.
+    """
+    input:
+        blastp_results = "output/braker_filter/augustus.hints.filtered.aa_to_{prefix}_av{version}_round2_reclustered_seqs_from_blast.blastp",
+    output:
+        blastp_results = "output/braker_filter/augustus.hints.filtered.aa_to_{prefix}_av{version}_round2_reclustered_seqs_from_blast.blastp.besthit",
+    threads: 1
+    shell:
+        """
+        cat {input.blastp_results} | \
+         awk '{{if (($11 + 0) < 1E-9){{print($0)}} }}' | \
+         sort -k1,1 -k12,12gr -k11,11g -k3,3gr | \
+         sort -u -k1,1 --merge | cut -f1,2 | sort  > {output.blastp_results}
+        """
+
+rule augustus_filtered_to_bed:
+    """
+    This converts the filtered augustus gtf file to a bed file so we can compare after
+    cat augustus.hints.gtf | awk '{if ($3 == "transcript"){print($0)} }' | grep -v '#' | cut -d ';' -f1 | cut -f1,4,5,9 | sed 's/transcript_id "//g' | sed 's/"//g' | head
+    """
+    input:
+        filtered_augustus_gtf = "output/braker_filter/augustus.hints.filtered.gtf",
+    output:
+        filtered_augustus_bed = "output/braker_filter/augustus.hints.filtered.bed"
+    threads: 1
+    shell:
+        """
+        cat {input.filtered_augustus_gtf} | \
+          awk '{{if ($3 == "transcript"){{printf("%s\\t%s\\t%s\\t%s\\n", $1,$4,$5,$0)}} }}' | \
+          grep -v '#' | bedtools sort > {output.filtered_augustus_bed}
+        """
+
+rule round2_to_bed:
+    """
+    This will be used to get genes that overlap with each other.
+    """
+    input:
+         gff    = "output/{prefix}_av{version}_round2_reclustered.gff",
+    output:
+         bed    = "output/{prefix}_av{version}_round2_reclustered.gff.bed",
+    threads: 1
+    shell:
+        """
+        cat {input.gff} | \
+          awk '{{if ($3 == "transcript"){{printf("%s\\t%s\\t%s\\t%s\\n", $1,$4,$5,$0)}} }}' | \
+          grep -v '#' | bedtools sort > {output.bed}
+        """
+
+rule find_overlaps_between_round2_and_filtered_augustus_hits:
+    """
+    Finds annotations that overlap in both augustus and round 2.
+    """
+    input:
+        filtered_augustus_bed = "output/braker_filter/augustus.hints.filtered.bed",
+        round2_bed    = "output/{prefix}_av{version}_round2_reclustered.gff.bed",
+    output:
+        aug_overlaps_with_round2 = "output/braker_filter/augustus.hints.filtered_overlapping_with_{prefix}_av{version}_round2_reclustered.txt",
+    threads: 1
+    shell:
+        """
+        bedtools intersect -a {input.filtered_augustus_bed} \
+           -b {input.round2_bed} -wb -wa -f 0.001 -F 0.001 | \
+           cut -f12,24 | cut -d '"' -f2,5 | \
+           sed 's/"//g' | cut -d ';' -f1 | \
+           sed 's/ID=//g' | sort | uniq | sort > {output.aug_overlaps_with_round2}
+        """
+
+rule use_augustus_overlaps_with_round2_and_blast_results:
+    """
+    Now that we've blasted the AUGUSTUS hits against the round2 prots,
+     and we have found the annotations between the two that have decent
+     overlaps, we can easily add in the augustus transcripts to the
+     round2 without affecting the gene numbering.
+    """
+    input:
+        aug_overlaps_with_round2 = "output/braker_filter/augustus.hints.filtered_overlapping_with_{prefix}_av{version}_round2_reclustered.txt",
+        blastp_results = "output/braker_filter/augustus.hints.filtered.aa_to_{prefix}_av{version}_round2_reclustered_seqs_from_blast.blastp.besthit"
+    output:
+        aug_best_hit = "output/braker_filter/augustus.hints.filtered.aa_to_{prefix}_av{version}_round2_reclustered_seqs_from_blast.blastp.besthit_and_overlaps"
+    threads: 1
+    shell:
+        """
+        comm -12 {input.aug_overlaps_with_round2} {input.blastp_results} > {output.aug_best_hit}
+        """
+
+rule generate_round3_aas_and_gtf:
+    """
+    Combines the augustus gene information and previous annotation to make
+     the round3 annotation.
+    """
+    input:
+        aug_best_hit = "output/braker_filter/augustus.hints.filtered.aa_to_{prefix}_av{version}_round2_reclustered_seqs_from_blast.blastp.besthit_and_overlaps",
+        filtered_augustus_aas = "output/braker_filter/augustus.hints.filtered.aa",
+        augustus_gtf = "output/braker_filter/augustus.hints.filtered.gtf",
+        round2_gff = "output/{prefix}_av{version}_round2_reclustered.gff",
+        round2_aas = "output/{prefix}_av{version}_round2_reclustered_seqs_from_blast.pep"
+    output:
+        round3_gff = "output/{prefix}_av{version}_round3.gff",
+        #round3_aas = "output/{prefix}_av{version}_round3.pep"
+    threads: 1
+    run:
+        # first read in the list of augustus hits and the best hit in round2
+        # we need the information in both orders
+        #  - augustus isoform to round2 gene
+        #  - round2 gene to augustus isoform
+        augiso_to_round2gene = {}
+        round2gene_to_augiso = {}
+        with open(input.aug_best_hit, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    augiso = splitd[0]
+                    round2gene = ".".join(splitd[1].split(".")[0:-1])
+                    print(round2gene)
+                    # for round2gene_to_auggene
+                    if round2gene not in round2gene_to_augiso:
+                        round2gene_to_augiso[round2gene] = [augiso]
+                    else:
+                        round2gene_to_augiso[round2gene].append(augiso)
+                    # for augiso_to_round2iso
+                    if augiso in augiso_to_round2gene:
+                        raise IOError("{} was already in augiso_to_round2gene".format(augiso))
+                    else:
+                        augiso_to_round2gene[augiso] = round2gene
+        augiso_to_string = {}
+        #now read in the augustus annotations that are needed
+        # we add all fields except for the last,
+        #  which is what is different between gtf and gff.
+        #We will add the last field when we print these out in the next round
+        with open(input.augustus_gtf, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    txid = splitd[8].split(";")[0].split("\"")[1].strip()
+                    if txid in augiso_to_round2gene and splitd[2] != "intron":
+                        addthis = "\t".join(splitd[0:-1])
+                        if txid not in augiso_to_string:
+                            augiso_to_string[txid] = [addthis]
+                        else:
+                            augiso_to_string[txid].append(addthis)
+
+        round2gene_to_maxisoform = {}
+        # now read in the round2 annotation to get the max number of isoforms
+        # per gene. Use this to number the isoforms later
+        with open(input.round2_gff, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    if splitd[2] == "transcript":
+                        genei = splitd[8].split(";")[0].replace("ID=", "")
+                        gene = ".".join(genei.split(".")[0:-1])
+                        isoform = int(genei.split(".")[-1].replace("i",""))
+                        if gene not in round2gene_to_maxisoform:
+                            round2gene_to_maxisoform[gene] = isoform
+                        else:
+                            if isoform > round2gene_to_maxisoform[gene]:
+                                round2gene_to_maxisoform[gene] = isoform
+        # now read in the round2 annotation again to add in the new isoforms from augustus
+        outhandle = open(output.round3_gff, "w")
+        added_to_protein = {} # this is the augustus transcript (new annotation number) mapped to its new annotation number
+        outbuffer = []
+        with open(input.round2_gff, "r") as f:
+            prevgene = ""
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split("\t")
+                    if splitd[2] == "transcript":
+                        genei = splitd[8].split(";")[0].replace("ID=", "")
+                        gene = ".".join(genei.split(".")[0:-1])
+                        isoform = int(genei.split(".")[-1].replace("i",""))
+                        if gene != prevgene:
+                            for buffline in outbuffer:
+                                print(buffline, file=outhandle)
+                            outbuffer = []
+                            # we have encountered a switch, see if prevgene had
+                            #  an entry in the augustus results, print if so
+                            if gene in round2gene_to_augiso:
+                                for thisiso in round2gene_to_augiso[gene]:
+                                    round2gene_to_maxisoform[gene] += 1
+                                    isonum = round2gene_to_maxisoform[gene]
+                                    new_aug_isoform = "{}.i{}".format(gene, isonum)
+                                    added_to_protein[thisiso] = new_aug_isoform
+                                    for isoline in augiso_to_string[thisiso]:
+                                        lastfield = ""
+                                        if isoline.split("\t")[2] == "gene":
+                                            raise IOError("There shouldn't be any gene entries in the augustus stored strings at the moment")
+                                        elif isoline.split("\t")[2] == "transcript":
+                                            ID="{}.i{}".format(gene, isonum)
+                                            PARENT = gene
+                                            lastfield = "ID={};Parent={}".format(ID, PARENT)
+                                        else:
+                                            PARENT="{}.i{}".format(gene, isonum)
+                                            lastfield = "Parent={}".format(PARENT)
+                                        final_outline = "{}\t{}".format(isoline, lastfield)
+                                        outbuffer.append(final_outline)
+                            else:
+                                # the last gene wasn't in the augustus candidates that made it into the annotation. just print
+                                print(line, file=outhandle)
+                        else:
+                            # this is something that we've already looked at.
+                            # just print it out.
+                            print(line, file=outhandle)
+                        prevgene = gene
+                    else:
+                        # if it is something other than a transcript, just print it out - we've already handled it
+                        print(line, file=outhandle)
+        for buffline in outbuffer:
+            print(buffline, file=outhandle)
+        outhandle.close()
+
+rule get_filtered_augustus_aa_to_round3_candidates:
+    """
+    After figuring out what augustus hits have good correspondences to
+      the round2 annotation, get a list of filtered augustus genes that
+      didn't make the cut. These will be considered in the next rounds.
+    """
+    input:
+        aug_best_hit = "output/braker_filter/augustus.hints.filtered.aa_to_{prefix}_av{version}_round2_reclustered_seqs_from_blast.blastp.besthit_and_overlaps",
+        filtered_augustus_aas = "output/braker_filter/augustus.hints.filtered.aa"
+    output:
+        round3_aa = "output/braker_filter/augustus.hints.filtered.toround3_{prefix}_av{version}.aa"
+    threads: 1
+    shell:
+        """
+        bioawk -cfastx '{{print($name)}}' {input.filtered_augustus_aas} | sort | uniq | sort > temp.allseqs
+        cat {input.aug_best_hit} | cut -f1 | sort > temp.addedseqs
+        comm -23 temp.allseqs temp.addedseqs > temp.toround3
+        seqtk subseq {input.filtered_augustus_aas} temp.toround3 > {output.round3_aa}
+        rm temp.*
+        """
+
+rule gtf_to_GeneMark_ETP_prots:
+    input:
+        genemark_gtf = "output/braker/GeneMark-ETP/genemark.gtf",
+        assem        = config["REF"],
+    output:
+        aas          = "output/braker/GeneMark-ETP/genemark.aa",
+    shell:
+        """
+        gtf2aa.pl {input.assem} {input.genemark_gtf} {output.aas}
+        """
+
+
+
+#rule AUG_gtf_to_sorted_gtf:
+#    input:
+#        augustus_hints     = "output/braker/augustus.hints.gtf"
+#    output:
+#        aug_hints_sort     = "output/braker/augustus.hints.sorted.gtf"
+#    threads: 1
+#    shell:
+#        """
+#        cat {input.augustus_hints} | \
+#           grep -v '#' | \
+#           sort -k1,1 -k4,4n -k5,5nr > {output.aug_hints_sort}
+#        """
+#
+#rule GMES_gtf_to_sorted_gtf:
+#    input:
+#        genemark_gtf = "output/braker/GeneMark-ETP/genemark.gtf",
+#    output:
+#        genemark_sorted = "output/braker/GeneMark-ETP/genemark.sorted.gtf",
+#    threads: 1
+#    shell:
+#        """
+#        cat {input.genemark_gtf} | \
+#           grep -v '#' | \
+#           sort -k1,1 -k4,4n -k5,5nr > {output.genemark_sorted}
+#        """
+#
+
+#rule get_the_transcripts_that_dont_overlap_with_transcriptome_predictions:
+#    """
+#    This rule gets the AUGUSTUS transcripts that don't overlap with the current
+#      annotation.
+#    """
+#    input:
+#         gff    = "output/{prefix}_av{version}_round2_reclustered.gff",
+#         augustus_gtf       = "output/braker/augustus.hints.gtf"
+
+rule cp_things_to_final:
+    input:
+        fasta  = "output/{prefix}_av{version}_round2_reclustered_sequences_from_blast.fasta", 
+        gfffas = "output/{prefix}_av{version}_round2_reclustered.fasta",
+        stringtie_pep    = "output/{prefix}_av{version}_round2_reclustered_seqs_from_blast.pep",
+        stringtie_gff    = "output/{prefix}_av{version}_round2_reclustered.gff",
+        filtered_augustus_pep = "output/braker_filter/augustus.hints.filtered.aa",
+        filtered_augustus_gtf = "output/braker_filter/augustus.hints.filtered.gtf",
+        genemark_pep          = "output/braker/GeneMark-ETP/genemark.aa",
+        genemark_gtf = "output/braker/GeneMark-ETP/genemark.gtf",
+    output:
+        #fasta  = "final/{prefix}_av{version}_txome_transcripts.fasta",
+        #gfffas = "final/{prefix}_av{version}_gff_transcripts.fasta",
+        stringtie_pep    = "final/{prefix}_av{version}_stringtie.pep",
+        stringtie_gff    = "final/{prefix}_av{version}_stringtie.gff",
+        augustus_pep    = "final/{prefix}_av{version}_augustus.pep",
+        augustus_gff    = "final/{prefix}_av{version}_augustus.gff",
+        genemark_pep    = "final/{prefix}_av{version}_genemark.pep",
+        genemark_gff    = "final/{prefix}_av{version}_genemark.gff",
+        combined_gff    = "final/{prefix}_av{version}_combined.gff",
+        combined_pep    = "final/{prefix}_av{version}_combined.pep",
+    shell:
+        """
+        cp {input.stringtie_pep} {output.stringtie_pep}
+        cp {input.stringtie_gff} {output.stringtie_gff}
+        cp {input.filtered_augustus_pep} {output.augustus_pep}
+        cp {input.genemark_pep} {output.genemark_pep}
+        cat {input.filtered_augustus_gtf} | gtf2gff.pl --printExon --printUTR --gff3 --includeStopInCDS --out {output.augustus_gff}
+        cat {input.genemark_gtf} | gtf2gff.pl --printExon --printUTR --gff3 --includeStopInCDS --out {output.genemark_gff}
+        cat {output.stringtie_gff} {output.augustus_gff} {output.genemark_gff} > {output.combined_gff}
+        cat {output.stringtie_pep} {output.augustus_pep} {output.genemark_pep} > {output.combined_pep}
+        """
+rule compress_the_final_distribution:
+    input:
+        stringtie_pep    = "final/{prefix}_av{version}_stringtie.pep",
+        stringtie_gff    = "final/{prefix}_av{version}_stringtie.gff",
+        augustus_pep    = "final/{prefix}_av{version}_stringtie.pep",
+        augustus_gff    = "final/{prefix}_av{version}_stringtie.gff",
+        genemark_pep    = "final/{prefix}_av{version}_stringtie.pep",
+        genemark_gff    = "final/{prefix}_av{version}_stringtie.gff",
+        combined_gff    = "final/{prefix}_av{version}_combined.gff",
+        combined_pep    = "final/{prefix}_av{version}_combined.pep",
+    output:
+        tar = "{prefix}_av{version}.tar.gz"
+    shell:
+        """
+        tar -czvf {output.tar} final/
+        """

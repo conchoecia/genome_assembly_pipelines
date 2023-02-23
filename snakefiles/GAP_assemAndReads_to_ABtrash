@@ -1,0 +1,399 @@
+"""
+This snakefile file takes an assembly that is diploid and chromosome-scale,
+ and:
+  - splits the assemblies into parts A and B based on how the user defines them
+  - Uses a Hi-C reads pairs file to determine if the remaining scaffolds
+    are in A or B
+  - Splits the input read pairs into parts A and B so that they can be used later for assembly
+"""
+
+from Bio import SeqIO
+import copy
+import gzip
+import operator
+import pandas as pd
+import sys
+
+minchromsize = 1000000
+configfile: "config.yaml"
+
+config["tool"] = "GAP_assemAndReads_to_AB"
+
+rule all:
+    input:
+        # which non-marked scaffolds on which
+        expand(config["tool"] + "/output/assembly/{nom}_{side}_scaffolds.txt",
+               nom = config["assemblies"], side = ["A", "B"]),
+        # split assembly
+        expand(config["tool"] + "/output/assembly/{nom}_{side}.fasta",
+               nom = config["assemblies"], side = ["A", "B"]),
+        # split reads
+        expand(config["tool"] + "/output/reads/hap_specific/{nom}_{side}_readslist.txt",
+               nom = config["assemblies"], side = ["A", "B"]),
+        # get the hap-specific reads
+        expand(config["tool"] + "/output/reads/hap_specific/{nom}_{side}_{lib}_{readdir}.fastq.gz",
+               nom = config["assemblies"], side = ["A", "B"],
+               lib = config["HiC"], readdir = ["R1", "R2"]),
+        # get the more selective list of reads
+        expand(config["tool"] + "/output/reads/{nom}_allReadIds.txt",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/reads/{nom}_ReadIds_notIn{side}.txt",
+               nom = config["assemblies"], side = ["A", "B"]),
+        # get the more inclusive set of reads
+        expand(config["tool"] + "/output/reads/notIn/{nom}_notIn{side}_{lib}_{readdir}.fastq.gz",
+               nom = config["assemblies"], side = ["A", "B"],
+               lib = config["HiC"], readdir = ["R1", "R2"]),
+
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule chrom_size:
+    """
+    make a file with the chromosome sizes
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    threads: 1
+    shell:
+        """
+        bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
+        """
+
+rule determine_which_reads_scaffolds_A_B:
+    input:
+        pairs = config["pairsgz"],
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        A_readlist      = config["tool"] + "/output/reads/hap_specific/{nom}_A_readslist.txt",
+        B_readlist      = config["tool"] + "/output/reads/hap_specific/{nom}_B_readslist.txt",
+        trash_readlist  = config["tool"] + "/output/reads/hap_specific/{nom}_trash_readslist.txt",
+        A_scaffolds     = config["tool"] + "/output/assembly/{nom}_A_scaffolds.txt",
+        B_scaffolds     = config["tool"] + "/output/assembly/{nom}_B_scaffolds.txt",
+        trash_scaffolds = config["tool"] + "/output/assembly/{nom}_trash_scaffolds.txt",
+        A_fasta = config["tool"] + "/output/assembly/{nom}_A.fasta",
+        B_fasta = config["tool"] + "/output/assembly/{nom}_B.fasta",
+        trash_fasta = config["tool"] + "/output/assembly/{nom}_trash.fasta",
+    threads: 1
+    run:
+        # first read in the chromosome lengths to normalize map amount
+        chrom_to_size = {}
+        with open(input.cs, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    splitd = line.split()
+                    chrom_to_size[splitd[0]] = int(splitd[1])
+        # the files that we'll write the seq list to
+        A_handle = open(output.A_scaffolds, "w")
+        B_handle = open(output.B_scaffolds, "w")
+        trash_handle = open(output.trash_scaffolds, "w")
+        # the list of scaffolds that have parts A and B.
+        # things not in this set will be used in their entirety
+        scaf_to_side = {}
+        scaf_to_a_b_size = {}
+        for side in ["A", "B", "trash"]:
+            for entry in config[side]:
+                scaffold = entry.split(":")[0]
+                scafstring = "{}:{}".format(scaffold, side)
+                if entry.split(":")[1] == "all":
+                    start = 1
+                    stop  = chrom_to_size[scaffold]
+                else:
+                    start    = int(entry.split(":")[1].split("-")[0])
+                    stop     = int(entry.split(":")[1].split("-")[1])
+                if scaffold not in scaf_to_side:
+                    scaf_to_side[scaffold] = {"starts": [], "AorB": [], "stops": []}
+                scaf_to_side[scaffold]["starts"].append(start)
+                scaf_to_side[scaffold]["stops"].append(stop)
+                scaf_to_side[scaffold]["AorB"].append(side)
+                if scafstring not in scaf_to_a_b_size:
+                    scaf_to_a_b_size[scafstring] = 0
+                scaf_to_a_b_size[scafstring] += stop - start + 1
+
+                if side == "B":
+                    print("{}:{}-{}".format(scaffold, start, stop), file = B_handle)
+                elif side == "A":
+                    print("{}:{}-{}".format(scaffold, start, stop), file = A_handle)
+                elif side == "trash":
+                    print("{}:{}-{}".format(scaffold, start, stop), file = trash_handle)
+                #entries.append({"AorB": side, "start": start,
+                #                "stop": stop, "size": stop - start + 1})
+        print(scaf_to_side)
+
+        # interaction_counter = {"sca1": {"sca2:B": {"count": 20, "freq" = 0.001}}
+        interaction_counter = {}
+        # now parse the pairs file and figure out what other scaffolds are paired with A or B
+        num_reads = 0
+        with gzip.open(input.pairs, "rt") as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith("#"):
+                    if line:
+                        num_reads += 1
+                        splitd = line.split()
+                        read    = splitd[0]
+                        sca1    = splitd[1]
+                        sca1pos = int(splitd[2])
+                        sca2    = splitd[3]
+                        sca2pos = int(splitd[4])
+                        # now we determine if sca1 and sca2 are in A or B
+                        sca1status = ""
+                        sca2status = ""
+                        # sca1
+                        iterator_dict = {sca1: [sca1pos, sca1status],
+                                         sca2: [sca2pos, sca2status]}
+                        # figure out if we even need to do this.
+                        # Exactly sca1 or sca2 should be in scaf_to_side,
+                        # and one should not be in there
+                        if (sca1 in scaf_to_side) ^ (sca2 in scaf_to_side):
+                            for key in iterator_dict:
+                                if key in scaf_to_side:
+                                    # figure out the entry type of the scaf pos
+                                    iterator_dict[key][1] = scaf_to_side[key]["AorB"][
+                                                                scaf_to_side[key]["stops"].index(
+                                                                  min([x for x in scaf_to_side[key]["stops"]
+                                                                      if x >= iterator_dict[key][0]])
+                                                                )
+                                                            ]
+                            # Now that we've figured out whether sca1 and sca2 are in A, B, or neither, add this count
+                            # we only work with the ones where one was A/B and the other was plain
+                            sca1status = iterator_dict[sca1][1]
+                            sca2status = iterator_dict[sca2][1]
+                            print("{}\t'{}'\t{}\t'{}'".format(
+                                sca1, sca1status, sca2, sca2status))
+                            if (sca1status == "") ^ (sca2status == ""):
+                                sca1_string = sca1
+                                sca2_string = sca2
+                                # keep track of the count
+                                if sca1status == "":
+                                    sca2_string += ":{}".format(sca2status)
+                                    if sca1 not in interaction_counter:
+                                        interaction_counter[sca1] = {}
+                                    if sca2_string not in interaction_counter[sca1]:
+                                        interaction_counter[sca1][sca2_string] = {"count": 0, "freq": -1}
+                                    interaction_counter[sca1][sca2_string]["count"] += 1
+                                if sca2status == "":
+                                    sca1_string += ":{}".format(sca1status)
+                                    if sca2 not in interaction_counter:
+                                        interaction_counter[sca2] = {}
+                                    if sca1_string not in interaction_counter[sca2]:
+                                        interaction_counter[sca2][sca1_string] = {"count": 0, "freq": -1}
+                                    interaction_counter[sca2][sca1_string]["count"] += 1
+
+        # now calculate the frequencies of each interaction
+        # freq is in reads per MB
+        for sca1 in interaction_counter:
+            for sca2string in interaction_counter[sca1]:
+                sca1len = chrom_to_size[sca1]
+                sca2len = scaf_to_a_b_size[sca2string]
+                area = (sca1len * sca2len)/1000000
+                freq = interaction_counter[sca1][sca2string]["count"]/area
+                interaction_counter[sca1][sca2string]["freq"] = freq
+
+        # now determine if the scaffolds belong to A or B
+        scaf_to_A_B = {}
+        for sca in interaction_counter:
+            d2 = {key: interaction_counter[sca][key]["freq"]
+                  for key in interaction_counter[sca]}
+            maxscaf = max(d2.items(), key=operator.itemgetter(1))[0]
+            AorB = maxscaf.split(":")[1]
+            scaf_to_A_B[sca] = AorB
+            if AorB == "A":
+                print(sca, file = A_handle)
+            elif AorB == "B":
+                print(sca, file = B_handle)
+            elif AorB == "trash":
+                print(sca, file = trash_handle)
+        print(scaf_to_A_B)
+        A_handle.close()
+        B_handle.close()
+        trash_handle.close()
+
+        # now determine which read pairs go into which groups
+        A_reads = set()
+        B_reads = set()
+        trash_reads = set()
+        counter = 0
+        with gzip.open(input.pairs, "rt") as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith("#"):
+                    if line:
+                        counter += 1
+                        if counter % 10000 == 0:
+                            print("  Analyzing {}/{} reads    ".format(counter, num_reads), end = "\r")
+                        splitd = line.split()
+                        read    = splitd[0]
+                        sca1    = splitd[1]
+                        sca1pos = int(splitd[2])
+                        sca2    = splitd[3]
+                        sca2pos = int(splitd[4])
+                        # now we determine if sca1 and sca2 are in A or B
+                        sca1status = ""
+                        sca2status = ""
+                        # sca1
+                        iterator_dict = {sca1: [sca1pos, sca1status],
+                                         sca2: [sca2pos, sca2status]}
+                        # examine every read pair
+                        for key in iterator_dict:
+                            if key in scaf_to_side:
+                                # figure out the entry type of the scaf pos
+                                iterator_dict[key][1] = scaf_to_side[key]["AorB"][
+                                                            scaf_to_side[key]["stops"].index(
+                                                              min([x for x in scaf_to_side[key]["stops"]
+                                                                  if x >= iterator_dict[key][0]])
+                                                            )
+                                                        ]
+                        sca1status = iterator_dict[sca1][1]
+                        sca2status = iterator_dict[sca2][1]
+                        # now manually check if sca1 or sca2 is A or B
+                        if sca1status == "":
+                            if sca1 in scaf_to_A_B:
+                                sca1status = scaf_to_A_B[sca1]
+                        if sca2status == "":
+                            if sca2 in scaf_to_A_B:
+                                sca2status = scaf_to_A_B[sca2]
+                        if (sca1status == "A") and (sca2status == "A"):
+                            A_reads.add(read)
+                        elif (sca1status == "B") and (sca2status == "B"):
+                            B_reads.add(read)
+                        elif (sca1status == "trash") and (sca2status == "trash"):
+                            trash_reads.add(read)
+
+        print("  Analyzing {}/{} reads    ".format(counter, num_reads))
+        print("printing out the read IDs")
+        A_handle = open(output.A_readlist, "w")
+        B_handle = open(output.B_readlist, "w")
+        trash_handle = open(output.trash_readlist, "w")
+        for entry in A_reads:
+            print(entry, file = A_handle)
+        for entry in B_reads:
+            print(entry, file = B_handle)
+        for entry in trash_reads:
+            print(entry, file = B_handle)
+        A_handle.close()
+        B_handle.close()
+        trash_handle.close()
+
+        print("splitting the assembly")
+        # now generate a split assembly
+        A_handle = open(output.A_fasta, "w")
+        B_handle = open(output.B_fasta, "w")
+        trash_handle = open(output.trash_fasta, "w")
+        for record in SeqIO.parse(input.assem, "fasta"):
+            if record.id in scaf_to_side:
+                for i in range(len(scaf_to_side[record.id]["starts"])):
+                    temprecord = copy.copy(record)
+                    start = scaf_to_side[record.id]["starts"][i]
+                    stop  = scaf_to_side[record.id]["stops"][i]
+                    temprecord.id = "{}:{}-{}".format(record.id, start, stop)
+                    if scaf_to_side[record.id]["AorB"][i] == "A":
+                        SeqIO.write(temprecord[start - 1:stop], A_handle, "fasta")
+                    elif scaf_to_side[record.id]["AorB"][i] == "B":
+                        SeqIO.write(temprecord[start - 1:stop], B_handle, "fasta")
+                    elif scaf_to_side[record.id]["AorB"][i] == "trash":
+                        SeqIO.write(temprecord[start - 1:stop], trash_handle, "fasta")
+            elif record.id in scaf_to_A_B:
+                if scaf_to_A_B[record.id]   == "A":
+                    SeqIO.write(record, A_handle, "fasta")
+                elif scaf_to_A_B[record.id] == "B":
+                    SeqIO.write(record, B_handle, "fasta")
+                elif scaf_to_A_B[record.id] == "trash":
+                    SeqIO.write(record, trash_handle, "fasta")
+        A_handle.close()
+        B_handle.close()
+        trash_handle.close()
+
+def flatten(list_of_lists):
+    return [val for sublist in list_of_lists for val in sublist]
+
+# this rule needs to be rewritten to be more dynamic
+rule get_hap_specific_reads:
+    input:
+        readlist = config["tool"] + "/output/reads/hap_specific/{nom}_{side}_readslist.txt",
+        reads = lambda wildcards: config["HiC"][wildcards.lib][wildcards.readdir]
+    output:
+        reads = config["tool"] + "/output/reads/hap_specific/{nom}_{side}_{lib}_{readdir}.fastq.gz"
+    threads: 1
+    shell:
+        """
+        seqtk subseq {input.reads} {input.readlist} | gzip > {output.reads}
+        """
+
+rule get_more_inclusive_read_lists:
+    input:
+        R1s = [config["HiC"][lib]["R1"] for lib in config["HiC"]],
+        A_readlist = config["tool"] + "/output/reads/hap_specific/{nom}_A_readslist.txt",
+        B_readlist = config["tool"] + "/output/reads/hap_specific/{nom}_B_readslist.txt"
+    output:
+        allreadlist = config["tool"] + "/output/reads/{nom}_allReadIds.txt",
+        notInA = config["tool"] + "/output/reads/{nom}_ReadIds_notInA.txt",
+        notInB = config["tool"] + "/output/reads/{nom}_ReadIds_notInB.txt"
+    threads: 1
+    run:
+        A_reads = set()
+        B_reads = set()
+        all_reads = set()
+        # add the A_reads
+        print("Getting the known A reads")
+        with open(input.A_readlist, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    A_reads.add(line)
+                    all_reads.add(line)
+        # add the B_reads
+        print("Getting the known B reads")
+        with open(input.B_readlist, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    B_reads.add(line)
+                    all_reads.add(line)
+        # now go through all the reads
+        print("Going through the fastq files.")
+        counter = 0
+        for thisfile in input.R1s:
+            print("  - analyzing {}".format(thisfile))
+            with gzip.open(thisfile, "rt") as handle:
+                for record in SeqIO.parse(handle, "fastq"):
+                    counter += 1
+                    if counter % 10000 == 0:
+                        print("  Analyzed {} reads.  ".format(counter), end = "\r")
+                    all_reads.add(record.id)
+            print()
+        print("  Analyzed {} reads.  ".format(counter))
+        # write all thes reads to a file
+        all_handle = open(output.allreadlist, "w")
+        A_handle = open(output.notInA, "w")
+        B_handle = open(output.notInB, "w")
+        print("Printing the reads to new files.")
+        for entry in all_reads:
+            # print to all reads file
+            print(entry, file = all_handle)
+            # print to not in A file
+            if entry not in A_reads:
+                print(entry, file = A_handle)
+            if entry not in B_reads:
+                print(entry, file = B_handle)
+
+
+rule get_reads_notInAorB:
+    input:
+        readlist = config["tool"] + "/output/reads/{nom}_ReadIds_notIn{side}.txt",
+        reads    = lambda wildcards: config["HiC"][wildcards.lib][wildcards.readdir]
+    output:
+        reads = config["tool"] + "/output/reads/notIn/{nom}_notIn{side}_{lib}_{readdir}.fastq.gz"
+    threads: 1
+    shell:
+        """
+        seqtk subseq {input.reads} {input.readlist} | gzip > {output.reads}
+        """

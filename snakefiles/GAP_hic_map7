@@ -1067,6 +1067,7 @@ rule bedgraph_and_bed2bigwig:
         {input.bedsort} {input.depth} {output.depth}
         {input.bed2bw} {output.depth} {input.cs} {output.bw}
         """
+
 # Transcript Bigwig
 #  _____                         _      _     _____      __
 # |_   _| _ __ _ _ _  ___ __ _ _(_)_ __| |_  | _ ) \    / /

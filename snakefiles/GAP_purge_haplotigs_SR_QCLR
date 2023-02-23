@@ -532,8 +532,8 @@ rule make_genome_stats_table:
                     z1["before_minus_after_flagstat_pMap_{}".format(readtype)] = z1["after_flagstat_pMap_{}".format(readtype)] - z1["before_flagstat_pMap_{}".format(readtype)]
                     z1["before_minus_after_manual_pBMap_{}".format(readtype)]  = z1["after_manual_pBMap_{}".format(readtype)]  - z1["before_manual_pBMap_{}".format(readtype)]
                     z1["before_minus_after_manual_pMap_{}".format(readtype)]   = z1["after_manual_pMap_{}".format(readtype)]   - z1["before_manual_pMap_{}".format(readtype)]
-                    all_samples.append(z1)
                     time.sleep(1)
+                all_samples.append(z1)
         # now make a df with all the results
         df = pd.DataFrame(all_samples)
         df.to_csv(output.results_table, sep='\t', index=False)

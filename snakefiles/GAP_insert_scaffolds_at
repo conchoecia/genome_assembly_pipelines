@@ -28,6 +28,7 @@ if "insertions" not in config:
 insertion_set = set()
 for scaffold in config["insertions"]:
     if scaffold in insertion_set:
+        print(scaffold)
         raise IOError("You can only specify the scaffold {} once.".format(scaffold))
     else:
         insertion_set.add(scaffold)
@@ -41,6 +42,7 @@ for scaffold in config["insertions"]:
             position_set.add(position)
             insert_scaffold = config["insertions"][scaffold][position][0]
             if insert_scaffold in insertion_set:
+                print(insert_scaffold)
                 raise IOError("You can't specify a scaffold more than once. We don't support nested joins at the moment")
             insertion_set.add(insert_scaffold)
             insert_direction = config["insertions"][scaffold][position][1]

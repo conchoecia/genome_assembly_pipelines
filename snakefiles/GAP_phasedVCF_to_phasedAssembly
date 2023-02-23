@@ -1,0 +1,83 @@
+"""
+This assembly takes a phased VCF file, long reads, and hic reads.
+
+- It uses the VCF file to haplotag long reads.
+- It pulls out the long reads into chromosome-specific and hap-specific groups.
+- Performs de-novo assembly with those reads
+- Scaffolds those into chromosomes
+"""
+
+from Bio import SeqIO
+configfile: "config.yaml"
+config["tool"] = "GAP_phasedVCF_to_phasedAssembly"
+
+if "minimap2arg" not in config:
+    config["minimap2arg"] = "map-pb"
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{stringency}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+
+rule all:
+    input:
+        expand(config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam.bai",
+               nom = config["assemblies"],
+               LR = [os.path.basename(x) for x in config["LR"]])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule symlink_the_LRs:
+    """
+    Symlinks the long reads so they are easier to work with in the rest of the
+      pipeline.
+    """
+    input:
+        LR = config["LR"]
+    output:
+        assem = expand(config["tool"] + "/input/longreads/{LR}",
+                       LR = [os.path.basename(x) for x in config["LR"]])
+    params:
+        fileprefix = config["tool"] + "/input/longreads/"
+    run:
+        for thisfile in config["LR"]:
+            fname = os.path.basename(thisfile)
+            dest = "{}{}".format(params.fileprefix, fname)
+            os.symlink(thisfile, dest)
+
+rule map_LR_to_genome:
+    """
+    maps the reads to the assembly
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        long_reads = config["tool"] + "/input/longreads/{LR}"
+    output:
+        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam"
+    params:
+        minimaparg = config["minimap2arg"],
+        LR_name = lambda wildcards: wildcards.LR
+    threads: workflow.cores - 1
+    shell:
+        """
+        minimap2 -t {threads} -ax {params.minimaparg} {input.assem} \
+            --split-prefix {params.LR_name} {input.long_reads} | \
+          samtools view -hb -F 2308 - | \
+          samtools sort - > {output.bam}
+        """
+
+rule index_LR_bams:
+    input:
+        bam = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam"
+    output:
+        bai = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam.bai"
+    threads: 1
+    shell:
+        """
+        samtools index {input.bam}
+        """

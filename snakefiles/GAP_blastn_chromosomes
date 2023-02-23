@@ -1,0 +1,113 @@
+"""
+This performs a whole_genome_alignment using minimap2.
+ It does this by breaking up the query genome into 10-mb chunks to more quickly
+ align them then if they had been left whole.
+"""
+import subprocess
+from Bio import SeqIO
+
+configfile: "config.yaml"
+config["tool"] = "GAP_blastn_chromosomes"
+stepsize = 10000
+
+
+for x in ["qname", "query"]:
+    if x not in config:
+        raise IOError( "you must specify {} in the config".format(x))
+
+
+# get the path to the dgenies script
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+dgenies_path=os.path.join(filepath, "../bin/dgenies_index.py")
+
+rule all:
+    input:
+        #expand(config["tool"] + "/output/blastn/{qname}_to_nt.blastn",
+        #       qname = config["qname"]),
+        expand(config["tool"] + "/output/blastx/{qname}_to_nr.fixed.blastx",
+               qname = config["qname"])
+
+rule split_query_fasta:
+    """
+    this splits the assembly into smaller pieces to make the mapping faster
+    """
+    input:
+        assem     = config["query"]
+    output:
+        assem = config["tool"] + "/input/fragmented/{qname}_fragmented.fasta"
+    threads: 1
+    run:
+        outhandle = open(output.assem, "w")
+        # stepsize is controlled at the head of the file
+        for record in SeqIO.parse(input.assem, "fasta"):
+            i = 0
+            done = False
+            record.id = "{}_.-._chunk{}".format(record.id, i)
+            while not done:
+                SeqIO.write(record[i*stepsize:(i*stepsize)+stepsize], outhandle, 'fasta')
+                i += 1
+                record.id = record.id.split("_.-._")[0] + "_.-._chunk" + str(i)
+                if (i*stepsize)-1 >= len(record.seq):
+                    done = True
+        outhandle.close()
+
+
+rule blastn:
+    """
+    run blastn
+    """
+    input:
+        reads = config["tool"] + "/input/fragmented/{qname}_fragmented.fasta",
+    output:
+        blastn = config["tool"] + "/output/blastn/{qname}_to_nt.blastn"
+    threads: workflow.cores
+    params:
+        blastdb =  config["blastnt"]
+    shell:
+        """
+        blastn -num_threads {threads} -outfmt "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore stitle salltitles" \
+          -query {input.reads} -db {params.blastdb} -evalue 1E-5 | \
+          awk '{{if ($4 > 100){{print($0)}}}}' > {output.blastn}
+        """
+
+rule blastx:
+    """
+    run blastx
+    """
+    input:
+        reads = config["tool"] + "/input/fragmented/{qname}_fragmented.fasta",
+    output:
+        blastx = config["tool"] + "/output/blastx/{qname}_to_nr.blastx"
+    threads: workflow.cores
+    params:
+        blastdb =  config["diamondnr"]
+    shell:
+        """
+        diamond blastx --out {output.blastx} \
+          --threads {threads} --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore stitle salltitles \
+          --query {input.reads} --db {params.blastdb} --evalue 1E-5
+        """
+
+rule cleanup_blastx:
+    """
+    the blastx results now will now be in the coordinates of many smaller scaffolds,
+    so change the coordinates back
+    """
+    input:
+        blastx = config["tool"] + "/output/blastx/{qname}_to_nr.blastx"
+    output:
+        blastx = config["tool"] + "/output/blastx/{qname}_to_nr.fixed.blastx"
+    threads: 1
+    run:
+        outhandle = open(output.blastx, "w")
+        with open(input.blastx, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    chunk = int(fields[0].split("_.-._")[1].replace("chunk", ""))
+                    fields[0] = fields[0].split("_.-._")[0]
+                    fields[6] = str(int(fields[6])+(stepsize * chunk))
+                    fields[7] = str(int(fields[7])+(stepsize * chunk))
+                    print("\t".join(fields), file = outhandle)
+        outhandle.close()

@@ -1,0 +1,19 @@
+"""
+This Snakfile is for annotating repeat content (both TE-based and not) in multiple genomes.
+The pipeline analyzes multiple genomes at once for consistency's sake
+
+The output is tables of information, annotations, and plots comparing all of the genomes.
+
+Requires a conda environment called 'EDTA' with edta installed according to this website:
+ git clone https://github.com/oushujun/EDTA.git
+
+"""
+
+configfile: "config.yaml"
+config["tool"] = "GAP_annotate_repeats"
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/{pre}_av{ver}.tar.gz",
+               pre = config["PREFIX"], ver = config["VERSION"]),
+
