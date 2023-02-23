@@ -2,8 +2,14 @@
 Uses miniprot to annotate a genome with proteomes from closely-related species
 """
 from Bio import SeqIO
+import os
+
 configfile: "config.yaml"
 config["tool"] = "GAP_annotate_miniprot"
+
+
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+miniprot_path = os.path.join(snakefile_path, "../dependencies/miniprot/miniprot")
 
 # Make this break if one fasta is empty
 for thisassem in config["assemblies"]:
@@ -51,12 +57,13 @@ rule tblastn:
     input:
         query = lambda wildcards: config["proteins"][wildcards.prot],
         assem = config["tool"] + "/input/assembly/{assem}.fasta",
+        miniprot = miniprot_path
     output:
         query = config["tool"] + "/output/miniprots/{assem}_and_{prot}_mapped.gff"
     threads: workflow.cores - 1
     shell:
         """
-        miniprot -t {threads} --gff {input.assem} {input.query} > {output.query}
+        {input.miniprot} -t {threads} --gff {input.assem} {input.query} > {output.query}
         """
 
 def flag_nested(df):
