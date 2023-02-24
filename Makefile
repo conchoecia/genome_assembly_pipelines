@@ -6,7 +6,7 @@ all: bin/fasta_stats dependencies/SALSA/run_pipeline.py \
      bin/bbmap/reformat.sh \
      bin/pilon-1.23.jar dependencies/pairix/bin/pairix \
      bin/fqjt bin/minlen_pair \
-	 dependencies/miniprot
+     dependencies/miniprot
 
 bin/fqjt: src/fq-jt.c
 	mkdir -p bin
