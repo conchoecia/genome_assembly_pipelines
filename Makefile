@@ -5,7 +5,8 @@ all: bin/fasta_stats dependencies/SALSA/run_pipeline.py \
      dependencies/SALSA/break_contigs_start \
      bin/bbmap/reformat.sh \
      bin/pilon-1.23.jar dependencies/pairix/bin/pairix \
-     bin/fqjt bin/minlen_pair
+     bin/fqjt bin/minlen_pair \
+	 dependencies/miniprot
 
 bin/fqjt: src/fq-jt.c
 	mkdir -p bin
@@ -40,3 +41,8 @@ dependencies/pairix/setup.py:
 
 dependencies/pairix/bin/pairix: dependencies/pairix/setup.py
 	cd dependencies/pairix; make
+
+dependencies/miniprot:
+	mkdir -p dependencies
+	cd dependencies; git clone https://github.com/lh3/miniprot.git
+	cd dependencies/miniprot; make
