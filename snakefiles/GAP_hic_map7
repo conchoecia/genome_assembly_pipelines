@@ -136,6 +136,7 @@ def get_chromosome_sizes(assembly_file, minsize):
                 chroms.append(record.id)
     return chroms
 
+
 wildcard_constraints:
     datatype="[A-Za-z0-9]+",
     kmer="[A-Za-z0-9]+",
@@ -147,14 +148,14 @@ wildcard_constraints:
 
 rule all:
     input:
-        # pretext view
-        expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
+        ## pretext view
+        #expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
 
-        ## Juicebox Assembly Tools part
-        #expand(config["tool"] + "/output/{nom}/{nom}.assembly",
-        #       nom = config["assemblies"]),
-        #expand(config["tool"] + "/output/{nom}/{nom}_allLibs_q_{qval}.hic",
-        #       nom = config["assemblies"], qval = config["qvals"]),
+        # Juicebox Assembly Tools part
+        expand(config["tool"] + "/output/{nom}/{nom}.assembly",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_allLibs_q_{qval}.hic",
+               nom = config["assemblies"], qval = config["qvals"]),
 
         # HiGlass version
         expand(config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.covstats",
@@ -603,8 +604,8 @@ rule make_pretextmap:
     output:
         pretext = config["tool"] + "/output/{nom}/{nom}.pretext"
     params:
-        left  = " -1 ".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
-        right = " -2 ".join(flatten([config["libs"][x]["read2"] for x in config["libs"]]))
+        left  = ",".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
+        right = ",".join(flatten([config["libs"][x]["read2"] for x in config["libs"]]))
     threads: workflow.cores - 2
     shell:
         """
