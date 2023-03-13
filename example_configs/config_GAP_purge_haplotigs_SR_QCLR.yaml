@@ -7,6 +7,8 @@ assemblies:
 shot_f: "/path/to/forward/reads.fastq.gz"
 shot_r: "/path/to/reverse/reads.fastq.gz"
 longreads: "/path/to/longreads/here.fastq.gz"
+# choose between "map-pb", "map-ont", "asm20"
+minimap2_ax_flag: "map-pb"
 
 # To set these parameters you need to generate the histogram from the bam file.
 #  [Look at the instructions here for how to pick low, med, and high](https://bitbucket.org/mroachawri/purge_haplotigs/src/master/)

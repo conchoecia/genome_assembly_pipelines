@@ -15,3 +15,8 @@ temp.sh
 *.pdf
 *.summary_table.tsv
 *~
+bin/*
+*__pycache__*
+*nr_entry_to_taxid.ids*
+*nr_accesion_to_taxids.txt*
+\#*

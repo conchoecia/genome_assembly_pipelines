@@ -11,6 +11,9 @@ minchromsize = 1000000
 configfile: "config.yaml"
 config["tool"] = "GAP_yahs"
 
+
+qvals = [5]
+
 for x in config["assemblies"]:
     if "_" in x:
         raise IOError("You must not have any special characters in the assembly names: {}. Just use [A-Za-z0-9]+".format(x))
@@ -18,114 +21,12 @@ for x in config["assemblies"]:
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 chromappath = os.path.join(filepath, "../bin/chromap/chromap")
 
-def rc(seq):
-    """
-    reverse complement the sequence
-    """
-    this_complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
-    return "".join(this_complement.get(base, base) for base in reversed(seq))
-
 def flatten(list_of_lists):
     if len(list_of_lists) == 0:
         return list_of_lists
     if isinstance(list_of_lists[0], list):
         return flatten(list_of_lists[0]) + flatten(list_of_lists[1:])
     return list_of_lists[:1] + flatten(list_of_lists[1:])
-
-def nx(seq, n):
-    """
-    concats the sequence n times
-    """
-    return "".join([seq]*n)
-
-if "minimap2arg" not in config:
-    config["minimap2arg"] = "map-hifi"
-
-###
-###  KMER PARSING SECTION
-###
-# if kmers not specified in config, add
-if "kmers" not in config:
-    config["kmers"] = {}
-
-# if telomere kmers not specified in the config file, use regular metazoan seq
-if "telomere" not in config:
-    config["telomere_seqs"] = ["TTAGGG"]
-config["telomere_seqs"] = [x.upper() for x in config["telomere_seqs"]]
-
-# make sure that there are no reverse complements in the telomere_seqs
-#  we don't want this because we specifically define the revcomp in the
-#  next step
-for x in config["telomere_seqs"]:
-    if rc(x) in config["telomere_seqs"]:
-        raise IOError("Don't include the reverse reverse complement of the telomere sequences")
-config["telomere_seqs"] = {"{}5x".format(key.upper()):
-                           {"f":nx(key.upper(), 5),
-                            "r":nx(rc(key.upper()), 5)}
-                           for key in config["telomere_seqs"]}
-
-## now add tracks for contiguous stretches of two, three
-#for n in [2]:
-#    config["telomere_seqs"].update(
-#        {"{}{}x".format(key.upper(), n):
-#                  {"f":nx(key.upper(), n),
-#                   "r":nx(rc(key.upper()), n)}
-#                  for key in config["telomere_seqs"]})
-
-print(config["telomere_seqs"])
-
-# make sure all the kmers are uppercase and that the set is complete
-for key in config["kmers"]:
-    config["kmers"][key] = list(set([x.upper() for x in config["kmers"][key]] + \
-                           [reverse_complement(x.upper()) for x in config["kmers"][key]]))
-print(config["kmers"])
-
-# make this dummy LR fastq file in case we don't actually want to map any reads
-toolpath = os.path.join(os.getcwd(), config["tool"])
-if not os.path.exists(toolpath):
-    os.mkdir(toolpath)
-if "LR" not in config:
-    config["LR"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
-    if not os.path.exists(config["LR"][0]):
-        content = b""
-        f = gzip.open(config["LR"][0], 'wb')
-        f.write(content)
-        f.close()
-
-# make this dummy transcript file in case we don't actually want to map any reads
-toolpath = os.path.join(os.getcwd(), config["tool"])
-if not os.path.exists(toolpath):
-    os.mkdir(toolpath)
-if "transcripts" not in config:
-    config["transcripts"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
-    if not os.path.exists(config["transcripts"][0]):
-        content = b""
-        f = gzip.open(config["transcripts"][0], 'wb')
-        f.write(content)
-        f.close()
-
-# now we check the LR and transcript files to make sure they are fasta or fastq
-for thiskey in ["transcripts", "LR"]:
-    for entry in config[thiskey]:
-        good = False
-        for ending in [".fa", ".fa.gz", ".fasta",
-                       ".fasta.gz", ".fastq",
-                       ".fastq.gz", ".fq", ".fq.gz"]:
-            if entry.endswith(ending):
-                good = True
-        if not good:
-            raise IOError ("The LR or transcripts file {} must end with .fa, .fa.gz, .fasta, .fasta.gz, .fastq, or .fastq.gz.".format(entry))
-
-def get_chromosome_sizes(assembly_file, minsize):
-    """
-    returns a set of chromosomes to keep
-    """
-    chroms = []
-    with open(assembly_file) as handle:
-        for record in SeqIO.parse(handle, "fasta"):
-            if len(record.seq) >= minsize:
-                chroms.append(record.id)
-    return chroms
 
 wildcard_constraints:
     datatype="[A-Za-z0-9]+",
@@ -138,9 +39,14 @@ wildcard_constraints:
 
 rule all:
     input:
-        expand(config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs",
-               nom = config["assemblies"], qval = [0])
+        expand(config["tool"] + "/output/{nom}/{nom}_q_{qval}.bed",
+                nom = config["assemblies"], qval = qvals),
+        expand(config["tool"] + "/output/{nom}/{nom}_hic.sorted.bam",
+                nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
+                nom = config["assemblies"])
 
+ 
 # make softlinks of the input files
 # files end up here:
 #   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
@@ -211,7 +117,7 @@ rule index_ref:
         check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
         chromap = os.path.join(filepath, "../bin/chromap/chromap")
     output:
-        index = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.index")
+        index = config["tool"] + "/input/assembly/{nom}_input.fasta.index"
     shell:
         """
         {input.chromap} -i -r {input.assem} -o {output.index}
@@ -258,7 +164,7 @@ rule hic_to_pairs:
         left  = flatten([config["libs"][x]["read1"] for x in config["libs"]]),
         right = flatten([config["libs"][x]["read2"] for x in config["libs"]])
     output:
-        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs"
+        pairs = config["tool"] + "/output/{nom}/{nom}_q_{qval}.pairs"
     params:
         left  = " -1 ".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
         right = " -2 ".join(flatten([config["libs"][x]["read2"] for x in config["libs"]])),
@@ -275,13 +181,108 @@ rule hic_to_pairs:
             -o {output.pairs}
         """
 
-#rule gzip_pairs:
-#    input:
-#        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs"
-#    output:
-#        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz"
-#    threads: 1
-#    shell:
-#        """
-#        bgzip -c {input.pairs} > {output.pairs}
-#        """
+rule hic_to_sam:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        index   = config["tool"] + "/input/assembly/{nom}_input.fasta.index",
+        chromap = chromappath,
+        left  = flatten([config["libs"][x]["read1"] for x in config["libs"]]),
+        right = flatten([config["libs"][x]["read2"] for x in config["libs"]])
+    output:
+        sam = temp(config["tool"] + "/output/{nom}/{nom}_hic.sam")
+    params:
+        left  = ",".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
+        right = ",".join(flatten([config["libs"][x]["read2"] for x in config["libs"]]))
+    threads: workflow.cores - 2
+    shell:
+        """
+        {input.chromap} --preset hic -x {input.index} \
+            -r {input.assem} \
+            -1 {params.left}  \
+            -2 {params.right} \
+            -t {threads} \
+            --SAM \
+            -o {output.sam}
+        """
+
+rule hic_to_bam:
+    """
+    Now convert the sam to bam and sort
+    """
+    input:
+        sam = config["tool"] + "/output/{nom}/{nom}_hic.sam"
+    output:
+        bam = config["tool"] + "/output/{nom}/{nom}_hic.sorted.bam"
+    threads: max(1, int(workflow.cores / 2))
+    shell:
+        """
+        samtools view -@ {threads} -hb {input.sam} | \
+            samtools sort -@ {threads} -o {output.bam}
+        """
+
+rule pairs_to_bed:
+    """
+    Converts the pairs file to a bed file used for yahs.
+    The input and output are both tab-delimited.
+
+    The input file looks like this:
+    TUPAC_0001:3:1:0:1452#0  chr7  118970079  chr7  118965072  +  +  UU
+
+    The output file looks like this:
+    chr7   118970079   118970129   TUPAC_0001:3:1:0:1452#0/1   37   -
+    chr7   118965072   118965122   TUPAC_0001:3:1:0:1452#0/2   37   +
+    """
+    input:
+        pairs = config["tool"] + "/output/{nom}/{nom}_q_{qval}.pairs"
+    output:
+        bedfile = config["tool"] + "/output/{nom}/{nom}_q_{qval}.bed"
+    threads: 1
+    shell:
+        """
+        cat {input.pairs} | \
+        grep -v '#' | \
+        awk 'BEGIN{{OFS="\t"}}{{ \
+             print $2,$3,$3+50,$1"/1",37,$6; \
+             print $4,$5,$5+50,$1"/2",37,$7}}' > {output.bedfile}
+        """
+
+rule index_assembly:
+    """
+    Run samtools faidx on the assembly to generate a .fai
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check"
+    output:
+        fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai"
+    shell:
+        """
+        samtools faidx {input.assem}
+        """
+
+rule run_yahs_on_the_data:
+    """
+    needs a more recent version of yahs
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai",
+        bam = config["tool"] + "/output/{nom}/{nom}_hic.sorted.bam"
+    output:
+        yahs = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
+        agp  = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.agp",
+        yahsbin  = temp(config["tool"] + "/output/{nom}/yahs/{nom}.bin"),
+    params:
+        outprefix = config["tool"] + "/output/{nom}/yahs/{nom}"
+    threads: workflow.cores - 1
+    shell:
+        """
+        yahs -o {params.outprefix} --no-contig-ec --no-scaffold-ec --no-mem-check \
+            {input.assem} {input.bam}
+        """
+
+
+
+
+

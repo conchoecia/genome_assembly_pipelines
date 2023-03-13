@@ -1,0 +1,33 @@
+# this is the config file for config_GAP_assemNreads_to_ABtrash
+
+#This snakefile for this config  takes an assembly that is diploid and chromosome-scale,
+# and:
+#  - splits the assemblies into parts A and B based on how the user defines them
+#  - Uses a Hi-C reads pairs file to determine if the remaining scaffolds
+#    are in A or B
+#  - Splits the input read pairs into parts A and B so that they can be used later for assembly
+
+assemblies:
+  your_assem_prefix: "/path/to/your/assem/here.fasta"
+
+A:
+  - "sca1:1-500000"
+  - "sca2:1-2500"
+B:
+  - "sca1:500001-800000"
+  - "sca2:2501-9999"
+  - "sca3:all"
+trash:
+  - "sca4:all"
+  - "sca5:all"
+
+
+pairsgz: "/path/to/dedeup.filt.pairs.gz"
+
+HiC:
+  Lib1:
+    read1: "/path/to/HiC_Lib1_R1.fastq.gz"
+    read2: "/path/to/HiC_Lib1_R2.fastq.gz"
+  AnotherHiCLib:
+    read1: "/path/to/AnotherHiCLib_R1.fastq.gz"
+    read2: "/path/to/AnotherHiCLib_R2.fastq.gz"

@@ -3,4 +3,7 @@ assemblies:
 
 shotf: "/paired/WGS/reads/forward/file/here.fastq.gz"
 shotr: "/paired/WGS/reads/reverse/file/here.fastq.gz"
-diamond_db: "/path/to/uniprot_ref_proteomes.diamond.dmnd"
+# we use the diamond database to perform the searches
+diamond_nr_db: "/path/to/nr.dmnd"
+# we just use the nr blast database to extract the taxids for blobtools
+nr_db: "/path/to/nr"

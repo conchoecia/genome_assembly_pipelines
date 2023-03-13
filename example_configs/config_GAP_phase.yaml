@@ -1,0 +1,31 @@
+"""
+This is the example config for GAP_phase, based on Peter Edge's original
+ snakemake pipeline
+"""
+# USER CONFIG
+REFERENCE: "/bigdata/user/darrin/hydra/hydra_hic_map/GAP_hic_map2/input/assembly/hydra_v2b_input.fasta"
+
+CHROMS:
+  - Scaffold1
+  - Scaffold15
+  - Scaffold15.UN
+
+LONGREAD_BAM: ""
+VCFfile:      "Hydra_chr1chr15_calls.filtered.vcf"
+HIC_R1:       ""
+HIC_R2:       ""
+CHI_R1:       ""
+CHI_R2:       ""
+ILL_R1:       ""
+ILL_R2:       ""
+
+# edit these to point to the correct paths for binaries / jars
+# or just the program name if you have them in your PATH
+HAPCUT2:       'HAPCUT2'
+EXTRACTHAIRS:  'extractHAIRS'
+BWA:           'bwa'      # 0.7.12-r1044
+SAMTOOLS:      'samtools' # samtools 1-2, htslib 1.21
+PICARD:        '/usr/local/bin/picard/picard.jar'   # picard version 2.8
+BAMTOOLS:      'bamtools' # version 2.4
+TABIX:         'tabix'
+BGZIP:         'bgzip'
