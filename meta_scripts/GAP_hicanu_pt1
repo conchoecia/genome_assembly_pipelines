@@ -40,3 +40,4 @@ rule assemble:
           genomeSize={params.genome_size} \
           -pacbio-hifi {params.LR_string}
         """
+
