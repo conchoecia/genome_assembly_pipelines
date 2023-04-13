@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/266213821.svg)](https://zenodo.org/badge/latestdoi/266213821)
 ## <a name="started"></a>Getting Started
 
 ```sh
