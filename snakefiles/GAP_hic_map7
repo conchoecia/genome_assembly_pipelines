@@ -148,39 +148,38 @@ wildcard_constraints:
 
 rule all:
     input:
-        ## pretext view
-        #expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
-
         # Juicebox Assembly Tools part
         expand(config["tool"] + "/output/{nom}/{nom}.assembly",
                nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/{nom}_allLibs_q_{qval}.hic",
                nom = config["assemblies"], qval = config["qvals"]),
+        ## pretext view
+        #expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
 
-        # HiGlass version
-        expand(config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.covstats",
-               nom = config["assemblies"], qval = config["qvals"]),
-        # chromsize
-        expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
-               nom = config["assemblies"]),
-        # gaps
-        expand(config["tool"] + "/output/{nom}/{nom}_gaps.bed",
-               nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/{nom}_gaps.beddb",
-               nom = config["assemblies"]),
-        # get a plot of Hi-C quality
-        expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool.png",
-               nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
-        # mcool from balanced and unbalanced
-        expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.mcool",
-               nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
-        expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.mcool",
-               nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
-        # get an interaction matrix and the best connected scaffolds
-        expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.tsv",
-               nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
-        expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.best_connection.tsv",
-               nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
+        ## HiGlass version
+        #expand(config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.covstats",
+        #       nom = config["assemblies"], qval = config["qvals"]),
+        ## chromsize
+        #expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
+        #       nom = config["assemblies"]),
+        ## gaps
+        #expand(config["tool"] + "/output/{nom}/{nom}_gaps.bed",
+        #       nom = config["assemblies"]),
+        #expand(config["tool"] + "/output/{nom}/{nom}_gaps.beddb",
+        #       nom = config["assemblies"]),
+        ## get a plot of Hi-C quality
+        #expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool.png",
+        #       nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
+        ## mcool from balanced and unbalanced
+        #expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.mcool",
+        #       nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
+        #expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.mcool",
+        #       nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
+        ## get an interaction matrix and the best connected scaffolds
+        #expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.tsv",
+        #       nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
+        #expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.best_connection.tsv",
+        #       nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
 
         ## get read depths
         #expand(config["tool"] + "/output/{nom}/{nom}_{datatype}.bw",
@@ -420,6 +419,10 @@ rule JBAT_pairs_to_hic:
            bash {input.hicvis} -p false {input.assembly} {params.longprefix}${{QVAL}}{params.longsuffix} || true
            mv {params.outprefix} {params.mvprefix}${{QVAL}}{params.mvsuffix}
         done
+        rm ./*scaffold_track.txt
+        rm ./*superscaf_track.txt
+        rm ./*asm_mnd.txt
+        
         """
 #   _  _ _  ___ _              __  __      _       _
 #  | || (_)/ __| |__ _ ______ |  \/  |__ _| |_ _ _(_)_ __

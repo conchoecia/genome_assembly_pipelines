@@ -170,20 +170,20 @@ rule all:
         expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv",
                nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
         # now generate the assembly
-        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_output.fasta",
-               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
-        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_inserted_scaffolds.tsv",
-               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
-        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_appended_scaffolds.tsv",
-               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
-        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_unseen_scaffolds.txt",
-               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
-        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_insertion_stats.tsv",
-               nom = config["assemblies"], qval = qvals, binsize=config["binsize"]),
+        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_{fraction}FracBest_output.fasta",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"], fraction=config["strength_fraction"]),
+        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_{fraction}FracBest_inserted_scaffolds.tsv",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"], fraction=config["strength_fraction"]),
+        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_{fraction}FracBest_appended_scaffolds.tsv",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"], fraction=config["strength_fraction"]),
+        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_{fraction}FracBest_unseen_scaffolds.txt",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"], fraction=config["strength_fraction"]),
+        expand(config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_{fraction}FracBest_insertion_stats.tsv",
+               nom = config["assemblies"], qval = qvals, binsize=config["binsize"], fraction=config["strength_fraction"]),
 
         #TESTING
-        expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.TEST.tsv",
-               nom = config["assemblies"], qval = qvals, binsize=config["binsize"])
+        #expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.TEST.tsv",
+        #       nom = config["assemblies"], qval = qvals, binsize=config["binsize"])
 
 
 
@@ -540,7 +540,6 @@ class Chromosome:
             del_these = []
             for key in self.inserts:
                 if key < max_front:
-#                    print("found something ", key)
                     for seq in self.inserts[key]:
                         thisseq.append(seq)
                     del_these.append(key)
@@ -555,7 +554,6 @@ class Chromosome:
             del_these = []
             for key in self.inserts:
                 if key < max_front:
-#                    print("found something2 ", key)
                     for seq in self.inserts[key]:
                         thisseq.append(seq)
                     del_these.append(key)
@@ -566,7 +564,6 @@ class Chromosome:
             del_these = []
             if i == len(self.contig_ranges):
                 for key in self.inserts:
-#                    print("found something3 ", key)
                     for seq in self.inserts[key]:
                         thisseq.append(seq)
                     del_these.append(key)
@@ -630,11 +627,18 @@ class Chromosome:
                 contigs.append([gap_stops[i], len(seq)])
             else:
                 contigs.append([gap_stops[i], gap_starts[i+1]])
+
+        # If one chromosome is one scaffold after all this parsing, then we just add the start and stop
+        #  This happens if one chromosome is one big contig.
+        if len(contigs) == 0:
+            contigs.append([0, len(seq)])
         return contigs
 
     def find_all(self, seq, sub):
         """
         https://stackoverflow.com/questions/4664850/how-to-find-all-occurrences-of-a-substring
+
+        March 13 2023 - I am not sure what this does at the moment. This needs better documentation
         """
         start = 0
         indices = []
@@ -656,13 +660,12 @@ rule output_sorted_fasta:
         hicm  = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.nonchroms.best.tsv",
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
     output:
-        assem = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_output.fasta",
-        inserted_scafs     = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_inserted_scaffolds.tsv",
-        appended_scafs = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_appended_scaffolds.tsv",
-        unseen_scafs   = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_unseen_scaffolds.txt",
-        insertion_stats = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_insertion_stats.tsv"
+        assem           = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_{fraction}FracBest_output.fasta",
+        inserted_scafs  = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_{fraction}FracBest_inserted_scaffolds.tsv",
+        appended_scafs  = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_{fraction}FracBest_appended_scaffolds.tsv",
+        unseen_scafs    = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_{fraction}FracBest_unseen_scaffolds.txt",
+        insertion_stats = config["tool"] + "/output/assembly/{nom}_q_{qval}_{binsize}_{fraction}FracBest_insertion_stats.tsv"
     params:
-        strength_fraction = config["strength_fraction"],
         min_insert_size   = config["min_insert_size"],
         new_gap_length    = config["new_gap_length"]
     threads: 1
@@ -697,7 +700,8 @@ rule output_sorted_fasta:
         # read in the scafs
         df = pd.read_csv(input.hicm, sep = "\t")
         # get the quantile
-        min_strength = float(df["count_per_bases_squared"].quantile(1 - params.strength_fraction))
+        print("wildcards fraction is {}".format(wildcards.fraction))
+        min_strength = float(df["count_per_bases_squared"].quantile(1 - float(wildcards.fraction)))
 
         # These contigs we insert into the chromosomes
         insert_df = df.loc[((df["count_per_bases_squared"] >= min_strength) & \

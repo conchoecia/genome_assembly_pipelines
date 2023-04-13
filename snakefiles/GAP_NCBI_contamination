@@ -41,12 +41,14 @@ rule trim_contamination:
 
         # read the contamination file
         trim_regions = {}
-        collecting = False
+        purge_seq    = set()
+        collecting_trim = False
+        collecting_exclude = False
         with open(input.contam_file, "r") as f:
             for line in f:
                 line = line.strip()
                 if line:
-                    if collecting:
+                    if collecting_trim:
                         fields = line.split("\t")
                         chrom = fields[0]
                         startstop = fields[2]
@@ -56,8 +58,18 @@ rule trim_contamination:
                             trim_regions[chrom] = set()
                             for i in range(start, stop + 1):
                                 trim_regions[chrom].add(i)
+                    elif collecting_exclude:
+                        fields = line.split("\t")
+                        chrom = fields[0]
+                        purge_seq.add(chrom)
+                    elif line == "Sequence name, length, apparent source":
+                        collecting_exclude = True
                     elif line == "Sequence name, length, span(s), apparent source":
-                        collecting = True
+                        collecting_trim = True
+                else:
+                    # The line is blank, we are no longer collecting information for Trim or Exclude
+                    collecting_trim    = False
+                    collecting_exclude = False
 
         # now read in the next sequences and trim out the bad parts
         outhandle = open(output.assem, "w")
@@ -65,7 +77,8 @@ rule trim_contamination:
             for record in SeqIO.parse(handle, "fasta"):
                 #Turn all gaps into size 100
                 if record.id not in trim_regions:
-                    SeqIO.write(record, outhandle, "fasta")
+                    if record.id not in purge_seq:
+                        SeqIO.write(record, outhandle, "fasta")
                 else:
                     inN    = False
                     newseq = ""
