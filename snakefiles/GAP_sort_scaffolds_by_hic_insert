@@ -200,6 +200,8 @@ rule chrom_size:
     shell:
         """
         bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
+        # write an awk script to print the chromosome names and sizes
+        awk 
         """
 
 #      _ ___   _ _____     _    _       __ _ _
@@ -436,7 +438,7 @@ rule summarize_matrix_by_chromosome_coordinate:
     run:
         # first, get the scaffold to size
         scaf_to_size = {}
-        with open(input.assem, "rU") as handle:
+        with open(input.assem, "r") as handle:
             for record in SeqIO.parse(handle, "fasta"):
                 scaf_to_size[record.id] = len(record.seq)
 
@@ -673,7 +675,7 @@ rule output_sorted_fasta:
         chromosome_dict  = {}
         scaffold_dict    = {}
         scaffold_order   = []
-        with open(input.assem, "rU") as handle:
+        with open(input.assem, "r") as handle:
             for record in SeqIO.parse(handle, "fasta"):
                 if record.id in config["chromosomes"]:
                     unseen_chromosomes.remove(str(record.id))

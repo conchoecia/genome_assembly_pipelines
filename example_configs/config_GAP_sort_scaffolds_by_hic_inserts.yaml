@@ -23,11 +23,12 @@ chromosomes:
   - chr3
   - Chr4
 
-# strength fraction 0-1
+# strength fraction 0-1, supplied as a list
 #  - 0.25 means only insert the scaffolds with the strongest 25% of Hi-C connections
 #  - This works by selections the strongest 25%, then filters more by the minimum
 #    size specified below with min_insert_size.
-strength_fraction: 0.5
+#  - The program makes one assembly per strength fraction. 
+strength_fraction: [0.25, 0.5, 0.75]
 
 # only insert scaffolds of this length or longer
 min_insert_size: 10000
