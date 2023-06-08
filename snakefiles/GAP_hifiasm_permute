@@ -1,0 +1,206 @@
+"""
+Permutes options in hifiasm and tests the final results
+Assembles a genome using HiFi and Hi-C data.
+
+run the first part of the assembly pipeline
+"""
+import itertools
+
+configfile: "config.yaml"
+
+### CHECK IF THE CONFIG FILE HAS THE PREFIX
+if "prefix" not in config:
+    raise Exception("You must specify a prefix for the out filenames in the config file")
+
+### THIS SECTION SETS UP THE ASSEMBLIES TO RUN
+
+# Set up the HiFi dictionary to ask later
+config["hic_dict"] = {"None": ""}
+# add a step to check that these files exist
+if "hic" in config:
+    # check that all of the hi-c files exist
+    failed = []
+    for lib in config["hic"]:
+        for direction in ["R1", "R2"]:
+            for libfile in config["hic"][lib][direction]:
+                if not os.path.exists(libfile):
+                    failed.append(libfile)
+    if len(failed) > 0:
+        raise Exception("The following Hi-C files do not exist:\n" + "\n".join(failed))
+    # if they exist, proceed
+    hic_R1_string = "--h1 " + ",".join([filepath for filepath in config["hic"][lib]["R1"] for lib in config["hic"]])
+    hic_R2_string = "--h2 " + ",".join([filepath for filepath in config["hic"][lib]["R2"] for lib in config["hic"]])
+    config["hic_dict"]["HiC"] = hic_R1_string + " " + hic_R2_string
+
+# set up the ultralong parameters
+config["ul_dict"] = {"None": ""}
+if "ul" in config:
+    # check that all of the ultralong reads exist
+    failed = []
+    for treatment in config["ul"]:
+        for libfile in config["ul"][treatment]:
+            if not os.path.exists(libfile):
+                failed.append(libfile)
+    if len(failed) > 0:
+        raise Exception("The following ultralong read files do not exist:\n" + "\n".join(failed))
+    # proceed since we are sure they are all present
+    for treatment in config["ul"]:
+        UL_string = "--ul " + ",".join(config["ul"][treatment])
+        config["ul_dict"]["UL" + treatment] = UL_string
+
+# set up the parameters
+config["parameter_dict"] = {"None": ""}
+if "hifiasm_params" in config:
+    for param_name in config["hifiasm_params"]:
+        config["parameter_dict"][param_name] = config["hifiasm_params"][param_name]
+
+# now that we have the parameters and the types of reads, make permutations
+# first make permutations of the parameters
+permutations = []
+for L in range(len(config["parameter_dict"]) + 1):
+    for subset in itertools.combinations(config["parameter_dict"], L):
+        permutations.append(list(subset))
+
+permutations = [x for x in permutations if len(x) > 0]
+
+permutations2 = []
+for entry in permutations:
+    for ul in config["ul_dict"]:
+        for hic in config["hic_dict"]:
+            permutations2.append([entry,[ul, hic]])
+
+permutations = permutations2
+
+base_analyses = set()
+analyses = set()
+for entry in permutations:
+    # we must idependently set up the prefix (parameters) and suffix (which reads we use)
+    prefix = entry[0]
+    prefix_string = ""
+    if (len(prefix) == 1) and (prefix[0] == "None"):
+        prefix_string = "None"
+    else:
+        prefix_string = "_".join([y for y in prefix if y != "None"])
+    base_analyses.add(prefix_string)
+    suffix = entry[1]
+    suffix_string = "_".join(suffix)
+    analyses.add(prefix_string + "-" + suffix_string)
+
+config["base_analyses"] = [x+"-None_None" for x in base_analyses]
+config["ul_analyses"]   = [x for x in list(sorted(analyses)) if (x not in config["base_analyses"]) and ("HiC" not in x)]
+config["hic_analyses"]      = [x for x in list(sorted(analyses)) if (x not in config["base_analyses"]) and (x not in config["ul_analyses"])]
+
+print(config["base_analyses"])
+print(config["ul_analyses"])
+print(config["hic_analyses"])
+
+rule all:
+    input:
+        expand("step1_hifiasm/{base}/" + config["prefix"] + ".ec.bin",
+             base = config["base_analyses"]),
+        expand("step1_hifiasm/{ul_analysis}/" + config["prefix"] + ".uidx.bin", ul_analysis=config["ul_analyses"])
+
+rule base_assemble:
+    input:
+        LR  = config["hifi"]
+    output:
+        ec_bin  = "step1_hifiasm/{base}/" + config["prefix"] + ".ec.bin",
+        re_bin  = "step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.reverse.bin",
+        so_bin  = "step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.source.bin",
+        #hap1gfa = "step1_hifiasm/{base}/" + config["prefix"] + ".bp.hap1.p_ctg.gfa",
+        #hap2gfa = "step1_hifiasm/{base}/" + config["prefix"] + ".bp.hap2.p_ctg.gfa",
+    threads: workflow.cores - 1
+    params:
+        prefix = config["prefix"],
+        HiFi_string        = " ".join(config["hifi"]),
+        analysis         = lambda wildcards: wildcards.base,
+        parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.base.split("-")[0].split("_")]),
+    shell:
+        """
+        mkdir -p step1_hifiasm
+        cd step1_hifiasm
+        mkdir -p {params.analysis}
+        cd {params.analysis}
+        hifiasm -o {params.prefix} \
+          -t {threads} \
+          {params.parameter_string} \
+          {params.HiFi_string} >> assemble_log.txt 2>&1
+        """
+
+rule UL_assemblies:
+    input:
+        LR  = config["hifi"],
+        ec_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ec.bin", base = config["base_analyses"]),
+        re_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.reverse.bin", base = config["base_analyses"]),
+        so_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.source.bin", base = config["base_analyses"])
+    output:
+        hap1gfa    = "step1_hifiasm/{ul_analysis}/" + config["prefix"] + ".bp.hap1.p_ctg.gfa",
+        hap2gfa    = "step1_hifiasm/{ul_analysis}/" + config["prefix"] + ".bp.hap2.p_ctg.gfa",
+        uidx_bin   = "step1_hifiasm/{ul_analysis}/" + config["prefix"] + ".uidx.bin",
+        reuidx_bin = "step1_hifiasm/{ul_analysis}/" + config["prefix"] + ".re.uidx.bin",
+    threads: workflow.cores - 1
+    params:
+        input_direc      = lambda wildcards: "step1_hifiasm/" + wildcards.ul_analysis.split("-")[0] + "-None_None", 
+        prefix           = config["prefix"],
+        HiFi_string        = " ".join(config["hifi"]),
+        analysis         = lambda wildcards: wildcards.ul_analysis,
+        parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.ul_analysis.split("-")[0].split("_")]),
+        ul_string        = lambda wildcards: config["ul_dict"][ wildcards.ul_analysis.split("-")[1].split("_")[0]]
+    shell:
+        """
+        mkdir -p step1_hifiasm
+        cd step1_hifiasm
+        mkdir -p {params.analysis}
+        cd {params.analysis}
+        cp ../../{params.input_direc}/*.bin ./
+        hifiasm -o {params.prefix} \
+          -t {threads} \
+          {params.parameter_string} \
+          {params.ul_string} \
+          {params.HiFi_string} >> assemble_log.txt 2>&1
+        """
+
+#rule UL_assemblies:
+#    input:
+#        LR  = config["hifi"],
+#        ec_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ec.bin", base = config["base_analyses"]),
+#        re_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.reverse.bin", base = config["base_analyses"]),
+#        so_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.source.bin", base = config["base_analyses"])
+#    output:
+#        ec_bin = "step1_hifiasm/{analysis}/" + config["prefix"] + "asm.ec.bin"
+#    threads: workflow.cores - 1
+#    params:
+#        input_direc      = lambda wildcards: "step1_hifiasm/" + wildcards.analysis.split("-")[0] + "-None_None", 
+#        prefix           = config["prefix"],
+#        LR_string        = " ".join(config["hifi"]),
+#        analysis         = lambda wildcards: wildcards.analysis,
+#        parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.analysis.split("-")[0].split("_")]),
+#        hic_string       = lambda wildcards: config["hic_dict"][wildcards.analysis.split("-")[1].split("_")[0]],
+#        ul_string        = lambda wildcards: config["ul_dict"][ wildcards.analysis.split("-")[1].split("_")[1]]
+#    shell:
+#        """
+#        mkdir -p step1_hifiasm
+#        cd step1_hifiasm
+#        mkdir -p {params.analysis}
+#        cd {params.analysis}
+#        cp ../../{params.input_direc}/*.bin ./
+#        hifiasm -o {params.prefix} \
+#          -t {threads} \
+#          {params.parameter_string} \
+#          {params.hic_string} \
+#          {params.ul_string} \
+#          {params.LR_string} >> assemble_log.txt 2>&1
+#        """
+
+#rule gfa_to_fasta:
+#    input:
+#        gfa = "step1_hifiasm_hic/" + config["prefix"] + ".hic.hap{hap}.p_ctg.gfa",
+#    output:
+#        gfa = "step1_hifiasm_hic/" + config["prefix"] + ".hic.hap{hap}.p_ctg.fasta",
+#    threads: 1
+#    shell:
+#        """
+#        cat {input.gfa} | \
+#          awk '{{if ($1 == "S"){{printf(">%s\\n%s\\n", $2, $3)}} }}' | \
+#          fold -60 > {output.gfa}
+#        """
