@@ -301,41 +301,6 @@ rule collate_assemblies:
         done
         """
 
-rule make_genome_stats_table:
-    """
-    makes a table of all the relevant genome stats
-    """
-    input:
-        assembly = expand("step2_assemblies/" + config["prefix"] +  ".{all_analyses}.hap{hap}.p_ctg.fasta", all_analyses = config["all_analyses"],  hap = [1,2])
-    output:
-        results_table = "stepFINAL/final_results.tsv"
-    run:
-        all_samples = []
-        for nom in config["all_analyses"]:
-            this_dict = {}
-            this_dict["name"] = nom
-            this_dict["params"] = " ".join([config["parameter_dict"][x] for x in nom.split("-")[0].split("_")])
-            this_dict["UL"] = nom.split("-")[1].split("_")[0]
-            this_dict["HiC"] = nom.split("-")[1].split("_")[1]
-            for thishap in [1,2]:
-                tfile = "step2_assemblies/" + config["prefix"] + ".{}.hap{}.p_ctg.fasta".format(nom, thishap)
-                # now get the other assembly info from fasta_stats
-                print("fasta_stats on {}".format(tfile))
-                fstats_dict = run_fasta_stats(tfile)
-                temp_dict = {"hap{}_{}".format(thishap, k): v for k,v in fstats_dict.items()}
-
-                this_dict = {**this_dict, **temp_dict}
-                time.sleep(0.1)
-
-            all_samples.append(this_dict)
-        # now make a df with all the results
-        df = pd.DataFrame(all_samples)
-        # filter out all of the columns with 'scaffold' in the name
-        df = df.loc[:,~df.columns.str.contains('scaffold')]
-        # filter out all of the columns with 'Gap' in the name
-        df = df.loc[:,~df.columns.str.contains('Gap')]
-        df.to_csv(output.results_table, sep='\t', index=False)
-
 rule get_kmer_size:
     output:
         kmer_estimate = "step3_merqury/" + config["prefix"] + ".k_estimate.txt"
@@ -432,3 +397,89 @@ rule merqury_basic:
         rm -rf TEST.{wildcards.all_analyses}.hap1.p_ctg.meryl
         rm -rf TEST.{wildcards.all_analyses}.hap2.p_ctg.meryl
         """
+
+def parse_completeness(filepath):
+    """
+    open the completeness file and return a dictionary of the results
+    """
+    results_dict = {}
+    with open(filepath, "r") as f:
+        counter = 0
+        for line in f:
+            fields = line.strip().split()
+            if counter == 0:
+                results_dict["hap1_completeness"] = fields[-1]
+            elif counter == 1:
+                results_dict["hap2_completeness"] = fields[-1]
+            elif counter == 2:
+                results_dict["bothHap_completeness"] = fields[-1]
+            counter += 1
+    return results_dict
+
+def parse_QV(filepath):
+    """
+    open the QV file from Merqury and parse the results
+    """
+    results_dict = {}
+    with open(filepath, "r") as f:
+        counter = 0
+        for line in f:
+            fields = line.strip().split()
+            if counter == 0:
+                results_dict["hap1_QV"] = fields[-2]
+            elif counter == 1:
+                results_dict["hap2_QV"] = fields[-2]
+            counter += 1
+    return results_dict
+
+rule make_genome_stats_table:
+    """
+    makes a table of all the relevant genome stats
+    """
+    input:
+        assembly     = expand("step2_assemblies/" + config["prefix"] +  ".{all_analyses}.hap{hap}.p_ctg.fasta", all_analyses = config["all_analyses"],  hap = [1,2]),
+        completeness = expand("step3_merqury/runs/{all_analyses}/{all_analyses}.completeness.stats", all_analyses = config["all_analyses"]),
+        qv           = expand("step3_merqury/runs/{all_analyses}/{all_analyses}.qv", all_analyses = config["all_analyses"])
+    output:
+        results_table = "stepFINAL/final_results.tsv"
+    run:
+        all_samples = []
+        for nom in config["all_analyses"]:
+            this_dict = {}
+            this_dict["name"] = nom
+            this_dict["params"] = " ".join([config["parameter_dict"][x] for x in nom.split("-")[0].split("_")])
+            this_dict["UL"] = nom.split("-")[1].split("_")[0]
+            this_dict["HiC"] = nom.split("-")[1].split("_")[1]
+            for thishap in [1,2]:
+                tfile = "step2_assemblies/" + config["prefix"] + ".{}.hap{}.p_ctg.fasta".format(nom, thishap)
+                # now get the other assembly info from fasta_stats
+                print("fasta_stats on {}".format(tfile))
+                fstats_dict = run_fasta_stats(tfile)
+                temp_dict = {"hap{}_{}".format(thishap, k): v for k,v in fstats_dict.items()}
+
+                this_dict = {**this_dict, **temp_dict}
+                time.sleep(0.1)
+            
+            # read in the kmer-completeness info
+            this_completeness = "step3_merqury/runs/{}/{}.completeness.stats".format(nom, nom)
+            this_dict = {**this_dict, **parse_completeness(this_completeness)}
+            # read in the qv info
+            this_qv = "step3_merqury/runs/{}/{}.qv".format(nom, nom)
+            this_dict = {**this_dict, **parse_QV(this_qv)}
+
+            all_samples.append(this_dict)
+        # now make a df with all the results
+        df = pd.DataFrame(all_samples)
+        # filter out all of the columns with 'scaffold' in the name
+        df = df.loc[:,~df.columns.str.contains('scaffold')]
+        # filter out all of the columns with 'Gap' in the name
+        df = df.loc[:,~df.columns.str.contains('Gap')]
+        # make the text of some of the columns more legible by diving by 1000000 and appending the text MB
+        list_of_cols_to_change = list(set([x for x in df.columns if "size" in x] + [x for x in df.columns if "contig_N" in x]))
+        for thiscol in list_of_cols_to_change:
+            df[thiscol] = df[thiscol].astype(int)/1000000
+            # round to two decimal places
+            df[thiscol] = df[thiscol].round(decimals=2)
+            df[thiscol] = df[thiscol].astype(str) + " MB"
+
+        df.to_csv(output.results_table, sep='\t', index=False)
