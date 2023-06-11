@@ -134,8 +134,6 @@ rule map_LR_to_merged:
             samtools sort -@ {params.sort_threads} - > {output.bam}
         """
 
-
-
 rule flagstat_mapped_after_merge:
     input:
         bam = config["tool"] + "/stats/bam/LR_to_{nom}_output.sorted.bam"

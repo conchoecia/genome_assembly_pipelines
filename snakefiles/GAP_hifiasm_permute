@@ -2,9 +2,14 @@
 Permutes options in hifiasm and tests the final results
 Assembles a genome using HiFi and Hi-C data.
 
-run the first part of the assembly pipeline
+Doesn't do a mapping-based QC step because it takes too long.
 """
 import itertools
+import time
+import pandas as pd
+from math import ceil as ceil
+
+from functions import percent_of_data_mapping,run_fasta_stats, parse_flagstat, parse_permap
 
 configfile: "config.yaml"
 
@@ -59,7 +64,7 @@ if "hifiasm_params" in config:
 permutations = []
 for L in range(len(config["parameter_dict"]) + 1):
     for subset in itertools.combinations(config["parameter_dict"], L):
-        permutations.append(list(subset))
+        permutations.append(list(subset)) #TODO THIS NEEDS TO BE SORTED
 
 permutations = [x for x in permutations if len(x) > 0]
 
@@ -89,26 +94,61 @@ for entry in permutations:
 config["base_analyses"] = [x+"-None_None" for x in base_analyses]
 config["ul_analyses"]   = [x for x in list(sorted(analyses)) if (x not in config["base_analyses"]) and ("HiC" not in x)]
 config["hic_analyses"]      = [x for x in list(sorted(analyses)) if (x not in config["base_analyses"]) and (x not in config["ul_analyses"])]
+config["all_analyses"] = list(set(config["base_analyses"] + config["ul_analyses"] + config["hic_analyses"]))
 
-print(config["base_analyses"])
-print(config["ul_analyses"])
-print(config["hic_analyses"])
-
+merqury_out_files = []
+config["merqury_reads"] = []
+# If we want to perform merqury analyses, figure out which files we will use
+# also, we need to sure that the genome size is specified
+if "perform_merqury" in config:
+    config["meryl_source"] = []
+    if config["perform_merqury"] == True:
+        # now we determine which read files to use
+        if "merqury_on_hifi" in config:
+            # add hifi reads
+            if config["merqury_on_hifi"] == True:
+                config["meryl_source"].append("hifi")
+                for readfile in config["hifi"]:
+                    # check if this file exists
+                    if not os.path.exists(readfile):
+                        raise Exception("The following HiFi file does not exist:\n" + readfile)
+                    config["merqury_reads"].append(readfile)
+            # add the illumina reads
+            if config["merqury_on_illumina"] == True:
+                config["meryl_source"].append("illumina")
+                for lib in config["illumina"]:
+                    for direction in ["R1", "R2"]:
+                        for readfile in config["illumina"][lib][direction]:
+                            # check if this file exists
+                            if not os.path.exists(readfile):
+                                raise Exception("The following illumina file does not exist:\n" + readfile)
+                            config["merqury_reads"].append(readfile)
+            # condense the meryl_source to a string joined by _
+            config["meryl_source"] = "_".join(config["meryl_source"])
+    # now we must define the output files that snakemake will look for
+    meryl_db = "step3_merqury/" + config["prefix"] + ".meryl/merylIndex"
+    for this_analysis in config["all_analyses"]:
+        this_result  = "step3_merqury/runs/{all_analyses}/{all_analyses}.completeness.stats".format(all_analyses = this_analysis)
+        merqury_out_files.append(this_result)
+        this_result  = "step3_merqury/runs/{all_analyses}/{all_analyses}.qv".format(all_analyses = this_analysis)
+        merqury_out_files.append(this_result)
+ 
 rule all:
     input:
-        expand("step1_hifiasm/{base}/" + config["prefix"] + ".ec.bin",
-             base = config["base_analyses"]),
-        expand("step1_hifiasm/{ul_analysis}/" + config["prefix"] + ".uidx.bin", ul_analysis=config["ul_analyses"])
+        expand("step2_assemblies/" + config["prefix"] +  ".{all_analyses}.hap{hap}.p_ctg.fasta", all_analyses = config["all_analyses"],  hap = [1,2]),
+        "stepFINAL/final_results.tsv",
+        merqury_out_files
+        #expand("step3_stats/" + config["prefix"] +  ".{all_analyses}.hap{hap}.p_ctg.stats", all_analyses = set(config["base_analyses"] + config["ul_analyses"] + config["hic_analyses"]),  hap = [1,2]),
 
 rule base_assemble:
     input:
         LR  = config["hifi"]
     output:
-        ec_bin  = "step1_hifiasm/{base}/" + config["prefix"] + ".ec.bin",
-        re_bin  = "step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.reverse.bin",
-        so_bin  = "step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.source.bin",
-        #hap1gfa = "step1_hifiasm/{base}/" + config["prefix"] + ".bp.hap1.p_ctg.gfa",
-        #hap2gfa = "step1_hifiasm/{base}/" + config["prefix"] + ".bp.hap2.p_ctg.gfa",
+        ec_bin  = "step1_hifiasm/base/{base}/" + config["prefix"] + ".ec.bin",
+        re_bin  = "step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.reverse.bin",
+        so_bin  = "step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.source.bin",
+        hap1gfa = "step1_hifiasm/base/{base}/" + config["prefix"] + ".bp.hap1.p_ctg.gfa",
+        hap2gfa = "step1_hifiasm/base/{base}/" + config["prefix"] + ".bp.hap2.p_ctg.gfa",
     threads: workflow.cores - 1
     params:
         prefix = config["prefix"],
@@ -119,6 +159,8 @@ rule base_assemble:
         """
         mkdir -p step1_hifiasm
         cd step1_hifiasm
+        mkdir -p base
+        cd base
         mkdir -p {params.analysis}
         cd {params.analysis}
         hifiasm -o {params.prefix} \
@@ -130,17 +172,17 @@ rule base_assemble:
 rule UL_assemblies:
     input:
         LR  = config["hifi"],
-        ec_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ec.bin", base = config["base_analyses"]),
-        re_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.reverse.bin", base = config["base_analyses"]),
-        so_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.source.bin", base = config["base_analyses"])
+        ec_bin = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ec.bin", base = config["base_analyses"]),
+        re_bin = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.reverse.bin", base = config["base_analyses"]),
+        so_bin = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.source.bin", base = config["base_analyses"])
     output:
-        hap1gfa    = "step1_hifiasm/{ul_analysis}/" + config["prefix"] + ".bp.hap1.p_ctg.gfa",
-        hap2gfa    = "step1_hifiasm/{ul_analysis}/" + config["prefix"] + ".bp.hap2.p_ctg.gfa",
-        uidx_bin   = "step1_hifiasm/{ul_analysis}/" + config["prefix"] + ".uidx.bin",
-        reuidx_bin = "step1_hifiasm/{ul_analysis}/" + config["prefix"] + ".re.uidx.bin",
+        hap1gfa    = "step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".bp.hap1.p_ctg.gfa",
+        hap2gfa    = "step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".bp.hap2.p_ctg.gfa",
+        uidx_bin   = "step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".uidx.bin",
+        reuidx_bin = "step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".re.uidx.bin",
     threads: workflow.cores - 1
     params:
-        input_direc      = lambda wildcards: "step1_hifiasm/" + wildcards.ul_analysis.split("-")[0] + "-None_None", 
+        input_direc      = lambda wildcards: "step1_hifiasm/base/" + wildcards.ul_analysis.split("-")[0] + "-None_None", 
         prefix           = config["prefix"],
         HiFi_string        = " ".join(config["hifi"]),
         analysis         = lambda wildcards: wildcards.ul_analysis,
@@ -150,9 +192,11 @@ rule UL_assemblies:
         """
         mkdir -p step1_hifiasm
         cd step1_hifiasm
+        mkdir -p ul_analyses
+        cd ul_analyses
         mkdir -p {params.analysis}
         cd {params.analysis}
-        cp ../../{params.input_direc}/*.bin ./
+        cp ../../../{params.input_direc}/*.bin ./
         hifiasm -o {params.prefix} \
           -t {threads} \
           {params.parameter_string} \
@@ -160,47 +204,231 @@ rule UL_assemblies:
           {params.HiFi_string} >> assemble_log.txt 2>&1
         """
 
-#rule UL_assemblies:
-#    input:
-#        LR  = config["hifi"],
-#        ec_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ec.bin", base = config["base_analyses"]),
-#        re_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.reverse.bin", base = config["base_analyses"]),
-#        so_bin = expand("step1_hifiasm/{base}/" + config["prefix"] + ".ovlp.source.bin", base = config["base_analyses"])
-#    output:
-#        ec_bin = "step1_hifiasm/{analysis}/" + config["prefix"] + "asm.ec.bin"
-#    threads: workflow.cores - 1
-#    params:
-#        input_direc      = lambda wildcards: "step1_hifiasm/" + wildcards.analysis.split("-")[0] + "-None_None", 
-#        prefix           = config["prefix"],
-#        LR_string        = " ".join(config["hifi"]),
-#        analysis         = lambda wildcards: wildcards.analysis,
-#        parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.analysis.split("-")[0].split("_")]),
-#        hic_string       = lambda wildcards: config["hic_dict"][wildcards.analysis.split("-")[1].split("_")[0]],
-#        ul_string        = lambda wildcards: config["ul_dict"][ wildcards.analysis.split("-")[1].split("_")[1]]
-#    shell:
-#        """
-#        mkdir -p step1_hifiasm
-#        cd step1_hifiasm
-#        mkdir -p {params.analysis}
-#        cd {params.analysis}
-#        cp ../../{params.input_direc}/*.bin ./
-#        hifiasm -o {params.prefix} \
-#          -t {threads} \
-#          {params.parameter_string} \
-#          {params.hic_string} \
-#          {params.ul_string} \
-#          {params.LR_string} >> assemble_log.txt 2>&1
-#        """
+rule HiC_assemblies:
+    input:
+        LR  = config["hifi"],
+        ec_bin     = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ec.bin", base = config["base_analyses"]),
+        re_bin     = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.reverse.bin", base = config["base_analyses"]),
+        so_bin     = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.source.bin", base = config["base_analyses"]),
+        uidx_bin   = expand("step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".uidx.bin", ul_analysis=config["ul_analyses"]),
+        reuidx_bin = expand("step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".re.uidx.bin", ul_analysis=config["ul_analyses"]),
+    output:
+        hap1gfa    = "step1_hifiasm/hic_analyses/{hic_analysis}/" + config["prefix"] + ".hic.hap1.p_ctg.gfa",
+        hap2gfa    = "step1_hifiasm/hic_analyses/{hic_analysis}/" + config["prefix"] + ".hic.hap2.p_ctg.gfa",
+    threads: workflow.cores - 1
+    params:
+        input_direc      = lambda wildcards: "step1_hifiasm/base/" + wildcards.hic_analysis.split("-")[0] + "-" + wildcards.hic_analysis.split("-")[1].split("_")[0] + "_None", 
+        input_direc2     = lambda wildcards: "step1_hifiasm/ul_analyses/" + wildcards.hic_analysis.split("-")[0] + "-" + wildcards.hic_analysis.split("-")[1].split("_")[0] + "_None", 
+        prefix           = config["prefix"],
+        LR_string        = " ".join(config["hifi"]),
+        analysis         = lambda wildcards: wildcards.hic_analysis,
+        parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.hic_analysis.split("-")[0].split("_")]),
+        ul_string        = lambda wildcards: config["ul_dict"][ wildcards.hic_analysis.split("-")[1].split("_")[0]],
+        hic_string       = lambda wildcards: config["hic_dict"][wildcards.hic_analysis.split("-")[1].split("_")[1]]
+    shell:
+        """
+        mkdir -p step1_hifiasm
+        cd step1_hifiasm
+        mkdir -p hic_analyses
+        cd hic_analyses
+        mkdir -p {params.analysis}
+        cd {params.analysis}
+        cp ../../../{params.input_direc}/*.bin ./ 2>/dev/null || :
+        cp ../../../{params.input_direc2}/*.bin ./ 2>/dev/null || :
+        hifiasm -o {params.prefix} \
+          -t {threads} \
+          {params.parameter_string} \
+          {params.hic_string} \
+          {params.ul_string} \
+          {params.LR_string} >> assemble_log.txt 2>&1
+        """
 
-#rule gfa_to_fasta:
-#    input:
-#        gfa = "step1_hifiasm_hic/" + config["prefix"] + ".hic.hap{hap}.p_ctg.gfa",
-#    output:
-#        gfa = "step1_hifiasm_hic/" + config["prefix"] + ".hic.hap{hap}.p_ctg.fasta",
-#    threads: 1
-#    shell:
-#        """
-#        cat {input.gfa} | \
-#          awk '{{if ($1 == "S"){{printf(">%s\\n%s\\n", $2, $3)}} }}' | \
-#          fold -60 > {output.gfa}
-#        """
+rule base_gfa_to_fasta:
+    input:
+        gfa = "step1_hifiasm/base/{base}/" + config["prefix"] + ".bp.hap{hap}.p_ctg.gfa",
+    output:
+        gfa = temp("step2_assemblies/base/" + config["prefix"] +  ".{base}.hap{hap}.p_ctg.fasta")
+    threads: 1
+    shell:
+        """
+        cat {input.gfa} | \
+          awk '{{if ($1 == "S"){{printf(">%s\\n%s\\n", $2, $3)}} }}' | \
+          fold -60 > {output.gfa}
+        """
+
+rule ul_gfa_to_fasta:
+    input:
+        gfa = "step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".bp.hap{hap}.p_ctg.gfa",
+    output:
+        gfa = temp("step2_assemblies/ul_analyses/" + config["prefix"] +  ".{ul_analysis}.hap{hap}.p_ctg.fasta")
+    threads: 1
+    shell:
+        """
+        cat {input.gfa} | \
+          awk '{{if ($1 == "S"){{printf(">%s\\n%s\\n", $2, $3)}} }}' | \
+          fold -60 > {output.gfa}
+        """
+
+rule hic_gfa_to_fasta:
+    input:
+        gfa = "step1_hifiasm/hic_analyses/{hic_analysis}/" + config["prefix"] + ".hic.hap{hap}.p_ctg.gfa",
+    output:
+        gfa = temp("step2_assemblies/hic_analyses/" + config["prefix"] +  ".{hic_analysis}.hap{hap}.p_ctg.fasta")
+    threads: 1
+    shell:
+        """
+        cat {input.gfa} | \
+          awk '{{if ($1 == "S"){{printf(">%s\\n%s\\n", $2, $3)}} }}' | \
+          fold -60 > {output.gfa}
+        """
+
+rule collate_assemblies:
+    input:
+        base         = expand("step2_assemblies/base/"         + config["prefix"] +  ".{base}.hap{hap}.p_ctg.fasta",         base = config["base_analyses"], hap = [1,2]),
+        ul_analysis  = expand("step2_assemblies/ul_analyses/"  + config["prefix"] +  ".{ul_analysis}.hap{hap}.p_ctg.fasta",  ul_analysis = config["ul_analyses"],   hap = [1,2]),
+        hic_analysis = expand("step2_assemblies/hic_analyses/" + config["prefix"] +  ".{hic_analysis}.hap{hap}.p_ctg.fasta", hic_analysis = config["hic_analyses"],  hap = [1,2])
+    output:
+        assemblies = expand("step2_assemblies/" + config["prefix"] +  ".{all_analyses}.hap{hap}.p_ctg.fasta", all_analyses = config["all_analyses"],  hap = [1,2])
+    threads: 1
+    shell:
+        """
+        for assembly in {input.base} {input.ul_analysis} {input.hic_analysis}; do
+          # only copy if the file does not yet exist in the new location
+            if [ ! -f $(echo $assembly | sed 's/base\///g' | sed 's/ul_analyses\///g' | sed 's/hic_analyses\///g') ]; then
+                mv $assembly step2_assemblies/
+            fi
+        #rm -rf step2_assemblies/base step2_assemblies/ul_analyses step2_assemblies/hic_analyses
+        done
+        """
+
+rule make_genome_stats_table:
+    """
+    makes a table of all the relevant genome stats
+    """
+    input:
+        assembly = expand("step2_assemblies/" + config["prefix"] +  ".{all_analyses}.hap{hap}.p_ctg.fasta", all_analyses = config["all_analyses"],  hap = [1,2])
+    output:
+        results_table = "stepFINAL/final_results.tsv"
+    run:
+        all_samples = []
+        for nom in config["all_analyses"]:
+            this_dict = {}
+            this_dict["name"] = nom
+            this_dict["params"] = " ".join([config["parameter_dict"][x] for x in nom.split("-")[0].split("_")])
+            this_dict["UL"] = nom.split("-")[1].split("_")[0]
+            this_dict["HiC"] = nom.split("-")[1].split("_")[1]
+            for thishap in [1,2]:
+                tfile = "step2_assemblies/" + config["prefix"] + ".{}.hap{}.p_ctg.fasta".format(nom, thishap)
+                # now get the other assembly info from fasta_stats
+                print("fasta_stats on {}".format(tfile))
+                fstats_dict = run_fasta_stats(tfile)
+                temp_dict = {"hap{}_{}".format(thishap, k): v for k,v in fstats_dict.items()}
+
+                this_dict = {**this_dict, **temp_dict}
+                time.sleep(0.1)
+
+            all_samples.append(this_dict)
+        # now make a df with all the results
+        df = pd.DataFrame(all_samples)
+        # filter out all of the columns with 'scaffold' in the name
+        df = df.loc[:,~df.columns.str.contains('scaffold')]
+        # filter out all of the columns with 'Gap' in the name
+        df = df.loc[:,~df.columns.str.contains('Gap')]
+        df.to_csv(output.results_table, sep='\t', index=False)
+
+rule get_kmer_size:
+    output:
+        kmer_estimate = "step3_merqury/" + config["prefix"] + ".k_estimate.txt"
+    params:
+        genome_size = config["est_genome_size"] * 2
+    threads: 1
+    shell:
+        """
+        # get the kmer size from the merqury output
+        sh $MERQURY/best_k.sh {params.genome_size} > {output.kmer_estimate}
+        """
+
+rule calculate_final_kmer_size:
+    """
+    get the final kmer size
+    """
+    input:
+        kmer_estimate = "step3_merqury/" + config["prefix"] + ".k_estimate.txt"
+    output:
+        kmer_final    = "step3_merqury/" + config["prefix"] + ".k_estimate.final.txt"
+    threads: 1
+    run:
+        # open the input file and get the last line as an int
+        kmer_size = 0
+        with open(input.kmer_estimate, "r") as f:
+            last_line = f.readlines()[-1]
+            kmer_size = float(last_line.split()[0])
+        # kmer_size is a float, so round it up to the nearest int
+        kmer_size = int(ceil(kmer_size))
+        # round up the kmer_size to the nearest odd number
+        if kmer_size % 2 == 0:
+            kmer_size += 1
+        # write the final kmer size to the output file
+        with open(output.kmer_final, "w") as f:
+            f.write(str(kmer_size))
+
+rule fofn_reads:
+    input:
+        reads = config["merqury_reads"]
+    output:
+        fofn = "step3_merqury/" + config["prefix"] + ".reads.fofn"
+    threads: 1
+    run:
+        # print each read file to its own line
+        with open(output.fofn, "w") as f:
+            for read in input.reads:
+                f.write(read + "\n")
+
+rule meryl_count_reads:
+    """
+    Uses meryl to count the kmers in the reads we want to use
+    """
+    input:
+        reads     = config["merqury_reads"],
+        kmer_size = "step3_merqury/" + config["prefix"] + ".k_estimate.final.txt",
+        fofn      = "step3_merqury/" + config["prefix"] + ".reads.fofn"
+    output:
+        meryl_db = "step3_merqury/" + config["prefix"] + ".meryl/merylIndex"
+    params:
+        # one-liner to read in the number in the file as an int
+        kmer_size = int(open("step3_merqury/" + config["prefix"] + ".k_estimate.final.txt", "r").readline()),
+        reads_string = " ".join(config["merqury_reads"])
+    threads: 64 if workflow.cores > 64 else workflow.cores
+    shell:
+        """
+        meryl k={params.kmer_size} threads={threads} count {params.reads_string} output {output.meryl_db}
+        """ 
+
+rule merqury_basic:
+    """
+    Performs a basic merqury run on the assembly and puts the stats in a file
+    """
+    input:
+        merylindex = "step3_merqury/" + config["prefix"] + ".meryl/merylIndex",
+        hap1       = "step2_assemblies/" + config["prefix"] +  ".{all_analyses}.hap1.p_ctg.fasta",
+        hap2       = "step2_assemblies/" + config["prefix"] +  ".{all_analyses}.hap2.p_ctg.fasta"
+    output:
+        completeness = "step3_merqury/runs/{all_analyses}/{all_analyses}.completeness.stats",
+        qv           = "step3_merqury/runs/{all_analyses}/{all_analyses}.qv"
+    params:
+        abs_meryl = os.path.abspath("step3_merqury/" + config["prefix"] + ".meryl/"),
+        abs_hap1  = os.path.abspath("step2_assemblies/" + config["prefix"] + ".{all_analyses}.hap1.p_ctg.fasta"),
+        abs_hap2  = os.path.abspath("step2_assemblies/" + config["prefix"] + ".{all_analyses}.hap2.p_ctg.fasta")
+    threads: workflow.cores
+    shell:
+        """
+        mkdir -p step3_merqury/
+        cd step3_merqury/
+        mkdir -p runs/
+        cd runs/
+        mkdir -p {wildcards.all_analyses}
+        cd {wildcards.all_analyses}
+        $MERQURY/merqury.sh {params.abs_meryl} {params.abs_hap1} {params.abs_hap2} {wildcards.all_analyses}
+        rm -rf TEST.{wildcards.all_analyses}.hap1.p_ctg.meryl
+        rm -rf TEST.{wildcards.all_analyses}.hap2.p_ctg.meryl
+        """

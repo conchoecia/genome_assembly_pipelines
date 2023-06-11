@@ -57,40 +57,56 @@ def run_fasta_stats(fpath):
     """
     This runs fasta_stats on an assembly and returns a dictionary of the values.
     """
+    # get the absolute filepath of this script so we can find the fasta_stats binary
     filepath = os.path.dirname(os.path.realpath(__file__))
     fs_path=os.path.join(filepath, "../bin/fasta_stats")
 
+    outfile = os.path.join(fpath + ".stats")
+
     this_data = {}
-    # This version is if you want N95_scaflen. Not a good idea for bad assemblies.
-    #new_fields = ["num_scaffolds", "num_tigs", "tot_size_scaffolds",
-    #              "tot_size_tigs", "scaffold_N50", "scaffold_L50",
-    #              "contig_N50", "contig_L50", "perGap", "N95_scaflen", "numGaps"]
-    new_fields = ["num_scaffolds",
-                  "num_tigs",
-                  "tot_size_scaffolds",
-                  "tot_size_tigs",
-                  "scaffold_N50",
-                  "scaffold_L50",
-                  "scaffold_N90",
-                  "scaffold_L90",
-                  "scaffold_N95",
-                  "scaffold_L95",
-                  "contig_N50",
-                  "contig_L50",
-                  "contig_N90",
-                  "contig_L90",
-                  "contig_N95",
-                  "contig_L95",
-                  "perGap",
-                  "numGaps"]
-    tcmd = "{} {}".format(fs_path, fpath).split(" ")
-    results = subprocess.run(tcmd, stdout=subprocess.PIPE).stdout.decode('utf-8').split()
-    assert len(new_fields)==len(results)
-    for i in range(len(results)):
-        if new_fields[i] == "perGap":
-            this_data[new_fields[i]] = float(results[i].strip('%'))
-        else:
-            this_data[new_fields[i]] = int(results[i])
+    # if the outfile exists, don't run fasta_stats again and instead read the file in as a dictionary
+    if os.path.isfile(outfile):
+        with open(outfile, "r") as f:
+            for line in f:
+                if line.strip():
+                    splitd = line.split()
+                    this_data[splitd[0]] = splitd[1]
+    # the file doesn't exist, so we must read it in and run fasta_stats
+    else:
+        # This version is if you want N95_scaflen. Not a good idea for bad assemblies.
+        #new_fields = ["num_scaffolds", "num_tigs", "tot_size_scaffolds",
+        #              "tot_size_tigs", "scaffold_N50", "scaffold_L50",
+        #              "contig_N50", "contig_L50", "perGap", "N95_scaflen", "numGaps"]
+        new_fields = ["num_scaffolds",
+                      "num_tigs",
+                      "tot_size_scaffolds",
+                      "tot_size_tigs",
+                      "scaffold_N50",
+                      "scaffold_L50",
+                      "scaffold_N90",
+                      "scaffold_L90",
+                      "scaffold_N95",
+                      "scaffold_L95",
+                      "contig_N50",
+                      "contig_L50",
+                      "contig_N90",
+                      "contig_L90",
+                      "contig_N95",
+                      "contig_L95",
+                      "perGap",
+                      "numGaps"]
+        tcmd = "{} {}".format(fs_path, fpath).split(" ")
+        results = subprocess.run(tcmd, stdout=subprocess.PIPE).stdout.decode('utf-8').split()
+        assert len(new_fields)==len(results)
+        for i in range(len(results)):
+            if new_fields[i] == "perGap":
+                this_data[new_fields[i]] = float(results[i].strip('%'))
+            else:
+                this_data[new_fields[i]] = int(results[i])
+        # write the results to the outfile so we don't have to read them in next time
+        with open(outfile, "w") as f:
+            for key, value in this_data.items():
+                print("{}\t{}".format(key, value), file=f)
     return(this_data)
 
 def parse_flagstat(tfile):
