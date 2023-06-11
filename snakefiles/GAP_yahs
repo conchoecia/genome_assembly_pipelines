@@ -39,8 +39,8 @@ wildcard_constraints:
 
 rule all:
     input:
-        expand(config["tool"] + "/output/{nom}/{nom}_q_{qval}.bed",
-                nom = config["assemblies"], qval = qvals),
+        #expand(config["tool"] + "/output/{nom}/{nom}_q_{qval}.bed",
+        #        nom = config["assemblies"], qval = qvals),
         expand(config["tool"] + "/output/{nom}/{nom}_hic.sorted.bam",
                 nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
@@ -54,25 +54,7 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 include: softlinks_rule_path
 
-rule chrom_size:
-    """
-    make a file with the chromosome sizes
-    """
-    input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
-    output:
-        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
-    threads: 1
-    shell:
-        """
-        bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
-        """
 
-#      _ ___   _ _____     _    _       __ _ _
-#   _ | | _ ) /_\_   _|   | |_ (_)__   / _(_) |___ ___
-#  | || | _ \/ _ \| |    _| ' \| / _| |  _| | / -_|_-<
-#   \__/|___/_/ \_\_|   (_)_||_|_\__| |_| |_|_\___/__/
-#
 rule compile_chromap:
     """
     compile chromap if it does not yet exist
@@ -121,38 +103,6 @@ rule index_ref:
     shell:
         """
         {input.chromap} -i -r {input.assem} -o {output.index}
-        """
-
-rule generate_assembly_for_hic_gen:
-    input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
-        awkscript= os.path.abspath(os.path.join( filepath, "../bin/generate-assembly-file-from-fasta.awk"))
-    output:
-        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta.assembly"
-    threads: 1
-    shell:
-        """
-        awk -f {input.awkscript} {input.assem} > {output.assembly}
-        """
-
-rule editable_assembly_file:
-    """
-    from https://bitbucket.org/bredeson/artisanal/src/master/
-    """
-    input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
-        assemfromfasta= os.path.abspath(os.path.join( filepath, "../bin/assembly-from-fasta.py"))
-    output:
-        assembly = config["tool"] + "/output/{nom}/{nom}.assembly"
-    params:
-        outprefix = lambda wildcards: config["tool"] + "/output/{d}/{d}".format(
-                     d=wildcards.nom)
-    threads: 1
-    shell:
-        """
-        python {input.assemfromfasta} -c {input.assem} {params.outprefix}
         """
 
 rule hic_to_pairs:
@@ -206,7 +156,7 @@ rule hic_to_sam:
             -o {output.sam}
         """
 
-rule hic_to_bam:
+rule sam_to_bam:
     """
     Now convert the sam to bam and sort
     """
@@ -281,8 +231,3 @@ rule run_yahs_on_the_data:
         yahs -o {params.outprefix} --no-contig-ec --no-scaffold-ec --no-mem-check \
             {input.assem} {input.bam}
         """
-
-
-
-
-
