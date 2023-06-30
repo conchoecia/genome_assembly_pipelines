@@ -32,7 +32,30 @@ rule all:
         expand(config["tool"] + "/output/{assem}.pep",
                assem = config["assemblies"]),
         expand(config["tool"] + "/output/{assem}_sample_similarity.pdf",
+               assem = config["assemblies"]),
+        expand(config["tool"] + "/output/checks/{assem}.check",
                assem = config["assemblies"])
+
+rule check_assembly_legality:
+    """
+    Checks that each header occurs only once.
+    Write the header names to a file.
+    """
+    input:
+        assem = lambda wildcards: config["assemblies"][wildcards.assem]
+    output:
+        check = config["tool"] + "/input/checks/{assem}.fasta.pass"
+    threads: 1
+    run:
+        seen = set()
+        with open(config["assemblies"][wildcards.assem], "r") as f:
+            for record in SeqIO.parse(f, "fasta"):
+                if record.id in seen:
+                    raise IOError("the header {} occurs more than once in {}".format(record.id, config["assemblies"][wildcards.assem]))
+                seen.add(record.id)
+        with open(output.check, "w") as o:
+            for entry in seen:
+                o.write(entry + "\n")
 
 # make softlink of the input files
 rule softlink_assembly:
@@ -40,6 +63,7 @@ rule softlink_assembly:
     make a softlink of the assembly
     """
     input:
+        check = config["tool"] + "/input/checks/{assem}.fasta.pass",
         assem = lambda wildcards: config["assemblies"][wildcards.assem]
     output:
         assem = config["tool"] + "/input/assembly/{assem}.fasta"
@@ -50,12 +74,41 @@ rule softlink_assembly:
         ln -s {input.assem} {output.assem}
         """
 
-rule tblastn:
+rule filter_proteins:
+    """
+    Filter the protein fasta file to only include the first instance of each protein
+    based on its header and sequence.
+    """
+    input:
+        proteins = [config["proteins"][x] for x in config["proteins"]]
+    output:
+        filtprot = [config["tool"] + "/input/proteins/{}_filt.fasta".format(x) \
+                    for x in config["proteins"]]
+    threads: 1
+    run:
+        seen_header = set()
+        seen_sequence = set()
+        for thisprot in config["proteins"]:
+            # iterate through the proteins
+            with open(config["proteins"][thisprot], "r") as f:
+                outfile = config["tool"] + "/input/proteins/{}_filt.fasta".format(thisprot)
+                with open(outfile, "w") as o:
+                    for record in SeqIO.parse(f, "fasta"):
+                        # iterate through the records
+                        if str(record.id) not in seen_header and \
+                           str(record.seq) not in seen_sequence:
+                            # if we haven't seen this header or sequence before
+                            # then write it out
+                            SeqIO.write(record, o, "fasta")
+                            seen_header.add(str(record.id))
+                            seen_sequence.add(str(record.seq))
+
+rule miniprot:
     """
     Just runs miniprot for one file
     """
     input:
-        query = lambda wildcards: config["proteins"][wildcards.prot],
+        query = config["tool"] + "/input/proteins/{prot}_filt.fasta",
         assem = config["tool"] + "/input/assembly/{assem}.fasta",
         miniprot = miniprot_path
     output:
@@ -199,24 +252,6 @@ rule make_a_chrom_file:
         #print(df.loc[df.duplicated(subset=["chrom", "direc", "start"], keep = False)])
         df = df.drop_duplicates(subset=["chrom", "direc", "start"])
 
-        ## forward_direc
-        #ff = df.loc[df["direc"] == "+", ].sort_values(
-        #    by        = ["chrom", "start", "stop", "np",  "ms",  "AS"],
-        #    ascending = [True,    True,    True,   False, False, False])
-        #rf = df.loc[df["direc"] == "-", ].sort_values(
-        #    by        = ["chrom", "start", "stop", "np",  "ms",  "AS"],
-        #    ascending = [True,    True,    True,   False, False, False])
-        #ff, nested_f = flag_nested(ff)
-        #rf, nested_r = flag_nested(rf)
-
-        #print("len nested ff", len(nested_f))
-        #print("len nested rf", len(nested_r))
-
-        #newdf = pd.concat([rr,rf])
-        #newdf = df.sort_values(by =    ["chrom", "start", "stop", "direc", "np",  "ms",  "AS"],
-        #                    ascending = [True,    True,    True,   True,    False, False, False])
-        #newdf = newdf.reset_index(drop=True)
-        #print(newdf)
         df = df.reset_index(drop=True)
         df = df[["protein", "chrom", "direc", "start", "stop"]]
         df.to_csv(output.chrom, sep = "\t", header = False, index = None)
@@ -243,3 +278,53 @@ rule make_pep_files:
                     prot = line.split("\t")[0]
                     SeqIO.write(prot_dict[prot], outhandle, "fasta")
         outhandle.close()
+
+rule check_final_files:
+    """
+    Check that each sequence header occurs only once in the final protein file
+
+    Check that each protein  in the .chrom occurs in the pep file
+    Check that each scaffold in the .chrom occurs in the pep file
+    """
+    input:
+        check = config["tool"] + "/input/checks/{assem}.fasta.pass",
+        chrom = config["tool"] + "/output/{assem}.chrom",
+        pep   = config["tool"] + "/output/{assem}.pep"
+    output:
+        check = config["tool"] + "/output/checks/{assem}.check"
+    threads: 1
+    run:
+        # read in the assembly header names from the .fasta.pass file
+        genomeheaders = []
+        with open(input.check, "r") as f:
+            for line in f:
+                line = line.strip()
+                genomeheaders.append(line)
+        
+        # read in the protein fasta file and save the headers
+        pepheaders = set()
+        with open(input.pep, "r") as f:
+            for record in SeqIO.parse(f, "fasta"):
+                if str(record.id) in pepheaders:
+                    raise Exception("Protein {} occurs more than once in the .pep file".format(record.id))
+                pepheaders.add(str(record.id))
+
+        # read in the proteins from col1 and the scaffolds from col2 of the chrom file
+        # also make sure that the proteins only occur once
+        chrom_proteins = set()
+        with open(input.chrom, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    if fields[0] in chrom_proteins:
+                        raise Exception("Protein {} occurs more than once in the .chrom file".format(fields[0]))
+                    chrom_proteins.add(fields[0])
+                    if fields[0] not in pepheaders:
+                        raise Exception("Protein {} is in the .chrom file is not in the pep file".format(fields[0]))
+                    if fields[1] not in genomeheaders:
+                        raise Exception("Scaffold {} is in the .chrom file is not in the genome file".format(fields[1]))
+
+        # now write the file that this has passed checks
+        with open(output.check, "w") as f:
+            f.write("passed checks\n")
