@@ -410,7 +410,7 @@ rule JBAT_pairs_to_hic:
         longprefix = config["tool"] + "/output/pairs/{nom}/{nom}_q_",
         longsuffix = ".long",
         nom = lambda wildcards: wildcards.nom,
-        mvprefix  = "../" + config["tool"] + "/output/{nom}/{nom}_allLibs_q_",
+        mvprefix  = config["tool"] + "/output/{nom}/{nom}_allLibs_q_",
         mvsuffix  = ".hic",
         qvalsp = " ".join([str(x) for x in sorted(config["qvals"], reverse=True)])
     threads: 1
@@ -419,8 +419,8 @@ rule JBAT_pairs_to_hic:
         mkdir -p "{wildcards.nom}TEMP"
         cd "{wildcards.nom}TEMP" 
         for QVAL in {params.qvalsp}; do
-           bash {input.hicvis} -p false {input.assembly} {params.longprefix}${{QVAL}}{params.longsuffix} || true
-           mv {params.outprefix} {params.mvprefix}${{QVAL}}{params.mvsuffix}
+           bash {input.hicvis} -p false ../{input.assembly} ../{params.longprefix}${{QVAL}}{params.longsuffix} || true
+           mv {params.outprefix} ../{params.mvprefix}${{QVAL}}{params.mvsuffix}
         done
         rm ./*scaffold_track.txt
         rm ./*superscaf_track.txt
