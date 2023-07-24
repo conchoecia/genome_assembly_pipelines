@@ -156,40 +156,40 @@ rule all:
         ## pretext view
         #expand(config["tool"] + "/output/{nom}/{nom}.pretext", nom = config["assemblies"]),
 
-        ## HiGlass version
-        #expand(config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.covstats",
-        #       nom = config["assemblies"], qval = config["qvals"]),
-        ## chromsize
-        #expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
-        #       nom = config["assemblies"]),
-        ## gaps
-        #expand(config["tool"] + "/output/{nom}/{nom}_gaps.bed",
-        #       nom = config["assemblies"]),
-        #expand(config["tool"] + "/output/{nom}/{nom}_gaps.beddb",
-        #       nom = config["assemblies"]),
-        ## get a plot of Hi-C quality
-        #expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool.png",
-        #       nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
-        ## mcool from balanced and unbalanced
-        #expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.mcool",
-        #       nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
-        #expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.mcool",
-        #       nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
+        # HiGlass version
+        expand(config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.covstats",
+               nom = config["assemblies"], qval = config["qvals"]),
+        # chromsize
+        expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
+               nom = config["assemblies"]),
+        # gaps
+        expand(config["tool"] + "/output/{nom}/{nom}_gaps.bed",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_gaps.beddb",
+               nom = config["assemblies"]),
+        # get a plot of Hi-C quality
+        expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool.png",
+               nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
+        # mcool from balanced and unbalanced
+        expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.mcool",
+               nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
+        expand(config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.mcool",
+               nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
         ## get an interaction matrix and the best connected scaffolds
         #expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi.tsv",
         #       nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
         #expand(config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.best_connection.tsv",
         #       nom = config["assemblies"], qval = config["qvals"], binsize=config["binsize"]),
 
-        ## get read depths
-        #expand(config["tool"] + "/output/{nom}/{nom}_{datatype}.bw",
-        #       datatype = ["TXdepth", "LRdepth"],
-        #       nom = config["assemblies"]),
-        ### LR telomere bams
-        #expand(config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5",
-        #       telo = config["telomere_seqs"], nom = config["assemblies"]),
-        #expand(config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5",
-        #       telo = config["telomere_seqs"], nom = config["assemblies"]),
+        # get read depths
+        expand(config["tool"] + "/output/{nom}/{nom}_{datatype}.bw",
+               datatype = ["TXdepth", "LRdepth"],
+               nom = config["assemblies"]),
+        ## LR telomere bigwigs
+        expand(config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5",
+               telo = config["telomere_seqs"], nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5",
+               telo = config["telomere_seqs"], nom = config["assemblies"]),
 
         ## abandoned code
         ### read_depth_positions
@@ -409,12 +409,15 @@ rule JBAT_pairs_to_hic:
         outprefix  = lambda wildcards: "{}_input.fasta.hic".format(wildcards.nom),
         longprefix = config["tool"] + "/output/pairs/{nom}/{nom}_q_",
         longsuffix = ".long",
-        mvprefix  = config["tool"] + "/output/{nom}/{nom}_allLibs_q_",
+        nom = lambda wildcards: wildcards.nom,
+        mvprefix  = "../" + config["tool"] + "/output/{nom}/{nom}_allLibs_q_",
         mvsuffix  = ".hic",
         qvalsp = " ".join([str(x) for x in sorted(config["qvals"], reverse=True)])
     threads: 1
     shell:
         """
+        mkdir -p "{wildcards.nom}TEMP"
+        cd "{wildcards.nom}TEMP" 
         for QVAL in {params.qvalsp}; do
            bash {input.hicvis} -p false {input.assembly} {params.longprefix}${{QVAL}}{params.longsuffix} || true
            mv {params.outprefix} {params.mvprefix}${{QVAL}}{params.mvsuffix}
@@ -422,7 +425,8 @@ rule JBAT_pairs_to_hic:
         rm ./*scaffold_track.txt
         rm ./*superscaf_track.txt
         rm ./*asm_mnd.txt
-        
+        cd ../
+        rm -rf  "{wildcards.nom}TEMP" 
         """
 #   _  _ _  ___ _              __  __      _       _
 #  | || (_)/ __| |__ _ ______ |  \/  |__ _| |_ _ _(_)_ __
