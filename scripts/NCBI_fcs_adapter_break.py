@@ -100,7 +100,8 @@ def parse_fasta(fasta_filepath, trim_regions):
                 #  of the ranges to get rid of. This yields the ranges to keep.
                 ranges_to_remove = trim_regions[record.id]
                 keep_ranges = invert_ranges(ranges_to_remove, len(record.seq))
-                print("Keeping these ranges in {}: {}".format(record.id, keep_ranges)", file = sys.stderr)           
+                print("Keeping these ranges in {}:".format(record.id), file = sys.stderr)           
+                print(keep_ranges, file = sys.stderr)
                 # now we iterate through the pieces we want to keep 
                 for keep_seq in extract_ranges(str(record.seq), keep_ranges):
                     seqpiece = record.id + "::" + "piece" + str(scaf_counter)
