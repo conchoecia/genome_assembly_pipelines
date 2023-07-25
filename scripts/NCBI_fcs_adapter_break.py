@@ -7,6 +7,8 @@ Date:   July 2023
 
 This script takes an adapter contamination file from NCBI FCS-adaptor and splits a genome
 where the vector contamination was.
+
+To be used with NCBI FCS-adaptor: https://github.com/ncbi/fcs
 """
 
 import argparse
@@ -48,7 +50,7 @@ def parse_args():
 
 def parse_contamination_file(contam_filepath):
     """
-    We need to parse the contamination file from NCBI FCS-adapter
+    We need to parse the contamination file from NCBI FCS-adaptor
 
     Return a data structure of the things to keep (or the things to get rid of)
     """
