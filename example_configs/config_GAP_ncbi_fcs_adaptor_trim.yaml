@@ -1,0 +1,13 @@
+# Description: This is the template config.yaml file for the GAP script, GAP_NCBI_fcs_adaptor_trim
+# Author: Darrin T. Schultz https://github.com/conchoecia
+# Date:   July 2023
+# 
+# Copy this example config file to your local directory, rename it as config.yaml.
+# Then, add your genome assembly information. Do not use underscores in the assembly name.
+# Run the program with snakemake --snakefile /your/path/to/genome_assembly_pipelines/snakefiles/GAP_NCBI_fcs_adaptor_trim
+#  
+# This pipeline finds vector contamination with NCBI FCS-adaptor: https://github.com/ncbi/fcs
+
+assemblies:
+  yourAssemblyName: "/path_to_your_assembly.fasta"
+  secondAssembly:   "/different/path_to_another_assembly.fasta"

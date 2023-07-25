@@ -1,4 +1,4 @@
-#!/usr/bin/env 
+#!/usr/bin/env python
 
 """
 Title:  NCBI_fcs_adapter_break.py
@@ -100,7 +100,7 @@ def parse_fasta(fasta_filepath, trim_regions):
                 #  of the ranges to get rid of. This yields the ranges to keep.
                 ranges_to_remove = trim_regions[record.id]
                 keep_ranges = invert_ranges(ranges_to_remove, len(record.seq))
-
+                print("Keeping these ranges in {}: {}".format(record.id, keep_ranges)", file = sys.stderr)           
                 # now we iterate through the pieces we want to keep 
                 for keep_seq in extract_ranges(str(record.seq), keep_ranges):
                     seqpiece = record.id + "::" + "piece" + str(scaf_counter)
@@ -125,12 +125,15 @@ def invert_ranges(ranges_to_remove, string_length):
             continue
 
         if range_start > start:
-            ranges_to_keep.append((start, range_start - 1))
+            # we don't used range_start - 1 because of 0-based indexing
+            #  and the face that python slicing goes up until this index
+            ranges_to_keep.append((start, range_start))
 
         start = max(start, range_end + 1)
 
     if start < string_length:
-        ranges_to_keep.append((start, string_length - 1))
+        # Same as above. We don't do string_length-1 because of python slicing.
+        ranges_to_keep.append((start, string_length))
 
     return ranges_to_keep
 
