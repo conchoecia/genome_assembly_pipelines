@@ -45,8 +45,10 @@ rule all:
                 nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
                 nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/yahs/{nom}.long",
-                nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/yahs/{nom}.hic",
+                nom = config["assemblies"])
+
+
 
 # make softlinks of the input files
 # files end up here:
@@ -292,4 +294,68 @@ rule generate_long_file_for_JBAT:
            sort -k2,2d -k6,6d -T ./ --parallel={threads} -S32G | \
            awk 'NF' | \
            awk '{{print $1, $2, $3, $4, $5, $6, $7, $8, "1 - - 1  - - -" }}' > {output.long}
+        """
+
+rule generate_assembly_for_hic_gen:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        awkscript= os.path.abspath(os.path.join( filepath, "../bin/generate-assembly-file-from-fasta.awk"))
+    output:
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta.assembly"
+    threads: 1
+    shell:
+        """
+        awk -f {input.awkscript} {input.assem} > {output.assembly}
+        """
+
+rule get3ddna:
+    """
+    from https://github.com/Yujiaxin419/ALLHiC/wiki/Manually-refine-ALLHiC-scaffold-assembly-through-juicebox#hic-files
+    """
+    output:
+        hicvis = os.path.join(filepath, "../bin/3d-dna/visualize/run-assembly-visualizer.sh")
+    params:
+        mvdir = os.path.join(filepath, "../bin/"),
+        rmdir = os.path.join(filepath, "../bin/3d-dna"),
+    threads: 1
+    shell:
+        """
+        rm -rf 3d-dna
+        rm -rf {params.rmdir}
+        git clone https://github.com/aidenlab/3d-dna.git
+        mv 3d-dna/ {params.mvdir}
+        """
+
+rule JBAT_pairs_to_hic:
+    """
+    Use 3D DNA to make an editable hic file
+
+    This is done in a for loop to avoid race conditions.
+    Done with reverse sorting order to get files faster.
+    """
+    input:
+        hicvis   = os.path.join(filepath, "../bin/3d-dna/visualize/run-assembly-visualizer.sh"),
+        longp    = config["tool"] + "/output/{nom}/yahs/{nom}.long",
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta.assembly"
+    output:
+        hicmap = config["tool"] + "/output/{nom}/yahs/{nom}.hic"
+    params:
+        outprefix  = lambda wildcards: "{}.hic".format(wildcards.nom)
+    threads: 1
+    shell:
+        """
+        # make a directory
+        mkdir -p "{wildcards.nom}TEMP"
+        cd "{wildcards.nom}TEMP" 
+
+        # make a hic file
+        bash {input.hicvis} -p false ../{input.assembly} ../{input.longp} || true
+        cp {params.outprefix} ../{output.hicmap}
+
+        #rm ./*scaffold_track.txt
+        #rm ./*superscaf_track.txt
+        #rm ./*asm_mnd.txt
+        #cd ../
+        #rm -rf  "{wildcards.nom}TEMP" 
         """

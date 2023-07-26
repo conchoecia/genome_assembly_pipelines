@@ -1,3 +1,16 @@
+# Description: This is the template config.yaml file for the GAP script, GAP_yahs
+# Author: Darrin T. Schultz https://github.com/conchoecia
+# Date:   July 2023
+# 
+# Copy this example config file to your local directory, rename it as config.yaml.
+# Then, add your genome assembly information. Do not use underscores in the assembly name.
+# Run the program with snakemake --snakefile /your/path/to/genome_assembly_pipelines/snakefiles/GAP_yahs
+#  
+# This pipeline scaffolds genome assemblies using proximity ligation data.
+#  The pipeline then makes an editable .hic file.
+
+
+
 assemblies:
   assembly1: "/path/to/assembly1/to/scaffold.fasta"
   some_other_assem: "/this/path/is/to/the/second/assembly/we/want/to/scaffold.fasta"
