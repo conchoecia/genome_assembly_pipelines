@@ -278,6 +278,8 @@ rule generate_long_file_for_JBAT:
     """
     input:
         yahsbin  = config["tool"] + "/output/{nom}/yahs/{nom}.bin",
+        agp      = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.agp",
+        fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai",
         juicer = os.path.join(filepath, "../bin/yahs/juicer")
     output:
         long  = config["tool"] + "/output/{nom}/yahs/{nom}.long"
@@ -286,7 +288,7 @@ rule generate_long_file_for_JBAT:
         mem_mb = 32000
     shell:
         """
-        ({input.juicer} pre hic-to-contigs.bin scaffolds_final.agp contigs.fa.fai | \
+        {input.juicer} pre {input.yahsbin} {input.agp} {input.fai} | \
            sort -k2,2d -k6,6d -T ./ --parallel={threads} -S32G | \
            awk 'NF' | \
            awk '{{print $1, $2, $3, $4, $5, $6, $7, $8, "1 - - 1  - - -" }}' > {output.long}
