@@ -1,0 +1,23 @@
+# Description: This is the template config.yaml file for the GAP script, GAP_NCBI_fcs_adaptor_trim
+# Author: Darrin T. Schultz https://github.com/conchoecia
+# Date:   July 2023
+# 
+# Copy this example config file to your local directory, rename it as config.yaml.
+# Then, add your genome assembly information. Do not use underscores in the assembly name.
+# Run the program with snakemake --snakefile /your/path/to/genome_assembly_pipelines/snakefiles/GAP_NCBI_fcs_adaptor_trim
+#  
+# This pipeline finds vector contamination with NCBI FCS-adaptor: https://github.com/ncbi/fcs
+
+# This is the path to the gxdb folder that you have already installed on your computer
+#  using the instructions found here under the "Download the database" section:
+#  https://github.com/ncbi/fcs/wiki/FCS-GX
+# You don't need the trailing '/' at the end of the path for the directory.
+GXDB_location: "/path_to_your/gxdb"
+
+# This is the ncbi taxid for the species you are analyzing.
+#  You can find the closest taxid for your species here: https://www.ncbi.nlm.nih.gov/taxonomy
+taxid: 9606
+
+assemblies:
+  yourAssemblyName: "/path_to_your_assembly.fasta"
+  secondAssembly:   "/different/path_to_another_assembly.fasta"
