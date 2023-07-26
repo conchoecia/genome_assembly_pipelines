@@ -49,8 +49,8 @@ wildcard_constraints:
 rule all:
     input:
         # get the reports
-        expand(config["tool"] + "/round-4-contam_detection/{assem}_round_4_trimmed.fasta",
-         assem = config["assemblies"])
+        expand(config["tool"] + "/round-4-contam_detection/{assem}_round_4_fcs_gx_report.txt",
+               assem = config["assemblies"])
 
 rule install_fcs_adaptor:
     """
@@ -181,10 +181,12 @@ rule perform_contamination_analysis_round4:
         fcs_gx_tool = os.path.join(filepath, "../bin/fcs-gx/fcs.py"),
         assembly    = config["tool"] + "/round-3-vector_detection/{assem}_round_3_trimmed.fasta"
     output:
-        output_report    = config["tool"] + "/round-4-contam_detection/{assem}_round_4_fcs_adaptor_report.txt",
-        trimmed_assembly = config["tool"] + "/round-4-contam_detection/{assem}_round_4_trimmed.fasta"
+        output_report    = config["tool"] + "/round-4-contam_detection/{assem}_round_4_fcs_gx_report.txt",
+        taxon_report     = config["tool"] + "/round-4-contam_detection/{assem}_round_4_taxonomy.rpt",
+        #trimmed_assembly = config["tool"] + "/round-4-contam_detection/{assem}_round_4_trimmed.fasta"
     params:
         report_dir = config["tool"] + "/round-4-contam_detection/",
+        fileprefix = lambda wildcards: "{}_round_3_trimmed.{}".format(wildcards.assem, config["taxid"]),
         gxdb_loc   = config["GXDB_location"],
         taxid      = config["taxid"]
     threads: 1
@@ -195,11 +197,17 @@ rule perform_contamination_analysis_round4:
         mkdir -p {wildcards.assem}_TEMP
         mkdir -p {params.report_dir}
         cd {wildcards.assem}_TEMP
-        python3 {input.fcs_gx_tool} screen genome \
-                --fasta ../{input.assembly}         \
-                --out-dir ./                      \
-                --gx-db  {params.gxdb_loc}        \
-                --tax-id {params.taxid}
+        if [ ! -f {params.fileprefix}.fcs_gx_report.txt ]; then
+            if [ ! -f {params.fileprefix}.taxonomy.rpt ]; then
+                python3 {input.fcs_gx_tool} screen genome \
+                        --fasta ../{input.assembly}       \
+                        --out-dir ./                      \
+                        --gx-db  {params.gxdb_loc}        \
+                        --tax-id {params.taxid}
+            fi
+        fi
+        cp {params.fileprefix}.fcs_gx_report.txt ../{output.output_report}
+        cp {params.fileprefix}.taxonomy.rpt      ../{output.taxon_report}
+        cd ../
+        rm -rf {wildcards.assem}_TEMP
         """
-
-#trimmed.6609.fcs_gx_report.txt  trimmed.6609.taxonomy.rpt

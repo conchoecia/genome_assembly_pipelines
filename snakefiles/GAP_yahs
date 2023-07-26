@@ -54,7 +54,6 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 include: softlinks_rule_path
 
-
 rule compile_chromap:
     """
     compile chromap if it does not yet exist
@@ -211,12 +210,31 @@ rule index_assembly:
         samtools faidx {input.assem}
         """
 
+rule compile_yahs:
+    """
+    compile chromap if it does not yet exist
+    """
+    output:
+        yahs = os.path.join(filepath, "../bin/yahs/yahs")
+    params:
+        mvdir = os.path.join(filepath, "../bin/")
+    threads: 1
+    shell:
+        """
+        git clone git clone https://github.com/c-zhou/yahs.git
+        cd yahs
+        make
+        cd ..
+        mv yahs/ {params.mvdir}
+        """
+
 rule run_yahs_on_the_data:
     """
     needs a more recent version of yahs
     """
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        yahs = os.path.join(filepath, "../bin/yahs/yahs"),
         fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai",
         bam = config["tool"] + "/output/{nom}/{nom}_hic.sorted.bam"
     output:
@@ -228,6 +246,6 @@ rule run_yahs_on_the_data:
     threads: workflow.cores - 1
     shell:
         """
-        yahs -o {params.outprefix} --no-contig-ec --no-scaffold-ec --no-mem-check \
+        {input.yahs} -o {params.outprefix} --no-contig-ec --no-scaffold-ec --no-mem-check \
             {input.assem} {input.bam}
         """
