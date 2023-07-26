@@ -238,9 +238,9 @@ rule run_yahs_on_the_data:
         fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai",
         bam = config["tool"] + "/output/{nom}/{nom}_hic.sorted.bam"
     output:
-        yahs = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
-        agp  = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.agp",
-        yahsbin  = temp(config["tool"] + "/output/{nom}/yahs/{nom}.bin"),
+        yahs     = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
+        agp      = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.agp",
+        yahsbin  = config["tool"] + "/output/{nom}/yahs/{nom}.bin"
     params:
         outprefix = config["tool"] + "/output/{nom}/yahs/{nom}"
     threads: workflow.cores - 1
