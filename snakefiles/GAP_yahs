@@ -289,5 +289,5 @@ rule generate_long_file_for_JBAT:
         ({input.juicer} pre hic-to-contigs.bin scaffolds_final.agp contigs.fa.fai | \
            sort -k2,2d -k6,6d -T ./ --parallel={threads} -S32G | \
            awk 'NF' | \
-           awk '{print $1, $2, $3, $4, $5, $6, $7, $8, "1 - - 1  - - -" }' > {output.long}
+           awk '{{print $1, $2, $3, $4, $5, $6, $7, $8, "1 - - 1  - - -" }}' > {output.long}
         """
