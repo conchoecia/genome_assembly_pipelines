@@ -121,7 +121,7 @@ rule hic_to_pairs:
         left  = " -1 ".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
         right = " -2 ".join(flatten([config["libs"][x]["read2"] for x in config["libs"]])),
         qval  = lambda wildcards: wildcards.qval
-    threads: workflow.cores - 2
+    threads: max(1, workflow.cores - 2)
     shell:
         """
         {input.chromap} --preset hic -x {input.index} \
@@ -146,7 +146,7 @@ rule hic_to_sam:
     params:
         left  = ",".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
         right = ",".join(flatten([config["libs"][x]["read2"] for x in config["libs"]]))
-    threads: workflow.cores - 2
+    threads: max(1, workflow.cores - 2)
     shell:
         """
         {input.chromap} --preset hic -x {input.index} \
@@ -247,7 +247,7 @@ rule run_yahs_on_the_data:
         yahsbin  = config["tool"] + "/output/{nom}/yahs/{nom}.bin"
     params:
         outprefix = config["tool"] + "/output/{nom}/yahs/{nom}"
-    threads: workflow.cores - 1
+    threads: max(1, workflow.cores - 1)
     shell:
         """
         {input.yahs} -o {params.outprefix} --no-contig-ec --no-scaffold-ec --no-mem-check \
@@ -285,7 +285,7 @@ rule generate_long_file_for_JBAT:
         juicer = os.path.join(filepath, "../bin/yahs/juicer")
     output:
         long  = config["tool"] + "/output/{nom}/yahs/{nom}.long"
-    threads: workflow.cores - 1
+    threads: max(workflow.cores - 1, 1)
     resources:
         mem_mb = 32000
     shell:
@@ -298,11 +298,10 @@ rule generate_long_file_for_JBAT:
 
 rule generate_assembly_for_hic_gen:
     input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        assem = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
         awkscript= os.path.abspath(os.path.join( filepath, "../bin/generate-assembly-file-from-fasta.awk"))
     output:
-        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta.assembly"
+        assembly = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa.assembly"
     threads: 1
     shell:
         """
@@ -337,9 +336,9 @@ rule JBAT_pairs_to_hic:
     input:
         hicvis   = os.path.join(filepath, "../bin/3d-dna/visualize/run-assembly-visualizer.sh"),
         longp    = config["tool"] + "/output/{nom}/yahs/{nom}.long",
-        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta.assembly"
+        assembly = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa.assembly"
     output:
-        hicmap = config["tool"] + "/output/{nom}/yahs/{nom}.hic"
+        hicmap = config["tool"] + "/output/{nom}/yahs_hic/{nom}.hic"
     params:
         outprefix  = lambda wildcards: "{}.hic".format(wildcards.nom)
     threads: 1
