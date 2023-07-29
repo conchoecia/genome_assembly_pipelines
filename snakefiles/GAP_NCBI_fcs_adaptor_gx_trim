@@ -1,14 +1,17 @@
 """
-title: GAP_NCBI_fcs_adaptor_gx_trim
-author: dts (github: @conchoecia)
+Filename: GAP_NCBI_fcs_adaptor_gx_trim
+Author: dts (github: @conchoecia)
+Date created: July 26th, 2023
 
-This sets up and runs the NCBI tool to trim adaptors
-  and other vectors from the reads. It also sets up
-  and runs the tool that checks for and removes other
-  contamination from prokaryotic organisms.
 
-The config file must be set up in the following way that allows multiple
-  assemblies to be run at the same time.
+Description:
+  - This sets up and runs the NCBI tool to trim adaptors
+      and other vectors from the reads. It also sets up
+      and runs the tool that checks for and removes other
+      contamination from prokaryotic organisms.
+
+  - The config file must be set up in the following way that allows multiple
+      assemblies to be run at the same time.
 """
 
 configfile: "config.yaml"
