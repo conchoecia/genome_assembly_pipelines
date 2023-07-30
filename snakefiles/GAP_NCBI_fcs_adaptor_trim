@@ -1,7 +1,8 @@
 """
-Filename: GAP_NCBI_fcs_adaptor_trim
-Author: dts (github: @conchoecia)
-Date created: July 25th, 2023
+    Filename:   GAP_NCBI_fcs_adaptor_trim
+   File type:   snakefile (snakemake)
+      Author:   darrin t schultz (github: @conchoecia)
+Date created:   July 25th, 2023
 
 Description:
   - This sets up and runs the NCBI tool to trim adaptors
