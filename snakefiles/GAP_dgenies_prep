@@ -22,9 +22,9 @@ rule all:
         expand(config["tool"] + "/output/paf/{qname}_to_{rname}.paf",
                qname = config["queries"], rname = config["references"]),
         expand(config["tool"] + "/output/paf/{qname}.idx",
-               assem = config["queries"]),
+               qname = config["queries"]),
         expand(config["tool"] + "/output/paf/{rname}.idx",
-               assem = config["references"])
+               rname = config["references"])
 
 
 rule split_query_fasta:
