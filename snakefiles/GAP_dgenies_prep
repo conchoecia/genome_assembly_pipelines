@@ -13,7 +13,6 @@ for x in ["queries", "references"]:
     if x not in config:
         raise IOError( "you must specify {} in the config".format(x))
 
-
 # get the path to the dgenies script
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 dgenies_path=os.path.join(filepath, "../bin/dgenies_index.py")
@@ -22,8 +21,11 @@ rule all:
     input:
         expand(config["tool"] + "/output/paf/{qname}_to_{rname}.paf",
                qname = config["queries"], rname = config["references"]),
-        expand(config["tool"] + "/output/paf/{assem}.idx",
-               assem = [config["queries"], config["references"]])
+        expand(config["tool"] + "/output/paf/{qname}.idx",
+               assem = config["queries"]),
+        expand(config["tool"] + "/output/paf/{rname}.idx",
+               assem = config["references"])
+
 
 rule split_query_fasta:
     """
