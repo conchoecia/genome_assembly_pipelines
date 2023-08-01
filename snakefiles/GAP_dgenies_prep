@@ -21,16 +21,16 @@ dgenies_path=os.path.join(filepath, "../bin/dgenies_index.py")
 rule all:
     input:
         expand(config["tool"] + "/output/paf/{qname}_to_{rname}.paf",
-               qname = config["qname"], rname = config["rname"]),
+               qname = config["queries"], rname = config["references"]),
         expand(config["tool"] + "/output/paf/{assem}.idx",
-               assem = [config["qname"], config["rname"]])
+               assem = [config["queries"], config["references"]])
 
 rule split_query_fasta:
     """
     this splits the assembly into smaller pieces to make the mapping faster
     """
     input:
-        assem     = config["query"]
+        assem = lambda wildcards: config["queries"][wildcards.qname]
     output:
         assem = config["tool"] + "/input/fragmented/{qname}_fragmented.fasta"
     threads: 1
@@ -56,7 +56,7 @@ rule minimap2:
     """
     input:
         reads = config["tool"] + "/input/fragmented/{qname}_fragmented.fasta",
-        reference = config["reference"]
+        reference = lambda wildcards: config["references"][wildcards.rname]
     output:
         paf = config["tool"] + "/output/paf_raw/{qname}_to_{rname}.raw.paf"
     threads: workflow.cores
@@ -70,10 +70,10 @@ rule cleanup_paf:
     This cleas up the paf file because the coordinates are in chunks
     """
     input:
-        assem     = config["query"],
-        paf = config["tool"] + "/output/paf_raw/{qname}_to_{rname}.raw.paf"
+        assem  = lambda wildcards: config["queries"][wildcards.qname],
+        paf    = config["tool"] + "/output/paf_raw/{qname}_to_{rname}.raw.paf"
     output:
-        paf = config["tool"] + "/output/paf/{qname}_to_{rname}.paf"
+        paf    = config["tool"] + "/output/paf/{qname}_to_{rname}.paf"
     run:
         # first we get the scaffold size
         scaf_to_size = {}
@@ -112,16 +112,16 @@ rule cleanup_paf:
 
 rule index_assemblies:
     input:
-        query     = config["query"],
-        refer     = config["reference"],
+        query     = lambda wildcards: config["queries"][wildcards.qname],
+        refer     = lambda wildcards: config["references"][wildcards.rname],
         dgenies   = dgenies_path
     output:
-        query = config["tool"] + "/output/paf/" + config["qname"] + ".idx",
-        refer = config["tool"] + "/output/paf/" + config["rname"] + ".idx"
+        query = config["tool"] + "/output/paf/{qname}.idx",
+        refer = config["tool"] + "/output/paf/{rname}.idx"
     threads: 1
     params:
-        qname = config["qname"],
-        rname = config["rname"],
+        qname = lambda wildcards: wildcards.qname,
+        rname = lambda wildcards: wildcards.rname,
     shell:
         """
         python {input.dgenies} -i {input.query} -n params.qname -o {output.query}
