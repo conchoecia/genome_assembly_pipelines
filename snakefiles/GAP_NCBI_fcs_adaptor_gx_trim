@@ -116,6 +116,8 @@ rule perform_fcs_analysis_round1:
         cd {wildcards.assem}_TEMP
         bash {input.fcstool} --fasta-input {input.assembly} --output-dir ./ --euk
         mv ./fcs_adaptor_report.txt ../{output.output_report}
+        cd ..
+        rm -rf {wildcards.assem}_TEMP
         """
 
 rule fcs_analysis_round1_trim:
@@ -133,7 +135,7 @@ rule fcs_analysis_round1_trim:
         mem_mb = 2000
     shell:
         """
-        python {input.trimscript} -f {input.assembly} -c {output.output_report} > {output.trimmed_assembly}
+        python {input.trimscript} -f {input.assembly} -c {input.output_report} > {output.trimmed_assembly}
         """
 
 rule perform_fcs_analysis_round2:
@@ -157,6 +159,8 @@ rule perform_fcs_analysis_round2:
         cd {wildcards.assem}_TEMP
         bash {input.fcstool} --fasta-input ../{input.assembly} --output-dir ./ --euk
         mv ./fcs_adaptor_report.txt ../{output.output_report}
+        cd ..
+        rm -rf {wildcards.assem}_TEMP
         """
 
 rule fcs_analysis_round2_trim:
@@ -174,7 +178,7 @@ rule fcs_analysis_round2_trim:
         mem_mb = 2000
     shell:
         """
-        python {input.trimscript} -f {input.assembly} -c {output.output_report} > {output.trimmed_assembly}
+        python {input.trimscript} -f {input.assembly} -c {input.output_report} > {output.trimmed_assembly}
         """
 
 rule perform_fcs_analysis_round3:
@@ -199,6 +203,8 @@ rule perform_fcs_analysis_round3:
         cd {wildcards.assem}_TEMP
         bash {input.fcstool} --fasta-input ../{input.assembly} --output-dir ./ --euk
         mv ./fcs_adaptor_report.txt ../{output.output_report}
+        cd ..
+        rm -rf {wildcards.assem}_TEMP
         """
 
 rule fcs_analysis_round3_trim:
@@ -216,7 +222,7 @@ rule fcs_analysis_round3_trim:
         mem_mb = 2000
     shell:
         """
-        python {input.trimscript} -f {input.assembly} -c {output.output_report} > {output.trimmed_assembly}
+        python {input.trimscript} -f {input.assembly} -c {input.output_report} > {output.trimmed_assembly}
         """
 
 rule perform_contamination_analysis_round4:
