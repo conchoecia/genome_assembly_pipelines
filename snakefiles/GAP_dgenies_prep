@@ -9,7 +9,7 @@ from Bio import SeqIO
 configfile: "config.yaml"
 config["tool"] = "GAP_dgenies_prep"
 
-for x in ["qname", "query", "rname", "reference"]:
+for x in ["queries", "references"]:
     if x not in config:
         raise IOError( "you must specify {} in the config".format(x))
 
