@@ -21,11 +21,10 @@ rule all:
     input:
         expand(config["tool"] + "/output/paf/{qname}_to_{rname}.paf",
                qname = config["queries"], rname = config["references"]),
-        expand(config["tool"] + "/output/paf/query_{qname}.idx",
+        expand(config["tool"] + "/output/paf/query/{qname}.idx",
                qname = config["queries"]),
-        expand(config["tool"] + "/output/paf/reference_{rname}.idx",
+        expand(config["tool"] + "/output/paf/reference/{rname}.idx",
                rname = config["references"])
-
 
 rule split_query_fasta:
     """
@@ -118,8 +117,8 @@ rule index_assemblies:
         refer     = lambda wildcards: config["references"][wildcards.rname],
         dgenies   = dgenies_path
     output:
-        query = config["tool"] + "/output/paf/query_{qname}.idx",
-        refer = config["tool"] + "/output/paf/reference_{rname}.idx"
+        query = config["tool"] + "/output/paf/query/{qname}.idx",
+        refer = config["tool"] + "/output/paf/reference/{rname}.idx"
     threads: 1
     params:
         qname = lambda wildcards: wildcards.qname,
