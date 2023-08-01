@@ -111,20 +111,30 @@ rule cleanup_paf:
                     print("\t".join(fields), file = outhandle)
         outhandle.close()
 
-rule index_assemblies:
+rule index_queries:
     input:
         query     = lambda wildcards: config["queries"][wildcards.qname],
-        refer     = lambda wildcards: config["references"][wildcards.rname],
         dgenies   = dgenies_path
     output:
         query = config["tool"] + "/output/paf/query/{qname}.idx",
-        refer = config["tool"] + "/output/paf/reference/{rname}.idx"
     threads: 1
     params:
         qname = lambda wildcards: wildcards.qname,
-        rname = lambda wildcards: wildcards.rname,
     shell:
         """
         python {input.dgenies} -i {input.query} -n params.qname -o {output.query}
+        """
+
+rule index_references:
+    input:
+        refer     = lambda wildcards: config["references"][wildcards.rname],
+        dgenies   = dgenies_path
+    output:
+        refer = config["tool"] + "/output/paf/reference/{rname}.idx"
+    threads: 1
+    params:
+        rname = lambda wildcards: wildcards.rname,
+    shell:
+        """
         python {input.dgenies} -i {input.refer} -n params.rname -o {output.refer}
         """
