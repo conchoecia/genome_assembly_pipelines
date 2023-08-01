@@ -74,7 +74,7 @@ rule install_fcs_adaptor:
         # curl but save to a specific directory
         curl -LO https://github.com/ncbi/fcs/raw/main/dist/run_fcsadaptor.sh
         mv run_fcsadaptor.sh {params.fcsdirec}
-        """ 
+        """
 
 rule install_fcs_gx_script:
     """
@@ -94,18 +94,16 @@ rule install_fcs_gx_script:
         curl -LO https://github.com/ncbi/fcs/raw/main/dist/fcs.py
         mv fcs.py {params.fcsdirec}
         """
-    
+
 rule perform_fcs_analysis_round1:
     """
     This step sets up the FCS run and performs the analysis
     """
     input:
         fcstool    = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh"),
-        trimscript = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
         assembly   = lambda wildcards: config["assemblies"][wildcards.assem]
     output:
         output_report    = config["tool"] + "/round-1-vector_detection/{assem}_round_1_fcs_adaptor_report.txt",
-        trimmed_assembly = config["tool"] + "/round-1-vector_detection/{assem}_round_1_trimmed.fasta"
     params:
         report_dir = config["tool"] + "/round-1-vector_detection/"
     threads: 1
@@ -118,7 +116,23 @@ rule perform_fcs_analysis_round1:
         cd {wildcards.assem}_TEMP
         bash {input.fcstool} --fasta-input {input.assembly} --output-dir ./ --euk
         mv ./fcs_adaptor_report.txt ../{output.output_report}
-        cd ..
+        """
+
+rule fcs_analysis_round1_trim:
+    """
+    Does the trimming from the results of round 1 of fcs detection
+    """
+    input:
+        trimscript = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
+        assembly   = lambda wildcards: config["assemblies"][wildcards.assem],
+        output_report    = config["tool"] + "/round-1-vector_detection/{assem}_round_1_fcs_adaptor_report.txt"
+    output:
+        trimmed_assembly = config["tool"] + "/round-1-vector_detection/{assem}_round_1_trimmed.fasta"
+    threads: 1
+    resources:
+        mem_mb = 2000
+    shell:
+        """
         python {input.trimscript} -f {input.assembly} -c {output.output_report} > {output.trimmed_assembly}
         """
 
@@ -128,11 +142,9 @@ rule perform_fcs_analysis_round2:
     """
     input:
         fcstool    = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh"),
-        trimscript = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
         assembly   = config["tool"] + "/round-1-vector_detection/{assem}_round_1_trimmed.fasta"
     output:
         output_report    = config["tool"] + "/round-2-vector_detection/{assem}_round_2_fcs_adaptor_report.txt",
-        trimmed_assembly = config["tool"] + "/round-2-vector_detection/{assem}_round_2_trimmed.fasta"
     params:
         report_dir = config["tool"] + "/round-2-vector_detection/"
     threads: 1
@@ -145,7 +157,23 @@ rule perform_fcs_analysis_round2:
         cd {wildcards.assem}_TEMP
         bash {input.fcstool} --fasta-input ../{input.assembly} --output-dir ./ --euk
         mv ./fcs_adaptor_report.txt ../{output.output_report}
-        cd ..
+        """
+
+rule fcs_analysis_round2_trim:
+    """
+    Does the trimming from the results of round 2 of fcs detection
+    """
+    input:
+        trimscript       = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
+        assembly         = config["tool"] + "/round-1-vector_detection/{assem}_round_1_trimmed.fasta"
+        output_report    = config["tool"] + "/round-2-vector_detection/{assem}_round_2_fcs_adaptor_report.txt",
+    output:
+        trimmed_assembly = config["tool"] + "/round-2-vector_detection/{assem}_round_2_trimmed.fasta"
+    threads: 1
+    resources:
+        mem_mb = 2000
+    shell:
+        """
         python {input.trimscript} -f {input.assembly} -c {output.output_report} > {output.trimmed_assembly}
         """
 
@@ -159,7 +187,6 @@ rule perform_fcs_analysis_round3:
         assembly   = config["tool"] + "/round-2-vector_detection/{assem}_round_2_trimmed.fasta"
     output:
         output_report    = config["tool"] + "/round-3-vector_detection/{assem}_round_3_fcs_adaptor_report.txt",
-        trimmed_assembly = config["tool"] + "/round-3-vector_detection/{assem}_round_3_trimmed.fasta"
     params:
         report_dir = config["tool"] + "/round-3-vector_detection/"
     threads: 1
@@ -172,7 +199,23 @@ rule perform_fcs_analysis_round3:
         cd {wildcards.assem}_TEMP
         bash {input.fcstool} --fasta-input ../{input.assembly} --output-dir ./ --euk
         mv ./fcs_adaptor_report.txt ../{output.output_report}
-        cd ..
+        """
+
+rule fcs_analysis_round3_trim:
+    """
+    Does the trimming from the results of round 3 of fcs detection
+    """
+    input:
+        trimscript       = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
+        assembly         = config["tool"] + "/round-2-vector_detection/{assem}_round_2_trimmed.fasta"
+        output_report    = config["tool"] + "/round-3-vector_detection/{assem}_round_3_fcs_adaptor_report.txt",
+    output:
+        trimmed_assembly = config["tool"] + "/round-3-vector_detection/{assem}_round_3_trimmed.fasta"
+    threads: 1
+    resources:
+        mem_mb = 2000
+    shell:
+        """
         python {input.trimscript} -f {input.assembly} -c {output.output_report} > {output.trimmed_assembly}
         """
 
