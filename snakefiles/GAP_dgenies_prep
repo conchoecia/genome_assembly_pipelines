@@ -13,6 +13,9 @@ for x in ["queries", "references"]:
     if x not in config:
         raise IOError( "you must specify {} in the config".format(x))
 
+if "minimap2args" not in config:
+    config["minimap2args"] = ""
+
 # get the path to the dgenies script
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 dgenies_path=os.path.join(filepath, "../bin/dgenies_index.py")
@@ -60,10 +63,12 @@ rule minimap2:
         reference = lambda wildcards: config["references"][wildcards.rname]
     output:
         paf = config["tool"] + "/output/paf_raw/{qname}_to_{rname}.raw.paf"
-    threads: workflow.cores
+    params:
+        minimap2args = config["minimap2args"]
+    threads: max(1, int(workflow.cores/len(config["queries"])))
     shell:
         """
-        minimap2 -t {threads} {input.reference} {input.reads} > {output.paf}
+        minimap2 -t {threads} {params.minimap2args} {input.reference} {input.reads} > {output.paf}
         """
 
 rule cleanup_paf:

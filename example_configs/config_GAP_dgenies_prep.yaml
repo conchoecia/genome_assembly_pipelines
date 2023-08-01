@@ -14,3 +14,9 @@ queries:
 references:
   refgenome1: /path/to/refegenome1/one.fasta
   refgenome2: /path/to/refgenome2/two.fasta
+
+# extra args to provide to minimap2
+# the default args will cause minimap2 to run in hifi mode.
+# This is faster and better for mapping within the same species.
+# COMMENT THIS OUT IF QUERY AND REFERENCE ARE DIFFERENT SPECIES
+minimap2args: "-x hifi"
