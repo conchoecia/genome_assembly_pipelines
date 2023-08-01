@@ -279,6 +279,9 @@ rule generate_long_file_for_JBAT:
     0 Scaffold5 12652 0 0 Scaffold5 2028951 1 1 - - 1  - - -
     0 Scaffold5 12652 0 0 Scaffold5 2028951 1 1 - - 1  - - -
     0 Scaffold5 12864 0 16 Scaffold5 178772324 1 1 - - 1  - - -
+
+    We used to use this command for sort:
+           sort -k2,2d -k6,6d -T ./ --parallel={threads} -S32G | \
     """
     input:
         yahsbin  = config["tool"] + "/output/{nom}/yahs/{nom}.bin",
@@ -293,9 +296,10 @@ rule generate_long_file_for_JBAT:
     shell:
         """
         {input.juicer} pre {input.yahsbin} {input.agp} {input.fai} | \
-           sort -k2,2d -k6,6d -T ./ --parallel={threads} -S32G | \
+           sort -k2,2d -k6,6d -k3,3n -k7,7n -T ./ --parallel={threads} -S32G | \
            awk 'NF' | \
            awk '{{print $1, $2, $3, $4, $5, $6, $7, $8, "1 - - 1  - - -" }}' > {output.long}
+
         """
 
 rule generate_assembly_for_hic_gen:
