@@ -45,8 +45,10 @@ rule all:
                 nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
                 nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/yahs/{nom}.hic",
+        expand(config["tool"] + "/output/{nom}/yahs/{nom}.long",
                 nom = config["assemblies"])
+        #expand(config["tool"] + "/output/{nom}/yahs/{nom}.hic",
+        #        nom = config["assemblies"])
 
 
 
@@ -269,7 +271,7 @@ rule generate_long_file_for_JBAT:
     0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
     0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
     0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
-    
+
     0 Scaffold5 12278 0 0 Scaffold5 33988 1 1 - - 1  - - -
     0 Scaffold5 12278 0 0 Scaffold5 33988 1 1 - - 1  - - -
     0 Scaffold5 12278 0 0 Scaffold5 33988 1 1 - - 1  - - -
@@ -346,7 +348,7 @@ rule JBAT_pairs_to_hic:
         """
         # make a directory
         mkdir -p "{wildcards.nom}TEMP"
-        cd "{wildcards.nom}TEMP" 
+        cd "{wildcards.nom}TEMP"
 
         # make a hic file
         bash {input.hicvis} -p false ../{input.assembly} ../{input.longp} || true
@@ -356,5 +358,5 @@ rule JBAT_pairs_to_hic:
         #rm ./*superscaf_track.txt
         #rm ./*asm_mnd.txt
         #cd ../
-        #rm -rf  "{wildcards.nom}TEMP" 
+        #rm -rf  "{wildcards.nom}TEMP"
         """
