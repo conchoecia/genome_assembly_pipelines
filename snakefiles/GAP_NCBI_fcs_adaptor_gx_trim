@@ -129,7 +129,7 @@ rule perform_fcs_analysis_round2:
     input:
         fcstool    = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh"),
         trimscript = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
-        assembly   = config["tool"] + "/round-1-contam_detection/{assem}_round_1_trimmed.fasta"
+        assembly   = config["tool"] + "/round-1-vector_detection/{assem}_round_1_trimmed.fasta"
     output:
         output_report    = config["tool"] + "/round-2-vector_detection/{assem}_round_2_fcs_adaptor_report.txt",
         trimmed_assembly = config["tool"] + "/round-2-vector_detection/{assem}_round_2_trimmed.fasta"
@@ -156,7 +156,7 @@ rule perform_fcs_analysis_round3:
     input:
         fcstool    = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh"),
         trimscript = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
-        assembly   = config["tool"] + "/round-2-contam_detection/{assem}_round_2_trimmed.fasta"
+        assembly   = config["tool"] + "/round-2-vector_detection/{assem}_round_2_trimmed.fasta"
     output:
         output_report    = config["tool"] + "/round-3-vector_detection/{assem}_round_3_fcs_adaptor_report.txt",
         trimmed_assembly = config["tool"] + "/round-3-vector_detection/{assem}_round_3_trimmed.fasta"
