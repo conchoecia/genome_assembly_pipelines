@@ -1,4 +1,9 @@
 """
+    Filename:   GAP_dgenies_prep
+   File type:   snakefile (snakemake)
+      Author:   darrin t schultz (github: @conchoecia)
+Date created:   ??
+
 This performs a whole_genome_alignment using minimap2.
  It does this by breaking up the query genome into 10-mb chunks to more quickly
  align them then if they had been left whole.
