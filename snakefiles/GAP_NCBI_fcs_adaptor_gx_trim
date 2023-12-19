@@ -6,9 +6,9 @@ Date created: July 26th, 2023
 
 Description:
   - This sets up and runs the NCBI tool to trim adaptors
-      and other vectors from the reads. It also sets up
-      and runs the tool that checks for and removes other
-      contamination from prokaryotic organisms.
+      and other vectors from the reads (FCS-adaptor).
+      It also sets up and runs the tool that checks for and removes other
+      contamination from prokaryotic organisms (FCS-gx).
 
   - The config file must be set up in the following way that allows multiple
       assemblies to be run at the same time.
@@ -62,7 +62,7 @@ rule install_fcs_adaptor:
     This tool requires Docker.
     """
     output:
-        fcstool  = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh") 
+        fcstool  = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh")
     params:
         fcsdirec = os.path.join(filepath, "../bin/fcs-adaptor/")
     threads: 1
@@ -97,7 +97,10 @@ rule install_fcs_gx_script:
 
 rule perform_fcs_analysis_round1:
     """
-    This step sets up the FCS run and performs the analysis
+    This is step 1/7 of the pipeline. FCS-adapter 1 search 1
+
+    This step sets up the FCS-adapter run and performs the analysis.
+    Only one instance of this can be run at a time. For this reason, setting this to use all the cores on a machine.
     """
     input:
         fcstool    = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh"),
@@ -106,7 +109,7 @@ rule perform_fcs_analysis_round1:
         output_report    = config["tool"] + "/round-1-vector_detection/{assem}_round_1_fcs_adaptor_report.txt",
     params:
         report_dir = config["tool"] + "/round-1-vector_detection/"
-    threads: 1
+    threads: workflow.cores
     resources:
         mem_mb = 2000
     shell:
@@ -122,7 +125,8 @@ rule perform_fcs_analysis_round1:
 
 rule fcs_analysis_round1_trim:
     """
-    Does the trimming from the results of round 1 of fcs detection
+    This is step 2/7 of the pipeline: FCS-adapter trimming 1
+    Does the trimming from the results of Round 1 of FCS detection.
     """
     input:
         trimscript = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
@@ -130,7 +134,7 @@ rule fcs_analysis_round1_trim:
         output_report    = config["tool"] + "/round-1-vector_detection/{assem}_round_1_fcs_adaptor_report.txt"
     output:
         trimmed_assembly = config["tool"] + "/round-1-vector_detection/{assem}_round_1_trimmed.fasta"
-    threads: 1
+    threads: workflow.cores
     resources:
         mem_mb = 2000
     shell:
@@ -140,6 +144,8 @@ rule fcs_analysis_round1_trim:
 
 rule perform_fcs_analysis_round2:
     """
+    This is step 3/7 of the pipeline: FCS-adapter search 2
+
     This step sets up the FCS run and performs the analysis
     """
     input:
@@ -149,7 +155,7 @@ rule perform_fcs_analysis_round2:
         output_report    = config["tool"] + "/round-2-vector_detection/{assem}_round_2_fcs_adaptor_report.txt",
     params:
         report_dir = config["tool"] + "/round-2-vector_detection/"
-    threads: 1
+    threads: workflow.cores
     resources:
         mem_mb = 2000
     shell:
@@ -165,6 +171,8 @@ rule perform_fcs_analysis_round2:
 
 rule fcs_analysis_round2_trim:
     """
+    This is step 4/7 of the pipeline: FCS-adapter trim 2
+
     Does the trimming from the results of round 2 of fcs detection
     """
     input:
@@ -173,7 +181,7 @@ rule fcs_analysis_round2_trim:
         output_report    = config["tool"] + "/round-2-vector_detection/{assem}_round_2_fcs_adaptor_report.txt",
     output:
         trimmed_assembly = config["tool"] + "/round-2-vector_detection/{assem}_round_2_trimmed.fasta"
-    threads: 1
+    threads: workflow.cores
     resources:
         mem_mb = 2000
     shell:
@@ -183,6 +191,8 @@ rule fcs_analysis_round2_trim:
 
 rule perform_fcs_analysis_round3:
     """
+    This is step 5/7 of the pipeline: FCS-adapter search 3
+
     This step sets up the FCS run and performs the analysis
     """
     input:
@@ -193,7 +203,7 @@ rule perform_fcs_analysis_round3:
         output_report    = config["tool"] + "/round-3-vector_detection/{assem}_round_3_fcs_adaptor_report.txt",
     params:
         report_dir = config["tool"] + "/round-3-vector_detection/"
-    threads: 1
+    threads: workflow.cores
     resources:
         mem_mb = 2000
     shell:
@@ -209,6 +219,8 @@ rule perform_fcs_analysis_round3:
 
 rule fcs_analysis_round3_trim:
     """
+    This is step 6/7 of the pipeline: FCS-adapter trim 3
+
     Does the trimming from the results of round 3 of fcs detection
     """
     input:
@@ -217,7 +229,7 @@ rule fcs_analysis_round3_trim:
         output_report    = config["tool"] + "/round-3-vector_detection/{assem}_round_3_fcs_adaptor_report.txt",
     output:
         trimmed_assembly = config["tool"] + "/round-3-vector_detection/{assem}_round_3_trimmed.fasta"
-    threads: 1
+    threads: workflow.cores
     resources:
         mem_mb = 2000
     shell:
@@ -227,6 +239,8 @@ rule fcs_analysis_round3_trim:
 
 rule perform_contamination_analysis_round4:
     """
+    This is step 7/7 of the pipeline: FCS-gx search and trim 1
+
     Remove prokaryotic contamination from the assembly. Keep the contaminating sequences in a separate file.
     """
     input:
@@ -241,7 +255,7 @@ rule perform_contamination_analysis_round4:
         fileprefix = lambda wildcards: "{}_round_3_trimmed.{}".format(wildcards.assem, config["taxid"]),
         gxdb_loc   = config["GXDB_location"],
         taxid      = config["taxid"]
-    threads: 1
+    threads: workflow.cores
     resources:
         mem_mb = 2000
     shell:
