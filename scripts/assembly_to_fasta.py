@@ -21,12 +21,13 @@ import sys
 def parse_args():
     """
     The args are:
-      -a --assembly_file - The path to the assembly file. We must check if it exists.
-      -f --fasta_file    - The path to the fasta file. We must check if it exists.
-      -g --gap_length    - The length of the gap between the contigs. Default is 100.
-      -n --names         - The names for the first N scaffolds of the assembly. Use a space-separated list.
-      -p --prefix        - The prefix for the scaffold names. Default is "scaffold".
-      -h --help          - Print out all of the options
+      -a --assembly_file    - The path to the assembly file. We must check if it exists.
+      -f --fasta_file       - The path to the fasta file. We must check if it exists.
+      -g --gap_length       - The length of the gap between the contigs. Default is 100.
+      -n --names            - The names for the first N scaffolds of the assembly. Use a space-separated list.
+      -p --prefix           - The prefix for the scaffold names. Default is "scaffold".
+      --remove_last_n_scafs - If you know that you don't want the last N scaffolds, change this number to remove them
+      -h --help             - Print out all of the options
     """
     parser = argparse.ArgumentParser(description="Converts an assembly file to a fasta file.")
     parser.add_argument("-a", "--assembly_file", required = True, type=str, help="The path to the assembly file.")
@@ -34,6 +35,7 @@ def parse_args():
     parser.add_argument("-g", "--gap_length",    required = False, type=int, help="The length of the gap between the contigs. Default is 100.", default=100)
     parser.add_argument("-n", "--first_n_names",         required = False, type=str, help="The names for the first N scaffolds of the assembly. Use a space-separated list.")
     parser.add_argument("-p", "--prefix",        required = False, type=str, help="The prefix for the scaffold names. Default is 'scaffold'.", default="scaffold")
+    parser.add_argument("--remove_last_n_scafs", required = False, type=int, help="If you know that you don't want the last N scaffolds, change this number to remove them.", default=0)
     args = parser.parse_args()
 
     # check if the assembly file and the fasta file exist
@@ -164,7 +166,7 @@ class AssemblyFileFasta:
         """
         return seq.strip("N").strip("n")
 
-    def generate_fasta(self, gapsize, outprefix, first_n_names):
+    def generate_fasta(self, gapsize, outprefix, first_n_names, remove_last_n_scafs):
         """
         Takes all of the information that has been read so far and generates a fasta file.
         """
@@ -178,7 +180,7 @@ class AssemblyFileFasta:
         # go through each scaffold in the assembly instructions
         # The counter is only used for the scaffold counter after the first N names have been consumed.
         counter = 1
-        for thisscaf in self.assembly_instructions:
+        for thisscaf in self.assembly_instructions[:len(self.assembly_instructions)-remove_last_n_scafs]:
             # Temoporarily put the raw strings into this list.
             # They will be joined together with gaps of Ns later
             new_seqs = []
@@ -210,7 +212,7 @@ def main():
     args = parse_args()
     assembly = AssemblyFileFasta(args.assembly_file, args.fasta_file)
     # generate the fasta file
-    assembly.generate_fasta(args.gap_length, args.prefix, args.first_n_names)
+    assembly.generate_fasta(args.gap_length, args.prefix, args.first_n_names, args.remove_last_n_scafs)
 
 if __name__ == "__main__":
     main()
