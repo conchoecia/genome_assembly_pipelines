@@ -23,8 +23,8 @@ def parse_args():
 
     args = parser.parse_args()
     # for the keep_these_reads, check that the file still exists
-    if not os.path.exists(args.keep_these_reads):
-        print("Error: file {} does not exist".format(args.keep_these_reads))
+    if not os.path.exists(args.keepread_file):
+        print("Error: file {} does not exist".format(args.keepread_file))
         sys.exit(1)
 
     # split the list of fastq files using commas
