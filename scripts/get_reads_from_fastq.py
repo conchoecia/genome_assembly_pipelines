@@ -21,6 +21,7 @@ def parse_args():
     parser.add_argument("-k", "--keepread_file", help="File with the list of reads to keep")
     parser.add_argument("-f", "--fastq", help="Comma-separated list of fastq files")
 
+    args = parser.parse_args()
     # for the keep_these_reads, check that the file still exists
     if not os.path.exists(args.keep_these_reads):
         print("Error: file {} does not exist".format(args.keep_these_reads))
@@ -34,7 +35,6 @@ def parse_args():
             print("Error: file {} does not exist".format(fastq))
             sys.exit(1)
     args.fastq = fastqs
-    args = parser.parse_args()
 
     return args
 
