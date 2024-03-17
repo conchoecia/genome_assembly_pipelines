@@ -51,7 +51,10 @@ def reads_to_keep(readlist_file) -> list:
     """
     reads = []
     with open(readlist_file, "r") as f:
-        reads = f.readlines()
+        for line in f:
+            line = line.strip()
+            if line:
+                reads.append(line)
     return reads
 
 def main():
