@@ -68,8 +68,8 @@ def main():
         if fastq.endswith(".gz"):
             with gzip.open(fastq, "rt") as f:
                 for record in SeqIO.parse(f, "fastq"):
-                    #if record.id in reads:
-                    print(record.format("fastq").strip())
+                    if record.id in reads:
+                        print(record.format("fastq").strip())
         else:
             for record in SeqIO.parse(fastq, "fastq"):
                 if record.id in reads:
