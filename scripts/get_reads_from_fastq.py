@@ -58,6 +58,7 @@ def main():
     # parse the args
     args = parse_args()
     reads = reads_to_keep(args.keepread_file)
+    print("the first ten reads to keep are: ", reads[:10], file = sys.stderr)
 
     #iterate through the fastq files
     for fastq in args.fastq:
