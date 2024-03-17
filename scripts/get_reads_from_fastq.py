@@ -8,6 +8,7 @@ The script opens the fastq files, and writes those reads to stdout.
 #use biopython
 import argparse
 from Bio import SeqIO
+import gzip
 import os
 import sys
 
@@ -60,9 +61,15 @@ def main():
 
     #iterate through the fastq files
     for fastq in args.fastq:
-        for record in SeqIO.parse(fastq, "fastq"):
-            if record.id in reads:
-                print(record.format("fastq").strip())
+        if fastq.endswith(".gz"):
+            with gzip.open(fastq, "rt") as f:
+                for record in SeqIO.parse(f, "fastq"):
+                    if record.id in reads:
+                        print(record.format("fastq").strip())
+        else:
+            for record in SeqIO.parse(fastq, "fastq"):
+                if record.id in reads:
+                    print(record.format("fastq").strip())
 
 if __name__ == "__main__":
     main()
