@@ -8,6 +8,7 @@ The script opens the fastq files, and writes those reads to stdout.
 #use biopython
 import argparse
 from Bio import SeqIO
+import os
 import sys
 
 def parse_args():
