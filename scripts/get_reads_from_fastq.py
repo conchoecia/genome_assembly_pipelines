@@ -22,6 +22,10 @@ def parse_args():
     parser.add_argument("-f", "--fastq", help="Comma-separated list of fastq files")
 
     args = parser.parse_args()
+    # if keepread_file is empty or fastq is empty, print help
+    if args.keepread_file is None or args.fastq is None:
+        parser.print_help()
+        sys.exit(1)
     # for the keep_these_reads, check that the file still exists
     if not os.path.exists(args.keepread_file):
         print("Error: file {} does not exist".format(args.keepread_file))
