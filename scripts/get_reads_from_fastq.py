@@ -35,9 +35,10 @@ def parse_args():
     fastqs = args.fastq.split(",")
     # check that each one exists
     for fastq in fastqs:
-        if not os.path.exists(fastq):
+        if not os.path.exists(os.path.abspath(fastq)):
             print("Error: file {} does not exist".format(fastq))
             sys.exit(1)
+    fastqs = [os.path.abspath(fastq) for fastq in fastqs]
     args.fastq = fastqs
 
     return args
