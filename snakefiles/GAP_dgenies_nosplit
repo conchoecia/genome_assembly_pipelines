@@ -1,0 +1,81 @@
+"""
+    Filename:   GAP_dgenies_prep
+   File type:   snakefile (snakemake)
+      Author:   darrin t schultz (github: @conchoecia)
+Date created:   ??
+
+This performs a whole_genome_alignment using minimap2.
+ It does this by breaking up the query genome into 10-mb chunks to more quickly
+ align them then if they had been left whole.
+"""
+import subprocess
+from Bio import SeqIO
+
+configfile: "config.yaml"
+config["tool"] = "GAP_dgenies_prep"
+
+for x in ["queries", "references"]:
+    if x not in config:
+        raise IOError( "you must specify {} in the config".format(x))
+
+if "minimap2args" not in config:
+    config["minimap2args"] = ""
+
+# get the path to the dgenies script
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+dgenies_path=os.path.join(filepath, "../bin/dgenies_index.py")
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/paf/{qname}_to_{rname}.paf",
+               qname = config["queries"], rname = config["references"]),
+        expand(config["tool"] + "/output/paf/query/{qname}.idx",
+               qname = config["queries"]),
+        expand(config["tool"] + "/output/paf/reference/{rname}.idx",
+               rname = config["references"])
+
+rule minimap2:
+    """
+    runs minimap2 using the fragmented genome as the "reads" and the
+     reference normally
+    """
+    input:
+        reads = lambda wildcards: config["queries"][wildcards.qname],
+        reference = lambda wildcards: config["references"][wildcards.rname]
+    output:
+        paf = config["tool"] + "/output/paf_raw/{qname}_to_{rname}.paf"
+    params:
+        minimap2args = config["minimap2args"]
+    threads: max(1, int(workflow.cores/len(config["queries"])))
+    shell:
+        """
+        minimap2 -t {threads} {params.minimap2args} {input.reference} {input.reads} > {output.paf}
+        """
+
+rule index_queries:
+    input:
+        query     = lambda wildcards: config["queries"][wildcards.qname],
+        dgenies   = dgenies_path
+    output:
+        query = config["tool"] + "/output/paf/query/{qname}.idx",
+    threads: 1
+    params:
+        qname = lambda wildcards: wildcards.qname,
+    shell:
+        """
+        python {input.dgenies} -i {input.query} -n params.qname -o {output.query}
+        """
+
+rule index_references:
+    input:
+        refer     = lambda wildcards: config["references"][wildcards.rname],
+        dgenies   = dgenies_path
+    output:
+        refer = config["tool"] + "/output/paf/reference/{rname}.idx"
+    threads: 1
+    params:
+        rname = lambda wildcards: wildcards.rname,
+    shell:
+        """
+        python {input.dgenies} -i {input.refer} -n params.rname -o {output.refer}
+        """
