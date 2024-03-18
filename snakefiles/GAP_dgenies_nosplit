@@ -43,7 +43,7 @@ rule minimap2:
         reads = lambda wildcards: config["queries"][wildcards.qname],
         reference = lambda wildcards: config["references"][wildcards.rname]
     output:
-        paf = config["tool"] + "/output/paf_raw/{qname}_to_{rname}.paf"
+        paf = config["tool"] + "/output/paf/{qname}_to_{rname}.paf"
     params:
         minimap2args = config["minimap2args"]
     threads: max(1, int(workflow.cores/len(config["queries"])))
