@@ -114,6 +114,7 @@ rule chrom_size:
     """
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+        bioawk = os.path.join(filepath, "../bin/bioawk/bioawk")
     output:
         cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
     threads: 1
@@ -145,6 +146,24 @@ rule compile_chromap:
         mv chromap/ {params.mvdir}
         """
 
+rule compile_bioawk:
+    """
+    build bioawk if it does not yet exist. Requires gcc, a YACC-compatible parser, and zlib.
+    """
+    output:
+        bioawk = os.path.join(filepath, "../bin/bioawk/bioawk")
+    params:
+        mvdir = os.path.join(filepath, "../bin/")
+    threads: 1
+    shell:
+        """
+        git clone https://github.com/lh3/bioawk.git
+        cd bioawk
+        make
+        cd ..
+        mv bioawk/ {params.mvdir}
+        """
+
 rule index_ref:
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
@@ -153,7 +172,7 @@ rule index_ref:
         index = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.index")
     shell:
         """
-        {input.chromap} -i -r {input.assem} -o {output.index}
+        {input.} -i -r {input.assem} -o {output.index}
         """
 
 rule hic_to_pairs:
