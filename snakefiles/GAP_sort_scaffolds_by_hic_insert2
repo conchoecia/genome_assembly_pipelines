@@ -120,7 +120,7 @@ rule chrom_size:
     threads: 1
     shell:
         """
-        bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
+        {input.bioawk} -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
         """
 
 #      _ ___   _ _____     _    _       __ _ _
