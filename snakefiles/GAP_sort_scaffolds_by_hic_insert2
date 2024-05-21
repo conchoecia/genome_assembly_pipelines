@@ -172,7 +172,7 @@ rule index_ref:
         index = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.index")
     shell:
         """
-        {input.} -i -r {input.assem} -o {output.index}
+        {input.chromap} -i -r {input.assem} -o {output.index}
         """
 
 rule hic_to_pairs:
