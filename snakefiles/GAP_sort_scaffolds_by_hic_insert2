@@ -134,15 +134,17 @@ rule compile_chromap:
     output:
         chromap = os.path.join(filepath, "../bin/chromap/chromap")
     params:
-        mvdir = os.path.join(filepath, "../bin/")
+        mvdir = os.path.join(filepath, "../bin/chromap/")
     threads: 1
     shell:
         """
+        rm -rf ./chromap
         git clone https://github.com/haowenz/chromap.git
         cd chromap
         make
         cd ..
-        mv chromap/ {params.mvdir}
+        rsync -r chromap/ {params.mvdir}
+        rm -rf ./chromap
         """
 
 rule index_ref:
@@ -160,7 +162,7 @@ rule hic_to_pairs:
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
         index   = config["tool"] + "/input/assembly/{nom}_input.fasta.index",
-        chromap = chromappath,
+        chromap = os.path.join(filepath, "../bin/chromap/chromap"),
         left  = flatten([config["libs"][x]["read1"] for x in config["libs"]]),
         right = flatten([config["libs"][x]["read2"] for x in config["libs"]])
     output:
