@@ -105,6 +105,10 @@ def parse_gff(file_path):
                 if "ID" in attributes:
                     current_entry["MP_id"] = attributes["ID"]
 
+    # edge case to return the last one after the for loop
+    if len(current_entry) == 3:
+        sequences.append(current_entry)
+
     return sequences
 
 def write_fasta(sequences, output_file):
