@@ -63,49 +63,57 @@ KCVGCNGGNSGSFRNYSGWGVSPQILRIKFTENLF
 import sys
 
 def parse_gff(file_path):
-    sequences = {}
-    current_protein = None
-    current_id = None
+    # Each entry of sequences is:
+    #   {"proteinID": "protein_id_string",
+    #    "sequence": "YASDKJHAUYGHKAJSHF*",
+    #    "MP_id": "MP000001"}
+    # Each entry forms one fasta entry
+    sequences = []
     collecting_sequence = False
 
+    current_entry = {}
     with open(file_path, 'r') as file:
         for line in file:
             line = line.strip()
 
             if line.startswith('##PAF'):
+                # We need to reset current_entry. If there is something in it, collect.
+                if len(current_entry) == 3:
+                    sequences.append(current_entry)
+                # Use this to keep track of collecting.
+                current_entry = {}
                 parts = line.split('\t')
                 if len(parts) > 1:
                     current_protein = parts[1]
-                collecting_sequence = False
+                current_entry['proteinID'] = current_protein
                 continue
 
             if line.startswith('##STA'):
-                sequence = line.split('\t')[1] if '\t' in line else line[6:]
-                if current_id and current_protein:
-                    sequences[current_id] = (current_protein, sequence)
-                collecting_sequence = True
+                fields = line.split()
+                if len(fields) != 2:
+                    raise ValueError(f"Invalid sequence line: {line}")
+                sequence = fields[1]
+                current_entry["sequence"] = sequence
                 continue
 
-            if collecting_sequence:
-                continue
-
-            fields = line.split('\t')
-            if len(fields) < 9:
-                continue
-
-            attributes = {attr.split('=')[0]: attr.split('=')[1] for attr in fields[8].split(';') if '=' in attr}
-
-            if 'ID' in attributes:
-                current_id = attributes['ID']
+            # make sure that ID= is in the line
+            if "ID=" in line:
+                fields = line.split('\t')
+                if len(fields) < 9:
+                    continue
+                attributes = {attr.split('=')[0]: attr.split('=')[1] for attr in fields[8].split(';') if '=' in attr}
+                if "ID" in attributes:
+                    current_entry["MP_id"] = attributes["ID"]
 
     return sequences
 
 def write_fasta(sequences, output_file):
     with open(output_file, 'w') as out:
-        for mp_id, (protein, sequence) in sequences.items():
-            out.write(f">{mp_id} {protein}\n")
-            for i in range(0, len(sequence), 60):
-                out.write(sequence[i:i+60] + "\n")
+        for entry in sequences:
+            header = f">{entry['MP_id']} {entry['proteinID']}\n"
+            out.write(header)
+            for i in range(0, len(entry["sequence"]), 60):
+                out.write(entry["sequence"][i:i+60] + "\n")
 
 def main():
     if len(sys.argv) != 3:
