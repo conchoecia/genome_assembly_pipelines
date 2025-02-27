@@ -7,6 +7,9 @@ This program takes a gff file from miniprot, output with the trans option, and e
  the protein sequences in fasta format. The header of the protein sequence is the MP number,
  followed by a space, then the original protein sequence.
 
+If there are junk characters in the protein sequence, we will just remove them.
+We don't know what is real and what is not, so we just keep everything.
+
 For this output:
 
 ##gff-version 3
@@ -62,6 +65,22 @@ KCVGCNGGNSGSFRNYSGWGVSPQILRIKFTENLF
 
 import sys
 
+def remove_junk_chars(sequence, extended = False):
+    """
+    Only keeps the characters in the alphabet, and removes internal stop codons.
+    Keeps stop codons at the end of the AA sequence.
+    """
+    alphabet = "ACDEFGHIKLMNPQRSTVWY"
+    if extended:
+        alphabet += "XBZJ"
+    outseq = ""
+    for i in range(len(sequence)):
+        if i == len(sequence) - 1:
+            alphabet += "*"
+        if sequence[i] in alphabet:
+            outseq += sequence[i]
+    return outseq
+
 def parse_gff(file_path):
     # Each entry of sequences is:
     #   {"proteinID": "protein_id_string",
@@ -93,7 +112,8 @@ def parse_gff(file_path):
                 if len(fields) != 2:
                     raise ValueError(f"Invalid sequence line: {line}")
                 sequence = fields[1]
-                current_entry["sequence"] = sequence
+                cleaned_sequence = remove_junk_chars(sequence, extended=True)
+                current_entry["sequence"] = cleaned_sequence
                 continue
 
             # make sure that ID= is in the line
