@@ -23,9 +23,9 @@ import os
 import sys
 minchromsize = 1000000
 configfile: "config.yaml"
-config["tool"] = "GAP_sort_scaffolds_by_hic"
+config["tool"]    = "GAP_sort_scaffolds_by_hic"
 config["binsize"] = [50000]
-qvals = [0]
+qvals             = [0]
 
 for x in config["assemblies"]:
     if "_" in x:
@@ -34,12 +34,12 @@ for x in config["assemblies"]:
 if "chromosomes" not in config:
     raise IOError("You must specify chromosomes in the config file.")
 
-filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+filepath = os.path.dirname( os.path.realpath(workflow.snakefile))
 kmer_position_path=os.path.join(filepath, "../bin/kmer_positions.py")
-picard_path=os.path.join(filepath, "../bin/picard.jar")
-chromappath = os.path.join(filepath, "../bin/chromap/chromap")
-bedsort_path=os.path.join(filepath, "../bin/bedSort")
-bed2bw_path=os.path.join(filepath,  "../bin/bedGraphToBigWig")
+picard_path=os.path.join(       filepath, "../bin/picard.jar")
+chromappath = os.path.join(     filepath, "../bin/chromap/chromap")
+bedsort_path=os.path.join(      filepath, "../bin/bedSort")
+bed2bw_path=os.path.join(       filepath, "../bin/bedGraphToBigWig")
 
 def rc(seq):
     """
@@ -220,7 +220,7 @@ rule index_ref:
 
 rule hic_to_pairs:
     input:
-        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        assem   = config["tool"] + "/input/assembly/{nom}_input.fasta",
         index   = config["tool"] + "/input/assembly/{nom}_input.fasta.index",
         chromap = chromappath,
         left  = flatten([config["libs"][x]["read1"] for x in config["libs"]]),
