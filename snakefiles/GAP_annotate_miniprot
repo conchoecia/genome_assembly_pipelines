@@ -1,5 +1,36 @@
 """
-Uses miniprot to annotate a genome with proteomes from closely-related species
+Uses miniprot to annotate a genome with proteomes from closely-related species.
+
+This works by mapping the provided proteins to a genome, then picking the best protein
+  for each location. This is useful for getting a reduced representation of a proteome
+  in genome coordinates. This is not useful for keeping all of the proteins/isoforms in
+  a genome, as there are many filtering steps.
+
+Steps:
+1. Check that the assembly is legal (no duplicate headers)
+2. Filter the protein fasta file
+    - Remove proteins with duplicate headers.
+      - If there are two proteins with the same header ID, like
+        "protein_1" and "protein_1", then only the first one is kept.
+    - Remove proteins with duplicate sequences.
+      - If there are two proteins with the same sequence, like
+        "ACDFGHIKLM" and "ACDFGHIKLM", then only the first one is kept.
+3. Run miniprot to map the proteins to the genome.
+    - Uses the --outn 1 flag to only keep the best alignment for each protein.
+4. Make a .chrom file from the miniprot output, filters the alignments.
+    - Performs a few steps to get "the best" alignment for each locus.
+      - Sorts the alignments by chrom, start, stop, and then by the number of
+        mismatches (np), then by the number of matches (ms), and finally by the
+        alignment score (AS).
+      - Drops exact duplicates. This is definted as exactly the same alignment
+        properties for two different proteins.
+      - Drops things that have the same end, keeping the one with the best score.
+      - Drops things that have the same beginning, keeping the one with the best score.
+5. Make a .pep file from the filtered miniprot output.
+    - This is a fasta file of the proteins that were kept in the .chrom file.
+6. Check that the .pep file is legal (no duplicate headers). Also check that
+    the .pep file contains all of the proteins in the .chrom file, and that all of
+    the scaffolds in the .chrom file are in the assembly.
 """
 from Bio import SeqIO
 import os
@@ -300,7 +331,7 @@ rule check_final_files:
             for line in f:
                 line = line.strip()
                 genomeheaders.append(line)
-        
+
         # read in the protein fasta file and save the headers
         pepheaders = set()
         with open(input.pep, "r") as f:
