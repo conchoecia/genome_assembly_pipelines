@@ -1,0 +1,326 @@
+"""
+Program  : GAP_annotate_miniprot_unfiltered
+Language : snakemake
+Date     : 2025-05-15
+Author   : Darrin T. Schultz
+Email    : darrin.schultz@univie.ac.at
+Github   : https://github.com/conchoecia/genome_assembly_pipelines
+Support  : For issues or questions, please search if the topic has been discussed already
+           on github and open a new issue if not: https://github.com/conchoecia/genome_assembly_pipelines/issues
+License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
+Citation : There is currently no appropriate citation for this pipeline. Please just cite the github repository.
+
+Genome Assembly Pipelines Description:
+  This program is part of the genome_assembly_pipelines set of tools. These are pipelines used by DTS for
+    genome assembly and annotation. They are designed to be easy enough to run by the author, and are not necessarily
+    designed to be easy to use by others. The pipelines are designed to be run on a cluster, but can also be run
+    on a local machine.
+
+Program Description:
+  Uses miniprot to annotate a genome with proteomes from closely-related species.
+
+  This works by mapping the provided proteins to a genome, then picking the best protein
+    for each location. This is useful for getting a reduced representation of a proteome
+    in genome coordinates. This is not useful for keeping all of the proteins/isoforms in
+    a genome, as there are many filtering steps.
+
+  Steps:
+  1. Check that the assembly is legal (no duplicate headers)
+  2. Filter the protein fasta file
+      - Remove proteins with duplicate headers.
+        - If there are two proteins with the same header ID, like
+          "protein_1" and "protein_1", then only the first one is kept.
+        - Unlike GAP_annotate_miniprot, this does not remove proteins with the same
+          sequence. The reason for doing this is to keep all of the protein IDs in
+          the original protein fasta file.
+  3. Run miniprot to map the proteins to the genome.
+      - Uses the --outn 1 flag to only keep the best alignment for each protein.
+  4. Make a .chrom file from the miniprot output, filters the alignments.
+      - Does not do any filtering of the alignments, just keeps the best for each.
+  5. Make a .pep file from the filtered miniprot output.
+      - This is a fasta file of the proteins that were kept in the .chrom file.
+  6. Check that the .pep file is legal (no duplicate headers). Also check that
+      the .pep file contains all of the proteins in the .chrom file, and that all of
+      the scaffolds in the .chrom file are in the assembly.
+
+Usage instructions:
+  - navigate to the directory where you want the output to be saved
+  - copy the file example_configs/config_GAP_annotate_miniprot_unfiltered.yaml to ./config.yaml
+    - i.e. >>> cp /your/path/to/example_configs/config_GAP_annotate_miniprot_unfiltered.yaml ./config.yaml
+  - edit the config.yaml file to point to your input files you can use as many genome fasta files
+    and protein fasta files as you want. For each genome, all of the protein fasta files will be mapped
+  - Run the command with snakemake, making sure to allocate around 64GB of RAM if you use SLURM
+    - i.e. >>> snakemake --cores 32 -p --snakefile /your/path/to/snakefiles/GAP_annotate_miniprot_unfiltered
+"""
+from Bio import SeqIO
+import os
+
+configfile: "config.yaml"
+config["tool"] = "GAP_annotate_miniprot_unfiltered"
+
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+miniprot_path = os.path.join(snakefile_path, "../dependencies/miniprot/miniprot")
+
+# Make this break if one fasta is empty
+for thisassem in config["assemblies"]:
+    bases = 0
+    for record in SeqIO.parse(config["assemblies"][thisassem], "fasta"):
+        bases += len(record.seq)
+    if bases == 0:
+        raise IOError("there are no bases in {}".format(thisassem))
+
+
+from Bio import SeqIO
+import sys
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/miniprots/{assem}_and_{prot}_mapped.gff",
+               assem = config["assemblies"], prot = config["proteins"]),
+        expand(config["tool"] + "/output/{assem}.chrom",
+               assem = config["assemblies"]),
+        expand(config["tool"] + "/output/{assem}.pep",
+               assem = config["assemblies"]),
+        expand(config["tool"] + "/output/{assem}_sample_similarity.pdf",
+               assem = config["assemblies"]),
+        expand(config["tool"] + "/output/checks/{assem}.check",
+               assem = config["assemblies"])
+
+rule check_assembly_legality:
+    """
+    Checks that each header occurs only once.
+    Write the header names to a file.
+    """
+    input:
+        assem = lambda wildcards: config["assemblies"][wildcards.assem]
+    output:
+        check = config["tool"] + "/input/checks/{assem}.fasta.pass"
+    threads: 1
+    run:
+        seen = set()
+        with open(config["assemblies"][wildcards.assem], "r") as f:
+            for record in SeqIO.parse(f, "fasta"):
+                if record.id in seen:
+                    raise IOError("the header {} occurs more than once in {}".format(record.id, config["assemblies"][wildcards.assem]))
+                seen.add(record.id)
+        with open(output.check, "w") as o:
+            for entry in seen:
+                o.write(entry + "\n")
+
+# make softlink of the input files
+rule softlink_assembly:
+    """
+    make a softlink of the assembly
+    """
+    input:
+        check = config["tool"] + "/input/checks/{assem}.fasta.pass",
+        assem = lambda wildcards: config["assemblies"][wildcards.assem]
+    output:
+        assem = config["tool"] + "/input/assembly/{assem}.fasta"
+    threads:
+        1
+    shell:
+        """
+        ln -s {input.assem} {output.assem}
+        """
+
+rule filter_proteins:
+    """
+    Filter the protein fasta file to only include the first instance of each protein
+    based on its header ONLY.
+    """
+    input:
+        proteins = [config["proteins"][x] for x in config["proteins"]]
+    output:
+        filtprot = [config["tool"] + "/input/proteins/{}_filt.fasta".format(x) \
+                    for x in config["proteins"]]
+    threads: 1
+    run:
+        seen_header = set()
+        for thisprot in config["proteins"]:
+            # iterate through the proteins
+            with open(config["proteins"][thisprot], "r") as f:
+                outfile = config["tool"] + "/input/proteins/{}_filt.fasta".format(thisprot)
+                with open(outfile, "w") as o:
+                    for record in SeqIO.parse(f, "fasta"):
+                        # iterate through the records
+                        if str(record.id) not in seen_header:
+                            # if we haven't seen this header or sequence before
+                            # then write it out
+                            SeqIO.write(record, o, "fasta")
+                            seen_header.add(str(record.id))
+
+rule miniprot:
+    """
+    Just runs miniprot for one file
+    """
+    input:
+        query = config["tool"] + "/input/proteins/{prot}_filt.fasta",
+        assem = config["tool"] + "/input/assembly/{assem}.fasta",
+        miniprot = miniprot_path
+    output:
+        query = config["tool"] + "/output/miniprots/{assem}_and_{prot}_mapped.gff"
+    threads: workflow.cores - 1
+    shell:
+        """
+        {input.miniprot} --outn 1 -t {threads} --gff {input.assem} {input.query} > {output.query}
+        """
+
+rule sp_to_similarity:
+    """
+    makes a plot showing protein similarity.
+    """
+    input:
+        query = expand(config["tool"] + "/output/miniprots/{{assem}}_and_{prot}_mapped.gff",
+                       prot = config["proteins"])
+    output:
+        pdf = config["tool"] + "/output/{assem}_sample_similarity.pdf"
+    params:
+        assem = lambda wildcards: wildcards.assem
+    threads: 1
+    run:
+        sp_to_scores = {entry: [] for entry in config["proteins"]}
+        for entry in config["proteins"]:
+            gff = "{}/output/miniprots/{}_and_{}_mapped.gff".format(
+                config["tool"], params.assem, entry)
+            with open(gff, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("##PAF"):
+                        #sp_to_scores[entry].append(int(line.split("\t")[15].replace("np:i:","")))
+                        sp_to_scores[entry].append(int(line.split("\t")[13].replace("AS:i:","")))
+
+
+        print({x:sum(sp_to_scores[x])/len(sp_to_scores[x]) for x in sp_to_scores})
+        import seaborn as sns, matplotlib.pyplot as plt, operator as op
+
+        # sort keys and values together
+        sorted_keys, sorted_vals = zip(*sorted(sp_to_scores.items(), key=op.itemgetter(1)))
+
+        # almost verbatim from question
+        sns.set(context='notebook', style='whitegrid')
+        bp =  sns.boxplot(data=sorted_vals)
+        bp.set_yscale("log")
+
+        # category labels
+        plt.xticks(plt.xticks()[0], sorted_keys, rotation = 45)
+
+        fig = bp.get_figure()
+        plt.xlabel("Groups")
+        plt.ylabel("Pos hits")
+        plt.tight_layout()
+        fig.savefig(output.pdf)
+
+rule make_a_chrom_file:
+    """
+    cat the tblastn results to make a .chrom file. Used in the odp pipeline.
+    """
+    input:
+        query = expand(config["tool"] + "/output/miniprots/{{assem}}_and_{prot}_mapped.gff",
+                       prot = config["proteins"])
+    output:
+        chrom = config["tool"] + "/output/{assem}.chrom"
+    threads: 1
+    run:
+        import pandas as pd
+
+        entries = []
+        seen_prot = set()
+        for thisfile in input.query:
+            with open(thisfile, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("##PAF"):
+                        fields = line.split("\t")
+                        protein = fields[1]
+                        if protein not in seen_prot:
+                            chrom   = fields[6]
+                            direc   = fields[5]
+                            start   = int(fields[8])
+                            stop    = int(fields[9])
+                            AS      = int(fields[13].replace("AS:i:",""))
+                            AS      = int(fields[13].replace("AS:i:",""))
+                            ms      = int(fields[14].replace("ms:i:",""))
+                            np      = int(fields[15].replace("np:i:",""))
+                            entries.append({"protein":protein, "chrom":chrom, "direc":direc, "start":start, "stop":stop, "AS":AS, "ms": ms, "np":np})
+                            seen_prot.add(protein)
+        df = pd.DataFrame.from_dict(entries)
+
+        df = df.sort_values(by =        ["chrom", "start", "direc", "np",  "ms",  "AS"],
+                            ascending = [True,    True,    True,    False, False, False])
+
+        df = df.reset_index(drop=True)
+        df = df[["protein", "chrom", "direc", "start", "stop"]]
+        df.to_csv(output.chrom, sep = "\t", header = False, index = None)
+
+rule make_pep_files:
+    input:
+        chrom = config["tool"] + "/output/{assem}.chrom",
+        query = [config["proteins"][x] for x in config["proteins"]]
+    output:
+        pep   = config["tool"] + "/output/{assem}.pep"
+    threads: 1
+    run:
+        prot_dict = {}
+        for thispep in input.query:
+            with open(thispep) as handle:
+                for record in SeqIO.parse(handle, "fasta"):
+                    prot_dict[record.id] = record
+        outhandle = open(output.pep, "w")
+        with open(input.chrom, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    prot = line.split("\t")[0]
+                    SeqIO.write(prot_dict[prot], outhandle, "fasta")
+        outhandle.close()
+
+rule check_final_files:
+    """
+    Check that each sequence header occurs only once in the final protein file
+
+    Check that each protein  in the .chrom occurs in the pep file
+    Check that each scaffold in the .chrom occurs in the pep file
+    """
+    input:
+        check = config["tool"] + "/input/checks/{assem}.fasta.pass",
+        chrom = config["tool"] + "/output/{assem}.chrom",
+        pep   = config["tool"] + "/output/{assem}.pep"
+    output:
+        check = config["tool"] + "/output/checks/{assem}.check"
+    threads: 1
+    run:
+        # read in the assembly header names from the .fasta.pass file
+        genomeheaders = []
+        with open(input.check, "r") as f:
+            for line in f:
+                line = line.strip()
+                genomeheaders.append(line)
+
+        # read in the protein fasta file and save the headers
+        pepheaders = set()
+        with open(input.pep, "r") as f:
+            for record in SeqIO.parse(f, "fasta"):
+                if str(record.id) in pepheaders:
+                    raise Exception("Protein {} occurs more than once in the .pep file".format(record.id))
+                pepheaders.add(str(record.id))
+
+        # read in the proteins from col1 and the scaffolds from col2 of the chrom file
+        # also make sure that the proteins only occur once
+        chrom_proteins = set()
+        with open(input.chrom, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    if fields[0] in chrom_proteins:
+                        raise Exception("Protein {} occurs more than once in the .chrom file".format(fields[0]))
+                    chrom_proteins.add(fields[0])
+                    if fields[0] not in pepheaders:
+                        raise Exception("Protein {} is in the .chrom file is not in the pep file".format(fields[0]))
+                    if fields[1] not in genomeheaders:
+                        raise Exception("Scaffold {} is in the .chrom file is not in the genome file".format(fields[1]))
+
+        # now write the file that this has passed checks
+        with open(output.check, "w") as f:
+            f.write("passed checks\n")

@@ -1,0 +1,388 @@
+"""
+Filename: GAP_NCBI_fcs_adaptor_gx_trim
+Author: dts (github: @conchoecia)
+Date created: July 26th, 2023
+
+
+Description:
+  - This sets up and runs the NCBI tool to trim adaptors
+      and other vectors from the reads (FCS-adaptor).
+      It also sets up and runs the tool that checks for and removes other
+      contamination from prokaryotic organisms (FCS-gx).
+
+  - The config file must be set up in the following way that allows multiple
+      assemblies to be run at the same time.
+"""
+
+configfile: "config.yaml"
+config["tool"] = "GAP_NCBI_fcs_adaptor_gx_trim"
+
+import os
+import re
+
+# set up some filepaths that will be used later in the script
+# filepath is the path of the directory that the snakefile is in
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+
+# check if the config file has the directory of the gxdb folder
+if "GXDB_location" not in config:
+    raise IOError("You must have the field 'GXDB_location' in the config.yaml. This is the path to the database described here: https://github.com/ncbi/fcs/wiki/FCS-GX")
+
+# check if the config has the assemblies field that we need
+if "assemblies" not in config:
+    raise IOError("You must have the field 'assemblies' in the config.yaml.")
+
+for thisassem in config["assemblies"]:
+    if "_" in thisassem:
+        raise IOError("You must not have any special characters in the assembly names: {}. Just use [A-Za-z0-9]+".format(thisassem))
+
+    entry = config["assemblies"][thisassem]
+
+    if "fasta" not in entry or "taxid" not in entry:
+        raise IOError(f"Each assembly entry must have 'fasta' and 'taxid' fields. Missing from: {thisassem}")
+
+    if not os.path.exists(entry["fasta"]):
+        raise IOError(f"The assembly file {entry['fasta']} does not exist.")
+
+    entry["fasta"] = os.path.abspath(entry["fasta"])
+
+wildcard_constraints:
+    assem="[A-Za-z0-9]+"
+
+rule all:
+    input:
+        # get the reports
+        #expand(config["tool"] + "/round-1-contam_detection/{assem}_round_1_trimmed.fasta",
+        #       assem = config["assemblies"]),
+        expand(config["tool"] + "/round-2-contam_detection/{assem}_round_2_fcs_gx_report.txt",
+               assem = config["assemblies"]),
+        expand(config["tool"] + "/round-2-contam_detection/{assem}_round_2_taxonomy.rpt",
+               assem = config["assemblies"]),
+
+rule install_fcs_gx_script:
+    """
+    This is the script that controls the fcs-gx tool.
+    """
+    output:
+        gxscript = os.path.join(filepath, "../bin/fcs-gx/fcs.py")
+    params:
+        fcsdirec = os.path.join(filepath, "../bin/fcs-gx/")
+    threads: 1
+    resources:
+        mem_mb = 1000
+    shell:
+        """
+        mkdir -p {params.fcsdirec}
+        # curl but save to a specific directory
+        curl -LO https://github.com/ncbi/fcs/raw/main/dist/fcs.py
+        mv fcs.py {params.fcsdirec}
+        """
+
+rule install_fcs_sif:
+    """
+    This rule downloads the specific .sif file for the fcs-gx tool needed
+     for the singularity mode.
+    """
+    output:
+        fcs_sif = os.path.join(filepath, "../bin/fcs-gx/fcs-gx.sif")
+    params:
+        fcsdirec = os.path.join(filepath, "../bin/fcs-gx/")
+    threads: 1
+    resources:
+        mem_mb = 1000
+    shell:
+        """
+        curl https://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/FCS/releases/latest/fcs-gx.sif -Lo fcs-gx.sif
+        mv fcs-gx.sif {params.fcsdirec}
+        """
+
+rule install_fcs_adaptor:
+    """
+    This rule installs the NCBI tool to trim adapters.
+    Following the instructions here: https://github.com/ncbi/fcs/wiki/FCS-adaptor-quickstart
+
+    This implementation uses singularity.
+    """
+    output:
+        fcstool  = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh")
+    params:
+        fcsdirec = os.path.join(filepath, "../bin/fcs-adaptor/")
+    threads: 1
+    resources:
+        mem_mb = 1000
+    shell:
+        """
+        mkdir -p {params.fcsdirec}
+        # curl but save to a specific directory
+        curl -LO https://github.com/ncbi/fcs/raw/main/dist/run_fcsadaptor.sh
+        chmod 755 run_fcsadaptor.sh
+        mv run_fcsadaptor.sh {params.fcsdirec}
+        """
+
+rule download_fcs_adaptor_sif:
+    """
+    This rule downloads the specific .sif file for the fcs-adaptor tool needed
+     for the singularity mode.
+    """
+    output:
+        fcs_sif = os.path.join(filepath, "../bin/fcs-adaptor/fcs-adaptor.sif")
+    params:
+        fcsdirec = os.path.join(filepath, "../bin/fcs-adaptor/")
+    threads: 1
+    resources:
+        mem_mb = 1000
+    shell:
+        """
+        curl https://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/FCS/releases/latest/fcs-adaptor.sif -Lo fcs-adaptor.sif
+        mv fcs-adaptor.sif {params.fcsdirec}
+        """
+
+rule perform_fcs_analysis_round1:
+    """
+    This step sets up the FCS adapter run
+      - analyzes the genome for vector contam
+      - looks at the report and trims the genome
+    """
+    input:
+        fcstool    = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh"),
+        fcs_sif    = os.path.join(filepath, "../bin/fcs-adaptor/fcs-adaptor.sif"),
+        trimscript = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
+        assembly   = lambda wildcards: config["assemblies"][wildcards.assem]["fasta"]
+    output:
+        output_report    = config["tool"] + "/round-1-contam_detection/{assem}_round_1_fcs_adaptor_report.txt",
+        trimmed_assembly = config["tool"] + "/round-1-contam_detection/{assem}_round_1_trimmed.fasta"
+    params:
+        report_dir = config["tool"] + "/round-1-contam_detection/"
+    threads: 1
+    resources:
+        mem_mb = 2000
+    shell:
+        """
+        mkdir -p {wildcards.assem}_TEMP
+        mkdir -p {params.report_dir}
+        cd {wildcards.assem}_TEMP
+        bash {input.fcstool} --fasta-input {input.assembly} \
+          --output-dir ./ \
+          --euk \
+          --container-engine singularity \
+          --image {input.fcs_sif}
+        mv ./fcs_adaptor_report.txt ../{output.output_report}
+        cd ..
+        python {input.trimscript} -f {input.assembly} -c {output.output_report} > {output.trimmed_assembly}
+        rm -rf {wildcards.assem}_TEMP
+        """
+
+rule perform_contamination_screening_round2:
+    """
+    This performs the contamination screening using the fcs-gx tool.
+    This requires up to 48 threads and 512 GB of memory
+    """
+    input:
+        fcsgxtool        = os.path.join(filepath, "../bin/fcs-gx/fcs.py"),
+        fcs_gx_sif       = os.path.join(filepath, "../bin/fcs-gx/fcs-gx.sif"),
+        gxdb             = config["GXDB_location"],
+        trimmed_assembly = config["tool"] + "/round-1-contam_detection/{assem}_round_1_trimmed.fasta"
+    output:
+        output_report    = config["tool"] + "/round-2-contam_detection/{assem}_round_2_fcs_gx_report.txt",
+        taxon_report     = config["tool"] + "/round-2-contam_detection/{assem}_round_2_taxonomy.rpt"
+    params:
+        taxid            = lambda wildcards: config["assemblies"][wildcards.assem]["taxid"],
+        fastaprefix      = lambda wildcard: f"{wildcard.assem}_round_1_trimmed",
+        tmpdir           = lambda wildcards: f"{wildcards.assem}_TEMP_round2"
+    threads: workflow.cores
+    shell:
+        """
+        mkdir -p {params.tmpdir}
+        export FCS_DEFAULT_IMAGE={input.fcs_gx_sif}
+        python {input.fcsgxtool} screen genome     \
+                --fasta   {input.trimmed_assembly} \
+                --out-dir {params.tmpdir}          \
+                --gx-db   {input.gxdb}             \
+                --tax-id  {params.taxid}
+        cp {params.tmpdir}/{params.fastaprefix}.{params.taxid}.fcs_gx_report.txt {output.output_report}
+        cp {params.tmpdir}/{params.fastaprefix}.{params.taxid}.taxonomy.rpt      {output.taxon_report}
+        #rm -rf {wildcards.assem}_TEMPgx
+        """
+
+#rule perform_fcs_analysis_round1:
+#    """
+#    This is step 1/7 of the pipeline. FCS-adapter 1 search 1
+#
+#    This step sets up the FCS-adapter run and performs the analysis.
+#    Only one instance of this can be run at a time. For this reason, setting this to use all the cores on a machine.
+#    """
+#    input:
+#        fcstool    = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh"),
+#        assembly   = lambda wildcards: config["assemblies"][wildcards.assem]
+#    output:
+#        output_report    = config["tool"] + "/round-1-vector_detection/{assem}_round_1_fcs_adaptor_report.txt",
+#    params:
+#        report_dir = config["tool"] + "/round-1-vector_detection/"
+#    threads: workflow.cores
+#    resources:
+#        mem_mb = 2000
+#    shell:
+#        """
+#        mkdir -p {wildcards.assem}_TEMP
+#        mkdir -p {params.report_dir}
+#        cd {wildcards.assem}_TEMP
+#        bash {input.fcstool} --fasta-input {input.assembly} --output-dir ./ --euk
+#        mv ./fcs_adaptor_report.txt ../{output.output_report}
+#        cd ..
+#        rm -rf {wildcards.assem}_TEMP
+#        """
+#
+#rule fcs_analysis_round1_trim:
+#    """
+#    This is step 2/7 of the pipeline: FCS-adapter trimming 1
+#    Does the trimming from the results of Round 1 of FCS detection.
+#    """
+#    input:
+#        trimscript = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
+#        assembly   = lambda wildcards: config["assemblies"][wildcards.assem],
+#        output_report    = config["tool"] + "/round-1-vector_detection/{assem}_round_1_fcs_adaptor_report.txt"
+#    output:
+#        trimmed_assembly = config["tool"] + "/round-1-vector_detection/{assem}_round_1_trimmed.fasta"
+#    threads: workflow.cores
+#    resources:
+#        mem_mb = 2000
+#    shell:
+#        """
+#        python {input.trimscript} -f {input.assembly} -c {input.output_report} > {output.trimmed_assembly}
+#        """
+#
+#rule perform_fcs_analysis_round2:
+#    """
+#    This is step 3/7 of the pipeline: FCS-adapter search 2
+#
+#    This step sets up the FCS run and performs the analysis
+#    """
+#    input:
+#        fcstool    = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh"),
+#        assembly   = config["tool"] + "/round-1-vector_detection/{assem}_round_1_trimmed.fasta"
+#    output:
+#        output_report    = config["tool"] + "/round-2-vector_detection/{assem}_round_2_fcs_adaptor_report.txt",
+#    params:
+#        report_dir = config["tool"] + "/round-2-vector_detection/"
+#    threads: workflow.cores
+#    resources:
+#        mem_mb = 2000
+#    shell:
+#        """
+#        mkdir -p {wildcards.assem}_TEMP
+#        mkdir -p {params.report_dir}
+#        cd {wildcards.assem}_TEMP
+#        bash {input.fcstool} --fasta-input ../{input.assembly} --output-dir ./ --euk
+#        mv ./fcs_adaptor_report.txt ../{output.output_report}
+#        cd ..
+#        rm -rf {wildcards.assem}_TEMP
+#        """
+#
+#rule fcs_analysis_round2_trim:
+#    """
+#    This is step 4/7 of the pipeline: FCS-adapter trim 2
+#
+#    Does the trimming from the results of round 2 of fcs detection
+#    """
+#    input:
+#        trimscript       = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
+#        assembly         = config["tool"] + "/round-1-vector_detection/{assem}_round_1_trimmed.fasta",
+#        output_report    = config["tool"] + "/round-2-vector_detection/{assem}_round_2_fcs_adaptor_report.txt",
+#    output:
+#        trimmed_assembly = config["tool"] + "/round-2-vector_detection/{assem}_round_2_trimmed.fasta"
+#    threads: workflow.cores
+#    resources:
+#        mem_mb = 2000
+#    shell:
+#        """
+#        python {input.trimscript} -f {input.assembly} -c {input.output_report} > {output.trimmed_assembly}
+#        """
+#
+#rule perform_fcs_analysis_round3:
+#    """
+#    This is step 5/7 of the pipeline: FCS-adapter search 3
+#
+#    This step sets up the FCS run and performs the analysis
+#    """
+#    input:
+#        fcstool    = os.path.join(filepath, "../bin/fcs-adaptor/run_fcsadaptor.sh"),
+#        trimscript = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
+#        assembly   = config["tool"] + "/round-2-vector_detection/{assem}_round_2_trimmed.fasta"
+#    output:
+#        output_report    = config["tool"] + "/round-3-vector_detection/{assem}_round_3_fcs_adaptor_report.txt",
+#    params:
+#        report_dir = config["tool"] + "/round-3-vector_detection/"
+#    threads: workflow.cores
+#    resources:
+#        mem_mb = 2000
+#    shell:
+#        """
+#        mkdir -p {wildcards.assem}_TEMP
+#        mkdir -p {params.report_dir}
+#        cd {wildcards.assem}_TEMP
+#        bash {input.fcstool} --fasta-input ../{input.assembly} --output-dir ./ --euk
+#        mv ./fcs_adaptor_report.txt ../{output.output_report}
+#        cd ..
+#        rm -rf {wildcards.assem}_TEMP
+#        """
+#
+#rule fcs_analysis_round3_trim:
+#    """
+#    This is step 6/7 of the pipeline: FCS-adapter trim 3
+#
+#    Does the trimming from the results of round 3 of fcs detection
+#    """
+#    input:
+#        trimscript       = os.path.join(filepath, "../scripts/NCBI_fcs_adapter_break.py"),
+#        assembly         = config["tool"] + "/round-2-vector_detection/{assem}_round_2_trimmed.fasta",
+#        output_report    = config["tool"] + "/round-3-vector_detection/{assem}_round_3_fcs_adaptor_report.txt",
+#    output:
+#        trimmed_assembly = config["tool"] + "/round-3-vector_detection/{assem}_round_3_trimmed.fasta"
+#    threads: workflow.cores
+#    resources:
+#        mem_mb = 2000
+#    shell:
+#        """
+#        python {input.trimscript} -f {input.assembly} -c {input.output_report} > {output.trimmed_assembly}
+#        """
+#
+#rule perform_contamination_analysis_round4:
+#    """
+#    This is step 7/7 of the pipeline: FCS-gx search and trim 1
+#
+#    Remove prokaryotic contamination from the assembly. Keep the contaminating sequences in a separate file.
+#    """
+#    input:
+#        fcs_gx_tool = os.path.join(filepath, "../bin/fcs-gx/fcs.py"),
+#        assembly    = config["tool"] + "/round-3-vector_detection/{assem}_round_3_trimmed.fasta"
+#    output:
+#        output_report    = config["tool"] + "/round-4-contam_detection/{assem}_round_4_fcs_gx_report.txt",
+#        taxon_report     = config["tool"] + "/round-4-contam_detection/{assem}_round_4_taxonomy.rpt",
+#        #trimmed_assembly = config["tool"] + "/round-4-contam_detection/{assem}_round_4_trimmed.fasta"
+#    params:
+#        report_dir = config["tool"] + "/round-4-contam_detection/",
+#        fileprefix = lambda wildcards: "{}_round_3_trimmed.{}".format(wildcards.assem, config["taxid"]),
+#        gxdb_loc   = config["GXDB_location"],
+#        taxid      = config["taxid"]
+#    threads: workflow.cores
+#    resources:
+#        mem_mb = 2000
+#    shell:
+#        """
+#        mkdir -p {wildcards.assem}_TEMP
+#        mkdir -p {params.report_dir}
+#        cd {wildcards.assem}_TEMP
+#        if [ ! -f {params.fileprefix}.fcs_gx_report.txt ]; then
+#            if [ ! -f {params.fileprefix}.taxonomy.rpt ]; then
+#                python3 {input.fcs_gx_tool} screen genome \
+#                        --fasta ../{input.assembly}       \
+#                        --out-dir ./                      \
+#                        --gx-db  {params.gxdb_loc}        \
+#                        --tax-id {params.taxid}
+#            fi
+#        fi
+#        cp {params.fileprefix}.fcs_gx_report.txt ../{output.output_report}
+#        cp {params.fileprefix}.taxonomy.rpt      ../{output.taxon_report}
+#        cd ../
+#        rm -rf {wildcards.assem}_TEMP
+#        """

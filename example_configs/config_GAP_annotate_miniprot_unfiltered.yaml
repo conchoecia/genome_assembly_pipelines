@@ -1,4 +1,4 @@
-# This is the example config file for GAP_annotate_miniprot
+# This is the example config file for GAP_annotate_miniprot_unfiltered
 #  uses protein files from other species to generate gffs
 #  of those protein coordinates in another genome.
 
