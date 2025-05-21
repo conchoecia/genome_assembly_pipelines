@@ -1,0 +1,32 @@
+# Author dts 2020
+# dts@ucsc.edu
+# dschultz@mbari.org
+#
+# This config file is for the script `GAP_genome_size_estimate`
+#  https://github.com/conchoecia/genome_assembly_pipelines
+# To use this config file, copy it to the directory you
+#  want to run the hi-c analysis in, then rename it to
+#  config.yaml. Edit the config.yaml file and then run
+#  snakemake --snakfile /path/to/genome_assembly_pipelines/scripts/GAP_genome_size_estimate
+#
+#  You should only input high-accuracy read types in gzipped format, like
+#    Illumina WGS or PacBio HiFi WGS reads.
+
+# You should specify the tmp_dir to a location with enough space.
+# If you are running this on a cluster, the $TMPDIR variable may be space on the local node
+tmp_dir: "$TMPDIR"
+#tmp_dir: ./
+
+# You must specify the k-mer size.
+# k-21 is fine for most genomes, unless it is exceptionally large (> 10 Gb)
+kmer_size: 21
+
+samples:
+  Mysample1:
+    gzipped_reads: # can be fastq.gz, fasta.gz, fq.gz, fa.gz
+      - /path/to/IlluminaWGS-lib1_R1.fastq.gz
+      - /path/to/HiCuminaWGS-lib1_R2.fastq.gz
+      - /path/to/HiFi_reads.fq.gz
+  ChangeThisName:
+    gzipped_reads:
+      - /path/to/ChangeThisName.hifi.fq.gz

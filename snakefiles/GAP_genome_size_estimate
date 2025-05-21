@@ -1,0 +1,192 @@
+"""
+Program  : GAP_genome_size_estimate
+Language : snakemake
+Date     : 2025-05-21
+Author   : Darrin T. Schultz
+Email    : darrin.schultz@univie.ac.at
+Github   : https://github.com/conchoecia/genome_assembly_pipelines
+Support  : For issues or questions, please search if the topic has been discussed already
+           on github and open a new issue if not: https://github.com/conchoecia/genome_assembly_pipelines/issues
+License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
+Citation : There is currently no appropriate citation for this pipeline. Please just cite the github repository.
+
+Genome Assembly Pipelines Description:
+  This program is part of the genome_assembly_pipelines set of tools. These are pipelines used by DTS for
+    genome assembly and annotation. They are designed to be easy enough to run by the author, and are not necessarily
+    designed to be easy to use by others. The pipelines are designed to be run on a cluster, but can also be run
+    on a local machine.
+
+Program Description:
+  Uses kmc to estimate the genome size of a set of genomes. Uses the kmc tool to count the
+    kmers.
+
+  Steps:
+  1. Run kmc to count the kmers of each assembly.
+
+Usage instructions:
+  - This only works for linux x64 systems. It is not tested on other systems.
+  - navigate to the directory where you want the output to be saved
+  - copy the file example_configs/config_GAP_annotate_miniprot_unfiltered.yaml to ./config.yaml
+    - i.e. >>> cp /your/path/to/example_configs/config_GAP_annotate_miniprot_unfiltered.yaml ./config.yaml
+  - edit the config.yaml file to point to your input files you can use as many genome fasta files
+    and protein fasta files as you want. For each genome, all of the protein fasta files will be mapped
+  - Run the command with snakemake, making sure to allocate around 64GB of RAM if you use SLURM
+    - i.e. >>> snakemake --cores 32 -p --snakefile /your/path/to/snakefiles/GAP_annotate_miniprot_unfiltered
+
+# This is the example for the script this is based on
+#!/bin/bash
+
+# Example usage:
+# ./count_kmers.sh input.fastq.gz output_prefix
+
+module load kmc
+
+# Set variables
+INPUT_FASTQ="$1"
+OUTPUT_PREFIX="$2"
+KMER_SIZE=21
+TMP_DIR="./tmp_kmc"
+
+# Make a temporary directory for KMC
+mkdir -p "$TMP_DIR"
+
+# Step 1: Count k-mers with KMC
+#kmc -k$KMER_SIZE -t4 -m16 -ci1 -cs10000 "$INPUT_FASTQ" "$OUTPUT_PREFIX" "$TMP_DIR"
+
+# Step 2: Dump the counts into a text file (GenomeScope wants a histogram)
+kmc_tools transform "$OUTPUT_PREFIX" histogram "${OUTPUT_PREFIX}.histo" -cx10000
+
+# Step 3: Optional - clean up
+# rm -r "$TMP_DIR"
+
+#echo "Done. Histogram saved to ${OUTPUT_PREFIX}_hist.txt"
+
+# This is the example config file:
+samples:
+  Mysample1:
+    gzipped_reads: # can be fastq.gz, fasta.gz, fq.gz, fa.gz
+      - /path/to/IlluminaWGS-lib1_R1.fastq.gz
+      - /path/to/HiCuminaWGS-lib1_R2.fastq.gz
+      - /path/to/HiFi_reads.fq.gz
+  ChangeThisName:
+    gzipped_reads:
+      - /path/to/ChangeThisName.hifi.fq.gz
+"""
+import os
+
+configfile: "config.yaml"
+config["tool"] = "GAP_genome_size_estimate"
+print(config)
+
+# make sure that this environment is linux x64, not arm64 or mac or windows
+if os.uname().machine != "x86_64":
+    raise Exception("This pipeline only works on linux x64 systems. Please run on a linux x64 system.")
+
+for sample in config["samples"]:
+    # Make sure that each sample has something called "gzipped_reads" in the config file
+    if "gzipped_reads" not in config["samples"][sample]:
+        raise Exception("Please make sure that each sample has something called 'gzipped_reads' in the config file.")
+
+    # Make sure that the type of the gzipped reads is correct, and is a list, and that each element is a valid file
+    if not isinstance(config["samples"][sample]["gzipped_reads"], list):
+        raise Exception("Please make sure that the gzipped reads are a list. Please look at the example config file.")
+    for i in range(len(config["samples"][sample]["gzipped_reads"])):
+        if not os.path.isfile(config["samples"][sample]["gzipped_reads"][i]):
+            raise Exception("Please make sure that the gzipped reads are valid files.")
+
+# ensure that the config file specifies the kmer size
+if "kmer_size" not in config:
+    raise Exception("Please make sure that the config file specifies the kmer size.")
+
+# if the tmp_dir is not specified, set it to ./
+if "tmp_dir" not in config:
+    config["tmp_dir"] = "./"
+## If tmp_dir starts with a $, it is likely a variable, so we need to see what it is in the environment
+#if config["tmp_dir"].startswith("$"):
+#    config["tmp_dir"] = os.path.expandvars(config["tmp_dir"])
+#    # check if that actually exists
+#    if not os.path.exists(config["tmp_dir"]):
+#        raise Exception("Please make sure that the tmp_dir exists. It is currently set to: " + config["tmp_dir"])
+## If tmp_dir is empty, set it to ./
+#if config["tmp_dir"] == "":
+#    config["tmp_dir"] = "./"
+
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+
+wildcard_constraints:
+    assem="[A-Za-z0-9_]+"
+
+rule all:
+    input:
+        os.path.join(snakefile_path, "../bin/kmc/bin/kmc"),
+        expand(config["tool"] + "/input/{sample}.filelist.txt",
+                sample=config["samples"].keys()),
+        expand(config["tool"] + "/kmc_out/{sample}.histo",
+                sample=config["samples"].keys())
+
+rule download_kmc:
+    """
+    At the time of writing this script, the latest relevant version of KMC is 3.2.4.
+    """
+    output:
+        kmc_executable = os.path.join(snakefile_path, "../bin/kmc/bin/kmc"),
+        kmc_tools      = os.path.join(snakefile_path, "../bin/kmc/bin/kmc_tools"),
+        kmc_dump       = os.path.join(snakefile_path, "../bin/kmc/bin/kmc_dump")
+    params:
+        kmc_directory = os.path.join(snakefile_path, "../bin/kmc/"),
+        KMC_link = "https://github.com/refresh-bio/KMC/releases/download/v3.2.4/KMC3.2.4.linux.x64.tar.gz"
+    shell:
+        """
+        mkdir -p {params.kmc_directory}
+        wget -O kmc.tar.gz {params.KMC_link}
+        tar -xvzf kmc.tar.gz -C {params.kmc_directory}
+        rm kmc.tar.gz
+        """
+
+rule generate_filelist:
+    """
+    Generate a list of all the genome fasta files in the input directory.
+    """
+    output:
+        filelist = config["tool"] + "/input/{sample}.filelist.txt"
+    threads: 1
+    run:
+        # open the output file for writing
+        with open(output.filelist, "w") as f:
+            # iterate over the input files
+            print("Lookin at this gzipped read:")
+            print(config["samples"][wildcards.sample]["gzipped_reads"])
+            for i in range(len(config["samples"][wildcards.sample]["gzipped_reads"])):
+                # get the gzipped read
+                gzipped_read = config["samples"][wildcards.sample]["gzipped_reads"][i]
+                print(gzipped_read)
+                # get the absolute path
+                read_abs_path = os.path.abspath(gzipped_read)
+                # write the gzipped read to the file
+                f.write(read_abs_path + "\n")
+
+rule count_kmers:
+    """
+    Count the kmers in the genome fasta files using KMC.
+
+    #rm -r {params.tmp_dir}
+    """
+    input:
+        filelist  = config["tool"] + "/input/{sample}.filelist.txt",
+        kmc       = os.path.join(snakefile_path, "../bin/kmc/bin/kmc"),
+        kmc_tools = os.path.join(snakefile_path, "../bin/kmc/bin/kmc_tools")
+    output:
+        kmc_out   = config["tool"] + "/kmc_out/{sample}.histo"
+    threads: workflow.cores
+    params:
+        kmer_size = config["kmer_size"],
+        tmp_dir   = lambda wildcards: os.path.join(config["tmp_dir"], "kmc_temp.{}".format(wildcards.sample)),
+        outdir    = os.path.join(config["tool"],    "kmc_out/")
+    shell:
+        """
+        mkdir -p {params.tmp_dir}
+        # this makes some files called .kmc_pre and .kmc_suf that we leave in the tmp_dir and just delete
+        {input.kmc} -k{params.kmer_size} -t{threads} -m16 -ci2 -cs10000 @{input.filelist} {params.tmp_dir}/{wildcards.sample} {params.tmp_dir}
+        {input.kmc_tools} transform {params.tmp_dir}/{wildcards.sample} histogram {output.kmc_out} -cx10000
+        rm -rf {params.tmp_dir}
+        """

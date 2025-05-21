@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument("-a", "--assembly_file", required = True, type=str, help="The path to the assembly file.")
     parser.add_argument("-f", "--fasta_file",    required = True, type=str, help="The path to the fasta file.")
     parser.add_argument("-g", "--gap_length",    required = False, type=int, help="The length of the gap between the contigs. Default is 100.", default=100)
-    parser.add_argument("-n", "--first_n_names",         required = False, type=str, help="The names for the first N scaffolds of the assembly. Use a space-separated list.")
+    parser.add_argument("-n", "--first_n_names",         required = False, type=str, help="The names for the first N scaffolds of the assembly. Use a space-separated list. For example -n \"Hau_chr1 Hau_chr2 Hau_chr3\"")
     parser.add_argument("-p", "--prefix",        required = False, type=str, help="The prefix for the scaffold names. Default is 'scaffold'.", default="scaffold")
     parser.add_argument("--remove_last_n_scafs", required = False, type=int, help="If you know that you don't want the last N scaffolds, change this number to remove them.", default=0)
     args = parser.parse_args()
@@ -47,6 +47,7 @@ def parse_args():
         exit()
     # if the names are given, parse the string into a list of strings
     if args.first_n_names:
+        print("The first N names are: {}".format(args.first_n_names), file=sys.stderr)
         args.first_n_names = args.first_n_names.split(" ")
     else:
         args.first_n_names = []
