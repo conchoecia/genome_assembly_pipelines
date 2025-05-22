@@ -122,7 +122,13 @@ rule all:
         expand(config["tool"] + "/input/{sample}.filelist.txt",
                 sample=config["samples"].keys()),
         expand(config["tool"] + "/kmc_out/{sample}.histo",
-                sample=config["samples"].keys())
+                sample=config["samples"].keys()),
+        # install genomescope2
+        os.path.join(snakefile_path, "../bin/genomescope2/genomescope2.sh"),
+        # run genomescope2
+        expand(config["tool"] + "/output/{sample}/{sample}_log_plot.png",
+                sample=config["samples"].keys()),
+
 
 rule download_kmc:
     """
@@ -189,4 +195,60 @@ rule count_kmers:
         {input.kmc} -k{params.kmer_size} -t{threads} -m16 -ci2 -cs10000 @{input.filelist} {params.tmp_dir}/{wildcards.sample} {params.tmp_dir}
         {input.kmc_tools} transform {params.tmp_dir}/{wildcards.sample} histogram {output.kmc_out} -cx10000
         rm -rf {params.tmp_dir}
+        """
+
+rule download_genomescope2:
+    output:
+        done=os.path.join(snakefile_path, "../bin/genomescope2/install_complete.txt")
+    params:
+        install_dir=os.path.join(snakefile_path, "../bin/genomescope2"),
+        lib_dir=os.path.join(snakefile_path, "../bin/genomescope2/lib_R"),
+        genomescope2r = os.path.join(snakefile_path, "../bin/genomescope2/genomescope2_repo/genomescope.R")
+    shell:
+        """
+        mkdir -p {params.install_dir}
+        mkdir -p {params.lib_dir}
+        rm -rf {params.install_dir}/genomescope2_repo  # cleanup!
+        cd {params.install_dir}
+        git clone https://github.com/tbenavi1/genomescope2.0 genomescope2_repo
+        Rscript -e '.libPaths("{params.lib_dir}"); if (!requireNamespace("devtools", quietly=TRUE)) install.packages("devtools", lib="{params.lib_dir}", repos="https://cloud.r-project.org"); devtools::install("{params.install_dir}/genomescope2_repo", lib="{params.lib_dir}")'
+        touch {output.done}
+        sed -i "1a\\
+        # Ensure genomescope package loads from the local lib_R directory\\nthis_script_dir <- dirname(normalizePath(sub(\\\"--file=\\\", \\\"\\\", commandArgs(trailingOnly = FALSE)[grep(\\\"--file=\\\", commandArgs(trailingOnly = FALSE))])))\\n.libPaths(file.path(dirname(this_script_dir), \\"lib_R\\"))\\n" {params.genomescope2r}
+        """
+
+rule run_genomescope2:
+    """
+    This actually runs the genomescope2 script. The output files are:
+      - HauIllumina_linear_plot.png
+      - HauIllumina_log_plot.png
+      - HauIllumina_model.txt
+      - HauIllumina_progress.txt
+      - HauIllumina_summary.txt
+      - HauIllumina_transformed_linear_plot.png
+      - HauIllumina_transformed_log_plot.png
+    """
+    input:
+        histo   = config["tool"] + "/kmc_out/{sample}.histo",
+        genomescope2r = os.path.join(snakefile_path, "../bin/genomescope2/genomescope2_repo/genomescope.R")
+    output:
+        linplot  = config["tool"] + "/output/{sample}/{sample}_linear_plot.png",
+        logplot  = config["tool"] + "/output/{sample}/{sample}_log_plot.png",
+        model    = config["tool"] + "/output/{sample}/{sample}_model.txt",
+        progress = config["tool"] + "/output/{sample}/{sample}_progress.txt",
+        summary  = config["tool"] + "/output/{sample}/{sample}_summary.txt",
+        tlin     = config["tool"] + "/output/{sample}/{sample}_transformed_linear_plot.png",
+        tlog     = config["tool"] + "/output/{sample}/{sample}_transformed_log_plot.png"
+    params:
+        outdir = config["tool"] + "/output/{sample}/",
+        k      = config["kmer_size"],
+        sample = lambda wildcards: wildcards.sample
+    threads: 1
+    shell:
+        """
+        {input.genomescope2r} \
+          -i {input.histo} \
+          -o {params.outdir} \
+          -k {params.k} \
+          -n {params.sample}
         """
