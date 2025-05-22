@@ -1,0 +1,409 @@
+"""
+This snakefile maps all the HiC reads to a final genome assembly
+  - It also makes a pretextmap file for quickly looking at the hic-maps
+  - It also calculates the obs/exp matrix, and the pearson exp matrix of that
+  - It maps long reads to the assembly then makes a depth histogram that can be
+     viewed in HiGlass
+
+font is small here: https://patorjk.com/software/taag
+"""
+
+from Bio import SeqIO
+import gzip
+import os
+import sys
+minchromsize = 1000000
+configfile: "config.yaml"
+config["tool"] = "GAP_hic_map7"
+
+for x in config["assemblies"]:
+    if "_" in x:
+        raise IOError("You must not have any special characters in the assembly names: {}. Just use [A-Za-z0-9]+".format(x))
+
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+kmer_position_path=os.path.join(filepath, "../bin/kmer_positions.py")
+picard_path=os.path.join(filepath, "../bin/picard.jar")
+chromappath = os.path.join(filepath, "../bin/chromap/chromap")
+bedsort_path=os.path.join(filepath, "../bin/bedSort")
+bed2bw_path=os.path.join(filepath,  "../bin/bedGraphToBigWig")
+
+def rc(seq):
+    """
+    reverse complement the sequence
+    """
+    this_complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+    return "".join(this_complement.get(base, base) for base in reversed(seq))
+
+def flatten(list_of_lists):
+    if len(list_of_lists) == 0:
+        return list_of_lists
+    if isinstance(list_of_lists[0], list):
+        return flatten(list_of_lists[0]) + flatten(list_of_lists[1:])
+    return list_of_lists[:1] + flatten(list_of_lists[1:])
+
+def nx(seq, n):
+    """
+    concats the sequence n times
+    """
+    return "".join([seq]*n)
+
+if "minimap2arg" not in config:
+    config["minimap2arg"] = "map-hifi"
+
+###
+###  KMER PARSING SECTION
+###
+# if kmers not specified in config, add
+if "kmers" not in config:
+    config["kmers"] = {}
+
+# if telomere kmers not specified in the config file, use regular metazoan seq
+if "telomere" not in config:
+    config["telomere_seqs"] = ["TTAGGG"]
+config["telomere_seqs"] = [x.upper() for x in config["telomere_seqs"]]
+
+# make sure that there are no reverse complements in the telomere_seqs
+#  we don't want this because we specifically define the revcomp in the
+#  next step
+for x in config["telomere_seqs"]:
+    if rc(x) in config["telomere_seqs"]:
+        raise IOError("Don't include the reverse reverse complement of the telomere sequences")
+config["telomere_seqs"] = {"{}5x".format(key.upper()):
+                           {"f":nx(key.upper(), 5),
+                            "r":nx(rc(key.upper()), 5)}
+                           for key in config["telomere_seqs"]}
+
+## now add tracks for contiguous stretches of two, three
+#for n in [2]:
+#    config["telomere_seqs"].update(
+#        {"{}{}x".format(key.upper(), n):
+#                  {"f":nx(key.upper(), n),
+#                   "r":nx(rc(key.upper()), n)}
+#                  for key in config["telomere_seqs"]})
+
+print(config["telomere_seqs"])
+
+# make sure all the kmers are uppercase and that the set is complete
+for key in config["kmers"]:
+    config["kmers"][key] = list(set([x.upper() for x in config["kmers"][key]] + \
+                           [reverse_complement(x.upper()) for x in config["kmers"][key]]))
+print(config["kmers"])
+
+# make this dummy LR fastq file in case we don't actually want to map any reads
+toolpath = os.path.join(os.getcwd(), config["tool"])
+if not os.path.exists(toolpath):
+    os.mkdir(toolpath)
+if "LR" not in config:
+    config["LR"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
+    if not os.path.exists(config["LR"][0]):
+        content = b""
+        f = gzip.open(config["LR"][0], 'wb')
+        f.write(content)
+        f.close()
+
+# make this dummy transcript file in case we don't actually want to map any reads
+toolpath = os.path.join(os.getcwd(), config["tool"])
+if not os.path.exists(toolpath):
+    os.mkdir(toolpath)
+if "transcripts" not in config:
+    config["transcripts"] = [os.path.join(toolpath, "temp_dont_delete_me.fastq.gz")]
+    if not os.path.exists(config["transcripts"][0]):
+        content = b""
+        f = gzip.open(config["transcripts"][0], 'wb')
+        f.write(content)
+        f.close()
+
+# now we check the LR and transcript files to make sure they are fasta or fastq
+for thiskey in ["transcripts", "LR"]:
+    for entry in config[thiskey]:
+        good = False
+        for ending in [".fa", ".fa.gz", ".fasta",
+                       ".fasta.gz", ".fastq",
+                       ".fastq.gz", ".fq", ".fq.gz"]:
+            if entry.endswith(ending):
+                good = True
+        if not good:
+            raise IOError ("The LR or transcripts file {} must end with .fa, .fa.gz, .fasta, .fasta.gz, .fastq, or .fastq.gz.".format(entry))
+
+def get_chromosome_sizes(assembly_file, minsize):
+    """
+    returns a set of chromosomes to keep
+    """
+    chroms = []
+    with open(assembly_file) as handle:
+        for record in SeqIO.parse(handle, "fasta"):
+            if len(record.seq) >= minsize:
+                chroms.append(record.id)
+    return chroms
+
+
+wildcard_constraints:
+    datatype="[A-Za-z0-9]+",
+    kmer="[A-Za-z0-9]+",
+    nom="[A-Za-z0-9.]+",
+    telo="[A-Za-z0-9]+",
+    binsize="[0-9]+",
+    qval="[0-9]+",
+    telodir="[fr]"
+
+rule all:
+    input:
+        #expand(config["tool"] + "/input/assembly/{nom}_input.fasta",
+        #        nom = config["assemblies"]),
+        #expand(config["tool"] + "/input/hic/{lib}_{direction}.fastq.gz",
+        #        lib = config["libs"], direction = ["R1", "R2"])
+        # Juicebox Assembly Tools part
+        expand(config["tool"] + "/output/{nom}/{nom}.assembly",
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_allLibs_q_{qval}.hic",
+               nom = config["assemblies"], qval = config["qvals"]),
+
+
+rule download_input_fasta:
+    """
+    Usually there will be a link to the input fasta file
+    """
+    output:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    threads: 1
+    params:
+        URL = lambda wildcards: config["assemblies"][wildcards.nom]
+    shell:
+        """
+        if [ ! -f {output.assem} ]; then
+            wget "{params.URL}" -O {output.assem}
+        fi
+        """
+
+rule download_hic_fastqgz:
+    """
+    Download the HiC fastq.gz files
+    """
+    output:
+        fastq = config["tool"] + "/input/hic/{lib}_{direction}.fastq.gz"
+    threads: 1
+    params:
+        URL = lambda wildcards: config["libs"][wildcards.lib][wildcards.direction],
+    shell:
+        """
+        if [ ! -f {output.fastq} ]; then
+            wget "{params.URL}" -O {output.fastq}
+        fi
+        """
+
+rule chrom_size:
+    """
+    make a file with the chromosome sizes
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    threads: 1
+    shell:
+        """
+        bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
+        """
+
+#      _ ___   _ _____     _    _       __ _ _
+#   _ | | _ ) /_\_   _|   | |_ (_)__   / _(_) |___ ___
+#  | || | _ \/ _ \| |    _| ' \| / _| |  _| | / -_|_-<
+#   \__/|___/_/ \_\_|   (_)_||_|_\__| |_| |_|_\___/__/
+#
+rule compile_chromap:
+    """
+    compile chromap if it does not yet exist
+    """
+    output:
+        chromap = os.path.join(filepath, "../bin/chromap/chromap")
+    params:
+        mvdir = os.path.join(filepath, "../bin/chromap/")
+    threads: 1
+    shell:
+        """
+        rm -rf ./chromap
+        git clone https://github.com/haowenz/chromap.git
+        cd chromap
+        make
+        cd ..
+        rsync -r chromap/ {params.mvdir}
+        rm -rf ./chromap
+        """
+
+rule check_assembly:
+    """
+    Check that there are no duplicate seqnames in the assembly.
+    This will fail silently in JBAT and waste time.
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check"
+    threads: 1
+    run:
+        chromlist = set()
+        with open(input.assem) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                if record.id in chromlist:
+                    raise IOError("There are some sequence IDs that are duplicated in the fasta file. Please make sure that each file has a unique ID and restart the pipeline")
+                chromlist.add(record.id)
+        with open(output.check, "w") as outhandle:
+            print("fasta headers are all unique", file = outhandle)
+
+rule index_ref:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        chromap = os.path.join(filepath, "../bin/chromap/chromap")
+    output:
+        index = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.index")
+    shell:
+        """
+        {input.chromap} -i -r {input.assem} -o {output.index}
+        """
+
+rule generate_assembly_for_hic_gen:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        awkscript= os.path.abspath(os.path.join( filepath, "../bin/generate-assembly-file-from-fasta.awk"))
+    output:
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta.assembly"
+    threads: 1
+    shell:
+        """
+        awk -f {input.awkscript} {input.assem} > {output.assembly}
+        """
+
+rule editable_assembly_file:
+    """
+    from https://bitbucket.org/bredeson/artisanal/src/master/
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        assemfromfasta= os.path.abspath(os.path.join( filepath, "../bin/assembly-from-fasta.py"))
+    output:
+        assembly = config["tool"] + "/output/{nom}/{nom}.assembly"
+    params:
+        outprefix = lambda wildcards: config["tool"] + "/output/{d}/{d}".format(
+                     d=wildcards.nom)
+    threads: 1
+    shell:
+        """
+        python {input.assemfromfasta} -c {input.assem} {params.outprefix}
+        """
+
+rule hic_to_pairs:
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        check = config["tool"] + "/input/assembly/{nom}_input.fasta.check",
+        index   = config["tool"] + "/input/assembly/{nom}_input.fasta.index",
+        chromap = chromappath,
+        left  = expand(config["tool"] + "/input/hic/{lib}_R1.fastq.gz",
+                       lib = config["libs"]),
+        right = expand(config["tool"] + "/input/hic/{lib}_R2.fastq.gz",
+                       lib = config["libs"]),
+    output:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs"
+    params:
+        left  = lambda wildcards: " -1 ".join([config["tool"] + f"/input/hic/{x}_R1.fastq.gz" for x in config["libs"]]),
+        right = lambda wildcards: " -2 ".join([config["tool"] + f"/input/hic/{x}_R2.fastq.gz" for x in config["libs"]]),
+        qval  = lambda wildcards: wildcards.qval
+    threads: workflow.cores - 2
+    shell:
+        """
+        {input.chromap} --preset hic -x {input.index} \
+            -r {input.assem} \
+            -1 {params.left}  \
+            -2 {params.right} \
+            -t {threads} \
+            -q {params.qval} \
+            -o {output.pairs}
+        """
+
+rule gzip_pairs:
+    input:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs"
+    output:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz"
+    threads: 1
+    shell:
+        """
+        bgzip -c {input.pairs} > {output.pairs}
+        """
+
+rule pairs2hiclongformat:
+    """
+    from https://github.com/Yujiaxin419/ALLHiC/wiki/Manually-refine-ALLHiC-scaffold-assembly-through-juicebox#hic-files
+    3d-dna long spec can be found here: https://github.com/aidenlab/juicer/wiki/Pre#long-format
+    """
+    input:
+        pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs"
+    output:
+        longp = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.long"
+    threads: 1
+    shell:
+        """
+        grep -v '#' {input.pairs} | \
+        awk '{{if($6!="+") $6=16; else $6=0; if($7!="+") $7=16; else $7=0}} \
+            $2<=$4{{print $6, $2, $3, 0, $7, $4, $5, 1, "1 - - 1  - - -" }} \
+            $4<$2{{print $7, $4, $5, 0, $6, $2, $3, 1, "1 - - 1  - - -" }}' > {output.longp}
+        """
+
+rule get3ddna:
+    """
+    from https://github.com/Yujiaxin419/ALLHiC/wiki/Manually-refine-ALLHiC-scaffold-assembly-through-juicebox#hic-files
+    """
+    output:
+        hicvis = os.path.join(filepath, "../bin/3d-dna/visualize/run-assembly-visualizer.sh")
+    params:
+        mvdir = os.path.join(filepath, "../bin/"),
+        rmdir = os.path.join(filepath, "../bin/3d-dna"),
+    threads: 1
+    shell:
+        """
+        rm -rf 3d-dna
+        rm -rf {params.rmdir}
+        git clone https://github.com/aidenlab/3d-dna.git
+        mv 3d-dna/ {params.mvdir}
+        """
+
+rule JBAT_pairs_to_hic:
+    """
+    Use 3D DNA to make an editable hic file
+
+    This is done in a for loop to avoid race conditions.
+    Done with reverse sorting order to get files faster.
+    """
+    input:
+        hicvis = os.path.join(filepath, "../bin/3d-dna/visualize/run-assembly-visualizer.sh"),
+        longp = expand(config["tool"] + "/output/pairs/{{nom}}/{{nom}}_q_{qval}.long",
+                       qval = config["qvals"]),
+        assembly = config["tool"] + "/input/assembly/{nom}_input.fasta.assembly"
+    output:
+        hicmap = expand(config["tool"] + "/output/{{nom}}/{{nom}}_allLibs_q_{qval}.hic",
+                        qval = config["qvals"])
+    params:
+        outprefix  = lambda wildcards: "{}_input.fasta.hic".format(wildcards.nom),
+        longprefix = config["tool"] + "/output/pairs/{nom}/{nom}_q_",
+        longsuffix = ".long",
+        nom = lambda wildcards: wildcards.nom,
+        mvprefix  = config["tool"] + "/output/{nom}/{nom}_allLibs_q_",
+        mvsuffix  = ".hic",
+        qvalsp = " ".join([str(x) for x in sorted(config["qvals"], reverse=True)])
+    threads: 1
+    shell:
+        """
+        mkdir -p "{wildcards.nom}TEMP"
+        cd "{wildcards.nom}TEMP"
+        for QVAL in {params.qvalsp}; do
+           bash {input.hicvis} -p false ../{input.assembly} ../{params.longprefix}${{QVAL}}{params.longsuffix} || true
+           mv {params.outprefix} ../{params.mvprefix}${{QVAL}}{params.mvsuffix}
+        done
+        rm ./*scaffold_track.txt
+        rm ./*superscaf_track.txt
+        rm ./*asm_mnd.txt
+        cd ../
+        rm -rf  "{wildcards.nom}TEMP"
+        """

@@ -1,0 +1,25 @@
+# Author dts 2020
+# dts@ucsc.edu
+# dschultz@mbari.org
+#
+# This config file is for the script `config_GAP_hic_map7_genomeReview`
+#  https://github.com/conchoecia/genome_assembly_pipelines
+# To use this config file, copy it to the directory you
+#  want to run the hi-c analysis in, then rename it to
+#  config.yaml. Edit the config.yaml file and then run
+#  snakemake --snakfile /path/to/genome_assembly_pipelines/scripts/GAP_hic_map7_genomeReview
+
+# The URL to the fasta sequence of the genome assembly. Uncompressed.
+assemblies:
+  code_name_for_this_assembly: "https://www.ebi.ac.uk/ena/browser/path/to/your/fasta/&result=sequence"
+
+# specify the q-value cutoffs for which you would like to map reads
+# these defaults are q0 and q5. Change it if you would like others.
+qvals: [0, 1]
+
+libs:
+  HiC-lib1:
+    read1:
+    - ftp://ftp.sra.ebi.ac.uk/path_to_R1_hic.fastq.gz
+    read2:
+    - ftp://ftp.sra.ebi.ac.uk/path_to_R2_hic.fastq.gz
