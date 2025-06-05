@@ -4,7 +4,6 @@ This snakefile maps all the HiC reads to a final genome assembly
   - It also calculates the obs/exp matrix, and the pearson exp matrix of that
   - It maps long reads to the assembly then makes a depth histogram that can be
      viewed in HiGlass
-
 font is small here: https://patorjk.com/software/taag
 """
 
