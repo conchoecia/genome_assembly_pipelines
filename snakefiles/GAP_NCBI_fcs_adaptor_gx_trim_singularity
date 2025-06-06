@@ -166,6 +166,7 @@ rule perform_fcs_analysis_round1:
           --container-engine singularity \
           --image {input.fcs_sif}
         mv ./fcs_adaptor_report.txt ../{output.output_report}
+        cd ../
         rm -rf {wildcards.assem}_TEMP
         """
 
@@ -215,7 +216,7 @@ rule perform_contamination_screening_round2:
                 --tax-id  {params.taxid}
         cp {params.tmpdir}/{params.fastaprefix}.{params.taxid}.fcs_gx_report.txt {output.output_report}
         cp {params.tmpdir}/{params.fastaprefix}.{params.taxid}.taxonomy.rpt      {output.taxon_report}
-        #rm -rf {wildcards.assem}_TEMPgx
+        rm -rf {params.tmpdir}
         """
 
 rule trim_contamination_screening_round2:
