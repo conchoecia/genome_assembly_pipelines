@@ -1,7 +1,7 @@
 """
-Filename: GAP_NCBI_fcs_adaptor_gx_trim
+Filename: GAP_NCBI_fcs_adaptor_gx_trim_singularity
 Author: dts (github: @conchoecia)
-Date created: July 26th, 2023
+Date created: May 2025
 
 
 Description:
@@ -9,9 +9,11 @@ Description:
       and other vectors from the reads (FCS-adaptor).
       It also sets up and runs the tool that checks for and removes other
       contamination from prokaryotic organisms (FCS-gx).
-
   - The config file must be set up in the following way that allows multiple
       assemblies to be run at the same time.
+
+Usage:
+
 """
 
 configfile: "config.yaml"

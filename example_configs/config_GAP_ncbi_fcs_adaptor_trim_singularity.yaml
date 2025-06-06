@@ -1,0 +1,34 @@
+# Description: This is the template config.yaml file for the GAP script, GAP_NCBI_fcs_adaptor_gx_trim_singularity
+# Author: Darrin T. Schultz https://github.com/conchoecia
+# Date:   May 2025
+#
+# Copy this example config file to your local directory, rename it as config.yaml.
+# Then, add your genome assembly information. Do not use underscores in the assembly name.
+# Run the program with snakemake --snakefile /your/path/to/genome_assembly_pipelines/snakefiles/GAP_NCBI_fcs_adaptor_trim_singularity
+#
+# This pipeline finds vector contamination with NCBI FCS-adaptor: https://github.com/ncbi/fcs
+
+# This is the path to your folder that contains an up-to-date gxdb database.
+# The instructions to set this up are here: https://github.com/ncbi/fcs/wiki/FCS-GX-quickstart#download-the-fcs-gx-database
+# Just to be clear, this is the directory that contains these files.
+#  - all.assemblies.tsv
+#  - all.blast_div.tsv.gz
+#  - all.gxi
+#  - all.gxs
+#  - all.manifest
+#  - all.meta.jsonl
+#  - all.README.txt
+#  - all.seq_info.tsv.gz
+#  - all.taxa.tsv
+
+# your path to the gxdb folder that you have already installed on your computer
+GXDB_location: /your/path/to/clitellate/GXDB/gxdb
+
+# Now go through and parse all of the assemblies
+assemblies:
+  AssemblyName1:
+    fasta: "/your/path/to/the/fasta/file/hau.hic.fasta"
+    taxid: 13080 # this should be the NCBI taxid for your species
+  AnotherAssembly:
+    fasta: "/your/path/to/the/fasta/file/another.assembly.fasta"
+    taxid: 3077319
