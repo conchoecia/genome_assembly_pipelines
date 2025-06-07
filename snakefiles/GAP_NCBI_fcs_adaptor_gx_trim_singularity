@@ -58,7 +58,8 @@ rule all:
         #       assem = config["assemblies"]),
         expand(config["tool"] + "/round-2-contam_detection/{assem}_round_2_trimmed.fasta",
                assem = config["assemblies"]),
-
+        expand(config["tool"] + "/round-2-contam_detection/{assem}_round_2_contam.fasta",
+               assem = config["assemblies"]),
 
 rule install_fcs_gx_script:
     """
@@ -230,11 +231,12 @@ rule trim_contamination_screening_round2:
         output_report    = config["tool"] + "/round-2-contam_detection/{assem}_round_2_fcs_gx_report.txt",
         script          = os.path.join(filepath, "../scripts/NCBI_fcs_gx_filter.py")
     output:
-        trimmed_assembly = config["tool"] + "/round-2-contam_detection/{assem}_round_2_trimmed.fasta"
+        trimmed_assembly = config["tool"] + "/round-2-contam_detection/{assem}_round_2_trimmed.fasta",
+        contam_assembly  = config["tool"] + "/round-2-contam_detection/{assem}_round_2_contam.fasta"
     threads: 1
     shell:
         """
-        python {input.script} -f {input.trimmed_assembly} -r {input.output_report} > {output.trimmed_assembly}
+        python {input.script} -f {input.trimmed_assembly} -r {input.output_report} -k {output.trimmed_assembly} -c {output.contam_assembly}
         """
 
 #rule perform_fcs_analysis_round1:

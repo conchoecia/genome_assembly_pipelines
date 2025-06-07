@@ -32,9 +32,11 @@ def parse_args():
     Print help if no arguments are given
     """
     parser = argparse.ArgumentParser(description="Split or mask a genome at the contamination sites")
-    parser.add_argument("-f", "--fasta", help="The fasta file to process")
+    parser.add_argument("-f", "--fasta_input", help="The fasta file to process")
     parser.add_argument("-r", "--report", required = True,
                         help="The report file from NCBI FCS-gx")
+    parser.add_argument("-k", "--keep_fasta",   help="This is the fasta file of the KEPT (non-contam) sequences.", required=True)
+    parser.add_argument("-c", "--contam_fasta", help="This is the fasta file of the REJECTED (contam) sequences.", required=True)
     parser.add_argument("-n", "--mask-with-n", action="store_true", help="Mask contaminant regions with Ns instead of splitting")
     args = parser.parse_args()
 
@@ -42,10 +44,14 @@ def parse_args():
         parser.print_help(sys.stderr)
         sys.exit(1)
 
-    if not os.path.isfile(args.fasta):
+    if not os.path.isfile(args.fasta_input):
         raise IOError("The fasta file does not exist")
     if not os.path.isfile(args.report):
         raise IOError("The report file does not exist")
+
+    # ensure that the keep_fasta, contam_fasta, and the fasta are not the same file
+    if len(list(set([args.fasta_input, args.keep_fasta, args.contam_fasta]))) < 3:
+        raise IOError("The fasta_input, keep_fasta, and contam_fasta files must be different")
 
     return args
 
@@ -86,46 +92,66 @@ def parse_fcs_gx_contamination_txt(filepath):
 
     return trim_regions
 
-def parse_fasta(fasta_filepath, trim_regions, mask_with_n=False):
+def parse_fasta(fasta_input, keep_fasta, contam_fasta,
+                trim_regions, mask_with_n=False):
     """
-    Read in the fasta file and print out only the parts that
-     haven't been marked to trim.
+    Process a FASTA file by removing or masking contaminant regions.
 
-    We don't trust the joins that were previously made by the "trim" sequences,
-     therefore we don't hardmask.
-
-    Print to std.out
+    Args:
+        fasta_input (str): Path to input FASTA file.
+        keep_fasta (str): Path to output FASTA for retained sequences.
+        contam_fasta (str): Path to output FASTA for removed contaminant sequences.
+        trim_regions (dict): Dict mapping sequence IDs to sets of (start, stop) tuples.
+        mask_with_n (bool): If True, contaminant regions are masked with Ns instead of being removed.
     """
-    outhandle = sys.stdout
+    handle = open(fasta_input, "r")
+    keep_out = open(keep_fasta, "w")
+    contam_out = open(contam_fasta, "w")
 
-    # now read in the next sequences and trim out the bad parts
-    with open(fasta_filepath, "r") as handle:
-        for record in SeqIO.parse(handle, "fasta"):
-            scaf_counter = 1
-            if record.id not in trim_regions:
-                SeqIO.write(record, outhandle, "fasta")
-            else:
-                if mask_with_n:
-                    new_seq = list(str(record.seq))
-                    for start, stop in trim_regions[record.id]:
-                        for i in range(start, stop):
-                            if i < len(new_seq):
-                                new_seq[i] = 'N'
-                    masked_record = SeqRecord(Seq("".join(new_seq)), id=record.id, description=record.description)
-                    SeqIO.write(masked_record, outhandle, "fasta")
-                else:
-                    ranges_to_remove = trim_regions[record.id]
-                    keep_ranges = invert_ranges(ranges_to_remove, len(record.seq))
-                    print("Keeping these ranges in {}:".format(record.id), file=sys.stderr)
-                    print(keep_ranges, file=sys.stderr)
-                    for keep_seq in extract_ranges(str(record.seq), keep_ranges):
-                        if len(keep_seq) < 10:
-                            # Skip very short or empty sequences
-                            continue
-                        seqpiece = record.id + "::" + "piece" + str(scaf_counter)
-                        sr = SeqRecord(Seq(keep_seq), seqpiece, '', '')
-                        SeqIO.write(sr, outhandle, "fasta")
-                        scaf_counter += 1
+    for record in SeqIO.parse(handle, "fasta"):
+        scaf_counter = 1
+        removed_counter = 1
+
+        if record.id not in trim_regions:
+            SeqIO.write(record, keep_out, "fasta")
+            continue
+
+        if mask_with_n:
+            new_seq = list(str(record.seq))
+            for start, stop in trim_regions[record.id]:
+                for i in range(start, stop):  # stop is exclusive
+                    if i < len(new_seq):
+                        new_seq[i] = 'N'
+            masked_record = SeqRecord(Seq("".join(new_seq)), id=record.id, description=record.description)
+            SeqIO.write(masked_record, keep_out, "fasta")
+        else:
+            ranges_to_remove = trim_regions[record.id]
+            keep_ranges = invert_ranges(ranges_to_remove, len(record.seq))
+
+            print(f"Keeping these ranges in {record.id}:", file=sys.stderr)
+            print(keep_ranges, file=sys.stderr)
+
+            # Write retained fragments
+            for keep_seq in extract_ranges(str(record.seq), keep_ranges):
+                if len(keep_seq) < 10:
+                    continue
+                seqpiece = f"{record.id}::piece{scaf_counter}"
+                sr = SeqRecord(Seq(keep_seq), seqpiece, '', '')
+                SeqIO.write(sr, keep_out, "fasta")
+                scaf_counter += 1
+
+            # Write removed fragments
+            for trim_seq in extract_ranges(str(record.seq), sorted(ranges_to_remove)):
+                if len(trim_seq) < 10:
+                    continue
+                seqpiece = f"{record.id}::removed{removed_counter}"
+                sr = SeqRecord(Seq(trim_seq), seqpiece, '', '')
+                SeqIO.write(sr, contam_out, "fasta")
+                removed_counter += 1
+
+    handle.close()
+    keep_out.close()
+    contam_out.close()
 
 def invert_ranges(ranges_to_remove, string_length):
     """
@@ -176,7 +202,8 @@ def main():
 
     trim_regions = parse_fcs_gx_contamination_txt(args.report)
     print_trim_regions(trim_regions)  # optional
-    parse_fasta(args.fasta, trim_regions, mask_with_n=args.mask_with_n)
+    parse_fasta(args.fasta_input, args.keep_fasta, args.contam_fasta,
+                trim_regions, mask_with_n=args.mask_with_n)
 
 if __name__ == "__main__":
     main()
