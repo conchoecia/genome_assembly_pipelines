@@ -13,7 +13,7 @@ import os
 import sys
 minchromsize = 1000000
 configfile: "config.yaml"
-config["tool"] = "GAP_hic_map7"
+config["tool"] = "GAP_telomere_bigwig"
 
 for x in config["assemblies"]:
     if "_" in x:
