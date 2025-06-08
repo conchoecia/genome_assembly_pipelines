@@ -1,10 +1,36 @@
 """
-This snakefile makes a bigwig file of the telomere sequences in both orientations.
+Program  : GAP_telomere_bigwig
+Language : snakemake
+Date     : 2025-06
+Author   : Darrin T. Schultz
+Email    : darrin.schultz@univie.ac.at
+Github   : https://github.com/conchoecia/genome_assembly_pipelines
+Support  : For issues or questions, please search if the topic has been discussed already
+           on github and open a new issue if not: https://github.com/conchoecia/genome_assembly_pipelines/issues
+License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
+Citation : Please cite the GAP repository in your publications.
 
-The user provides the sequence in 5'->3' direction.
-So the "beginning" of the scaffold should show the reverse complement of the telomere sequence,
- while the "end" of the scaffold should show the telomere sequence in the 5'->3' direction.
+Description:
+  This Snakemake workflow is part of the Genome Assembly Pipelines (GAP) repository.
+  It scans genome assemblies for telomeric repeat sequences (e.g., TTAGGG and its reverse complement),
+  quantifies their distribution along scaffolds, and generates strand-specific bigWig coverage files.
 
+  The workflow can also optionally combine paired telomeric repeat tracks (forward and reverse complements)
+  into multivec files for visualization in HiGlass or other multiscale genome browsers.
+   (HiGlass multivec functionality is currently in development out.)
+
+  Key features include:
+    - Support for custom telomeric repeat motifs (specified 5'->3')
+    - Separate bigWig files for each repeat orientation
+    - Multivec construction for paired telomeric motifs
+    - Compatibility with assemblies provided in FASTA format
+
+Usage instructions:
+  - See https://github.com/conchoecia/genome_assembly_pipelines#getting-started
+  - Copy the /path/to/genome_assembly_pipelines/example_configs/config_GAP_telomere_bigwig.yaml
+    to your working directory and rename it to config.yaml.
+  - Define assemblies and telomeric motifs in `config.yaml`
+  - Run with: `snakemake --cores N --snakefile /path/to/genome_assembly_pipelines/snakefiles/GAP_telomere_bigwig`
 """
 
 from Bio import SeqIO

@@ -1,0 +1,21 @@
+# Author dts 2025
+# darrin.schultz@univie.ac.at
+#
+# This config file is for the script `config_GAP_telomere_bigwig.yaml`
+#  https://github.com/conchoecia/genome_assembly_pipelines
+# To use this config file, copy it to the directory you
+#  want to run the telomere analysis in, then rename it to
+#  config.yaml. Edit the config.yaml file and then run
+#  snakemake --snakfile /path/to/genome_assembly_pipelines/scripts/GAP_telomere_bigwig
+
+# The path to your assembly for which you want to analyze the telomeres goes here.
+#  The assembly name can only contain alphanumeric characters.
+assemblies:
+  AssemName: "/path/to/your/assembly.fasta"
+
+# This should only include the 5'->3' sequence of the telomere repeat unit.
+#  In most animals, this is TTAGGG.
+# Do not include the reverse complement or the 3'->5' sequence.
+#  For example, do not include CCCTAA if the telomere repeat unit is TTAGGG.
+telomere_seqs:
+  - TTAGGG
