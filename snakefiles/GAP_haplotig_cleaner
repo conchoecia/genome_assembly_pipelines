@@ -1,8 +1,36 @@
 """
-This snakefile maps smaller scaffolds to chromosome-level scaffolds.
-Then it removes scaffolds that have greater than a cutoff percentage of their length
-  mapped to the chromosome-level scaffolds. These are likely haplotigs and they are
-  then removed from the assembly.
+Program  : GAP_haplotig_cleaner
+Language : snakemake
+Date     : 2025-06
+Author   : Darrin T. Schultz
+Email    : darrin.schultz@univie.ac.at
+Github   : https://github.com/conchoecia/genome_assembly_pipelines
+Support  : For issues or questions, please search if the topic has been discussed already
+           on github and open a new issue if not: https://github.com/conchoecia/genome_assembly_pipelines/issues
+License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
+Citation : Please cite the GAP repository in your publications.
+
+Description:
+  This Snakemake workflow is part of the Genome Assembly Pipelines (GAP) repository.
+  It identifies and removes likely haplotigs from draft genome assemblies by mapping
+  shorter scaffolds against chromosome-scale sequences and calculating alignment coverage.
+
+  Scaffolds that align above a user-defined threshold (default: 75%) are flagged as redundant
+  and filtered out. The remaining nonredundant scaffolds are renamed and merged with
+  chromosome-scale sequences to generate a cleaned genome assembly.
+
+  Key features include:
+    - Customizable percent-coverage threshold for haplotig filtering
+    - Sequence renaming of retained small scaffolds (e.g., scaffold_1, scaffold_2, …)
+    - Final output includes a cleaned genome and a separate file of redundant scaffolds
+    - Compatible with FASTA-format assemblies and requires minimap2, samtools, and BioPython
+
+Usage instructions:
+  - See https://github.com/conchoecia/genome_assembly_pipelines#getting-started
+  - Copy the /path/to/genome_assembly_pipelines/example_configs/config_GAP_haplotig_cleaner.yaml
+    to your working directory and rename it to config.yaml.
+  - Define assemblies and chromosome-scale scaffold name patterns in `config.yaml`
+  - Run with: `snakemake --cores N --snakefile /path/to/genome_assembly_pipelines/snakefiles/GAP_haplotig_cleaner`
 """
 
 from Bio import SeqIO
@@ -20,12 +48,8 @@ for x in config["assemblies"]:
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 
 wildcard_constraints:
-    datatype="[A-Za-z0-9]+",
-    kmer="[A-Za-z0-9]+",
     nom="[A-Za-z0-9.]+",
-    telo="[A-Za-z0-9]+",
-    binsize="[0-9]+",
-    qval="[0-9]+"
+
 rule all:
     input:
         expand(config["tool"] + "/output/{nom}/{nom}_aligned_lengths.txt",
@@ -35,9 +59,7 @@ rule all:
         expand(config["tool"] + "/output/{nom}/{nom}_cleaned.fasta",
             nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/{nom}_haplotigs.fasta",
-            nom = config["assemblies"]),
-
-
+            nom = config["assemblies"])
 
 # make softlinks of the input files
 # files end up here:

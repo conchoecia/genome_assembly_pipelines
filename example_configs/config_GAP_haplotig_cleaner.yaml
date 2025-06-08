@@ -1,0 +1,28 @@
+# Author: Darrin T. Schultz, 2025
+# Email : darrin.schultz@univie.ac.at
+#
+# This config file is for the Snakemake pipeline `GAP_haplotig_cleaner`
+#   https://github.com/conchoecia/genome_assembly_pipelines
+#
+# To use this config file:
+#   1. Copy this file to your working directory
+#   2. Rename it to: config.yaml
+#   3. Edit the values below to match your assembly
+#   4. Run with:
+#        snakemake --cores N --snakefile /path/to/genome_assembly_pipelines/snakefiles/GAP_haplotig_cleaner
+
+# Provide one or more assemblies in FASTA format.
+#   The key must be an alphanumeric name (A–Z, a–z, 0–9) with no special characters or underscores.
+#   The value must be the full path to the assembly file.
+assemblies:
+  AssemName: "/path/to/your/assembly.fasta"
+
+# Substrings used to identify chromosome-scale scaffolds in the FASTA headers.
+#   These will be matched case-sensitively (e.g., 'chr' will match 'chr1' but not 'Chr1').
+#   You can customize these depending on how your assembly names chromosomes.
+chromosome_patterns: ["chr", "Chr", "chromosome"]
+
+# Minimum percent alignment for a scaffold to be flagged as redundant (likely a haplotig).
+#   For example, if set to 75, then a scaffold that aligns ≥75% of its length to a chromosome
+#   will be filtered out and written to the `*_haplotigs.fasta` file.
+min_alignment_pct: 75
