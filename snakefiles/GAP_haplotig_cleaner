@@ -1,0 +1,252 @@
+"""
+This snakefile maps smaller scaffolds to chromosome-level scaffolds.
+Then it removes scaffolds that have greater than a cutoff percentage of their length
+  mapped to the chromosome-level scaffolds. These are likely haplotigs and they are
+  then removed from the assembly.
+"""
+
+from Bio import SeqIO
+import os
+import pandas as pd
+from pathlib import Path
+
+configfile: "config.yaml"
+config["tool"] = "GAP_haplotig_cleaner"
+
+for x in config["assemblies"]:
+    if "_" in x:
+        raise IOError("You must not have any special characters in the assembly names: {}. Just use [A-Za-z0-9]+".format(x))
+
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+
+wildcard_constraints:
+    datatype="[A-Za-z0-9]+",
+    kmer="[A-Za-z0-9]+",
+    nom="[A-Za-z0-9.]+",
+    telo="[A-Za-z0-9]+",
+    binsize="[0-9]+",
+    qval="[0-9]+"
+rule all:
+    input:
+        expand(config["tool"] + "/output/{nom}/{nom}_aligned_lengths.txt",
+            nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_haplotig_filtering_summary.tsv",
+            nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_cleaned.fasta",
+            nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_haplotigs.fasta",
+            nom = config["assemblies"]),
+
+
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule chrom_size:
+    """
+    make a file with the chromosome sizes
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    threads: 1
+    shell:
+        """
+        bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
+        """
+
+rule split_scaffolds:
+    """
+    Reads the fasta file and splits it into:
+      - a list and fasta file of chromosome-scale scaffolds
+      - a list and fasta file of smaller scaffolds
+    """
+    input:
+        assem     = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        chr_list    = config["tool"] + "/input/{nom}_chrlist.txt",
+        scaf_list   = config["tool"] + "/input/{nom}_scaflist.txt",
+        chr_fasta   = config["tool"] + "/input/{nom}_chr_scafs.fasta",
+        scaf_fasta  = config["tool"] + "/input/{nom}_scaffold_scafs.fasta"
+    params:
+        chromos = config["chromosome_patterns"]
+    run:
+        chr_records = []
+        scaf_records = []
+        chr_list = []
+        scaf_list = []
+
+        for record in SeqIO.parse(input.assem, "fasta"):
+            if any(pattern in record.id for pattern in params.chromos):
+                chr_records.append(record)
+                chr_list.append(record.id)
+            else:
+                scaf_records.append(record)
+                scaf_list.append(record.id)
+
+        Path(config["tool"] + "/input").mkdir(parents=True, exist_ok=True)
+
+        with open(output.chr_list, "w") as chr_fh:
+            chr_fh.write("\n".join(chr_list) + "\n")
+        with open(output.scaf_list, "w") as scaf_fh:
+            scaf_fh.write("\n".join(scaf_list) + "\n")
+
+        with open(output.chr_fasta, "w") as chr_fa:
+            SeqIO.write(chr_records, chr_fa, "fasta")
+        with open(output.scaf_fasta, "w") as scaf_fa:
+            SeqIO.write(scaf_records, scaf_fa, "fasta")
+
+rule align_scaffolds:
+    input:
+        chr  = config["tool"] + "/input/{nom}_chr_scafs.fasta",
+        scaf = config["tool"] + "/input/{nom}_scaffold_scafs.fasta"
+    output:
+        bam = config["tool"] + "/output/{nom}/{nom}_scaffolds_vs_chr.filtered.sorted.bam"
+    threads: workflow.cores
+    shell:
+        """
+        mkdir -p $(dirname {output.bam})
+        minimap2 -t {threads} -a {input.chr} {input.scaf} | \
+            samtools view -@ {threads} -F 2308 -b - | \
+            samtools sort -@ {threads} -o {output.bam}
+        samtools index {output.bam}
+        """
+
+rule get_scaffold_lengths:
+    input:
+        fasta = config["tool"] + "/input/{nom}_scaffold_scafs.fasta"
+    output:
+        lengths = config["tool"] + "/output/{nom}/{nom}_scaffold_lengths.txt"
+    shell:
+        """
+        mkdir -p $(dirname {output.lengths})
+        samtools faidx {input.fasta}
+        cut -f1,2 {input.fasta}.fai > {output.lengths}
+        """
+
+rule get_aligned_lengths:
+    input:
+        bam     = config["tool"] + "/output/{nom}/{nom}_scaffolds_vs_chr.filtered.sorted.bam",
+        awk_script = os.path.join(filepath, "../scripts/extract_aligned_lengths.awk")
+    output:
+        aligned = config["tool"] + "/output/{nom}/{nom}_aligned_lengths.txt"
+    shell:
+        """
+        samtools view -F 2308 {input.bam} | \
+          awk -f {input.awk_script} > {output.aligned}
+        """
+
+rule report_haplotig_overlap_filtering:
+    """
+    Computes retention stats for each overlap threshold (0–100%).
+    Outputs a TSV file showing retained/deleted scaffolds and basepair totals.
+    """
+    input:
+        lengths = config["tool"] + "/output/{nom}/{nom}_scaffold_lengths.txt",
+        aligned = config["tool"] + "/output/{nom}/{nom}_aligned_lengths.txt"
+    output:
+        report = config["tool"] + "/output/{nom}/{nom}_haplotig_filtering_summary.tsv"
+    run:
+        import pandas as pd
+
+        # Load lengths and alignments
+        lengths_df = pd.read_csv(input.lengths, sep="\t", header=None, names=["scaf", "length"])
+        aligned_df = pd.read_csv(input.aligned, sep="\s+", header=None, names=["scaf", "aligned"])
+
+        merged = pd.merge(lengths_df, aligned_df, on="scaf", how="left").fillna(0)
+        merged["pct_mapped"] = (merged["aligned"] / merged["length"]) * 100
+
+        # Open output file
+        with open(output.report, "w") as out:
+            out.write("threshold_pct\tscaffolds_retained\tscaffolds_removed\tretained_bp\tremoved_bp\tpct_bp_retained\tpct_bp_removed\n")
+            for threshold in range(0, 101, 5):
+                retained = merged[merged["pct_mapped"] < threshold]
+                removed = merged[merged["pct_mapped"] >= threshold]
+
+                retained_count = len(retained)
+                removed_count = len(removed)
+
+                retained_bp = retained["length"].sum()
+                removed_bp = removed["length"].sum()
+                total_bp = retained_bp + removed_bp
+
+                out.write(f"{threshold}\t{retained_count}\t{removed_count}\t{retained_bp}\t{removed_bp}\t{100 * retained_bp / total_bp:.2f}\t{100 * removed_bp / total_bp:.2f}\n")
+
+rule filter_redundant:
+    input:
+        lengths     = config["tool"] + "/output/{nom}/{nom}_scaffold_lengths.txt",
+        aligned     = config["tool"] + "/output/{nom}/{nom}_aligned_lengths.txt",
+        scaf_list   = config["tool"] + "/input/{nom}_scaflist.txt"
+    output:
+        redundant     = config["tool"] + "/output/{nom}/{nom}_redundant_scaffolds.txt",
+        nonredundant  = config["tool"] + "/output/{nom}/{nom}_nonredundant_scaf_list.txt"
+    params:
+        pct = config["min_alignment_pct"]
+    run:
+        import pandas as pd
+
+        # Load data
+        lengths_df = pd.read_csv(input.lengths, sep="\t", header=None, names=["scaf", "length"])
+        aligned_df = pd.read_csv(input.aligned, sep="\s+", header=None, names=["scaf", "aligned"])
+        scaf_list  = pd.read_csv(input.scaf_list, header=None, names=["scaf"])
+
+        # Merge and compute percent mapped
+        merged = pd.merge(lengths_df, aligned_df, on="scaf", how="left").fillna(0)
+        merged["pct_mapped"] = (merged["aligned"] / merged["length"]) * 100
+
+        # Filter based on threshold
+        redundant = merged[merged["pct_mapped"] >= params.pct]["scaf"]
+        redundant.to_csv(output.redundant, index=False, header=False)
+
+        # Find non-redundant scaffolds by removing those in the redundant list
+        nonredundant = scaf_list[~scaf_list["scaf"].isin(redundant)]
+        nonredundant.to_csv(output.nonredundant, index=False, header=False)
+
+rule make_final_fastas:
+    """
+    Create:
+      - Final cleaned assembly (chr + renamed nonredundant scaffolds)
+      - Redundant scaffold FASTA
+    """
+    input:
+        chr_fasta      = config["tool"] + "/input/{nom}_chr_scafs.fasta",
+        scaf_fasta     = config["tool"] + "/input/{nom}_scaffold_scafs.fasta",
+        keep_list      = config["tool"] + "/output/{nom}/{nom}_nonredundant_scaf_list.txt",
+        redundant_list = config["tool"] + "/output/{nom}/{nom}_redundant_scaffolds.txt"
+    output:
+        cleaned_fasta   = config["tool"] + "/output/{nom}/{nom}_cleaned.fasta",
+        redundant_fasta = config["tool"] + "/output/{nom}/{nom}_haplotigs.fasta"
+    run:
+        # Load scaffold IDs
+        with open(input.keep_list) as f:
+            keep_ids = set(line.strip() for line in f)
+        with open(input.redundant_list) as f:
+            redundant_ids = set(line.strip() for line in f)
+
+        Path(output.cleaned_fasta).parent.mkdir(parents=True, exist_ok=True)
+
+        # Load records
+        chr_records = list(SeqIO.parse(input.chr_fasta, "fasta"))
+        scaf_records = list(SeqIO.parse(input.scaf_fasta, "fasta"))
+
+        # Separate and rename
+        kept_renamed = []
+        redundant = []
+        count = 1
+        for record in scaf_records:
+            if record.id in keep_ids:
+                record.id = f"scaffold_{count}"
+                record.description = ""
+                kept_renamed.append(record)
+                count += 1
+            elif record.id in redundant_ids:
+                redundant.append(record)
+
+        # Write final output FASTAs
+        SeqIO.write(chr_records + kept_renamed, output.cleaned_fasta, "fasta")
+        SeqIO.write(redundant, output.redundant_fasta, "fasta")
