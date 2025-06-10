@@ -31,11 +31,19 @@ Usage instructions:
     to your working directory and rename it to config.yaml.
   - Define assemblies and telomeric motifs in `config.yaml`
   - Run with: `snakemake --cores N --snakefile /path/to/genome_assembly_pipelines/snakefiles/GAP_telomere_bigwig`
+
+Unique Requirements:
+  - pyBigWig
 """
 
 from Bio import SeqIO
 import gzip
+import matplotlib.pyplot as plt
+from matplotlib import rcParams
+import numpy as np
 import os
+import pyBigWig
+
 import sys
 minchromsize = 1000000
 configfile: "config.yaml"
@@ -117,7 +125,12 @@ rule all:
         # Telomere and kmer depth bigwigs
         expand(config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.bw",
                telo = flatten(config["telomere_strands"].values()),
-               nom = config["assemblies"])
+               nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/plots/{nom}_allData_linear_track.pdf",
+            nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/plots/{nom}_stacked_per_scaffold.pdf",
+            nom = config["assemblies"])
+
         #expand(config["tool"] + "/output/{nom}/{nom}_kmer_{kmer}.bw",
         #       kmer = config["kmers"], nom = config["assemblies"]),
 
@@ -362,3 +375,175 @@ rule bedgraph_and_bed2bigwig:
         {input.bedsort} {input.depth} {output.depth}
         {input.bed2bw} {output.depth} {input.cs} {output.bw}
         """
+
+rule plot_bigwig_track:
+    """
+    Plot a telomere or kmer bigWig-like track along the genome, concatenated across chromosomes.
+    Chromosome boundaries are marked with vertical yellow bars.
+    """
+    input:
+        kmers = expand(config["tool"] + "/output/{{nom}}/{{nom}}_kmer_{kmer}.bw",
+                        kmer = config["kmers"]),
+        telos = expand(config["tool"] + "/output/{{nom}}/{{nom}}_teloKmer_{kmer}.bw",
+                     kmer = flatten(config["telomere_strands"].values())),
+        chromsizes = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        plot = config["tool"] + "/output/{nom}/plots/{nom}_allData_linear_track.pdf"
+    run:
+        rcParams['pdf.fonttype'] = 42  # Ensures text is stored as actual text in PDF
+        rcParams['ps.fonttype'] = 42
+
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+
+        # Load chromsizes and compute offsets
+        chrom_order = []
+        chrom_lengths = []
+        with open(input.chromsizes) as f:
+            for line in f:
+                chrom, size = line.strip().split("\t")
+                chrom_order.append(chrom)
+                chrom_lengths.append(int(size))
+        total_len = sum(chrom_lengths)
+        chrom_starts = np.cumsum([0] + chrom_lengths[:-1])
+        chrom_offsets = {chrom: offset for chrom, offset in zip(chrom_order, chrom_starts)}
+
+        # Combine all bigWigs to be plotted
+        all_tracks = input.kmers + input.telos
+        track_labels = (
+            [f"kmer_{os.path.basename(f).split('_kmer_')[-1].replace('.bw', '')}" for f in input.kmers] +
+            [f"telo_{os.path.basename(f).split('_teloKmer_')[-1].replace('.bw', '')}" for f in input.telos]
+        )
+
+        fig, axes = plt.subplots(nrows=len(all_tracks), ncols=1, figsize=(20, 1.5 * len(all_tracks)), sharex=True)
+        if len(all_tracks) == 1:
+            axes = [axes]  # Ensure iterable even if one track
+
+        for ax, track_path, label in zip(axes, all_tracks, track_labels):
+            bw = pyBigWig.open(track_path)
+            x = []
+            y = []
+            for chrom in chrom_order:
+                vals = bw.values(chrom, 0, chrom_lengths[chrom_order.index(chrom)])
+                vals = np.nan_to_num(vals, nan=0.0)
+                offset = chrom_offsets[chrom]
+                x.extend(range(offset, offset + len(vals)))
+                y.extend(vals)
+            bw.close()
+            ax.plot(x, y, lw=0.5)
+            ax.set_ylabel(label, rotation=0, ha="right", va="center")
+            ax.set_ylim(0, max(y) * 1.05 if max(y) > 0 else 1)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            for boundary in chrom_starts[1:]:
+                ax.axvline(x=boundary, color="gold", lw=1, linestyle="-")
+
+        axes[-1].set_xlabel("Genomic position (bp, concatenated)")
+        plt.tight_layout()
+        plt.savefig(output.plot, format='pdf')
+
+rule plot_bigwig_track_per_scaffold:
+    """
+    For scaffolds ≥1 Mbp, plot bigWig-like kmer/telomere tracks stacked vertically.
+    Each scaffold is plotted separately, left-aligned, and to scale.
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        kmers = expand(config["tool"] + "/output/{{nom}}/{{nom}}_kmer_{kmer}.bw",
+                        kmer = config["kmers"]),
+        telos = expand(config["tool"] + "/output/{{nom}}/{{nom}}_teloKmer_{kmer}.bw",
+                     kmer = flatten(config["telomere_strands"].values())),
+        chromsizes = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
+    output:
+        plot = config["tool"] + "/output/{nom}/plots/{nom}_stacked_per_scaffold.pdf"
+    run:
+        plt.rcParams['pdf.fonttype'] = 42
+        plt.rcParams['ps.fonttype'] = 42
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+
+        # Load scaffold sizes
+        chroms = []
+        chrom_lens = []
+        with open(input.assem) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                if len(record.seq) < minchromsize:
+                    continue  # Skip scaffolds smaller than 1 Mbp
+                chroms.append(record.id)
+                chrom_lens.append(len(record.seq))
+        max_len = max(chrom_lens)
+
+        # Sort tracks by label
+        def extract_kmer_only(label):
+            return label.split("_")[-1]  # works for both "kmer_X" and "telo_Y"
+
+        track_info = sorted(
+            zip(
+                input.kmers + input.telos,
+                [f"kmer_{os.path.basename(f).split('_kmer_')[-1].replace('.bw', '')}" for f in input.kmers] +
+                [f"telo_{os.path.basename(f).split('_teloKmer_')[-1].replace('.bw', '')}" for f in input.telos]
+            ),
+            key=lambda x: extract_kmer_only(x[1])
+        )
+
+        all_tracks, track_labels = zip(*track_info)
+        n_tracks = len(all_tracks)
+
+        # Calculate vertical space needed
+        fig = plt.figure(figsize=(12, len(chroms) * (0.3 + 0.25 * (n_tracks + 1))))
+
+        x_margin = 0.10
+        y_margin = 0.02
+        track_height = 0.2 / len(chroms)  # control vertical spacing
+        bar_height = 0.05 / len(chroms)
+        y_space = (track_height * n_tracks + bar_height + y_margin)
+
+        for i, (chrom, chrom_len) in enumerate(zip(chroms, chrom_lens)):
+            width_frac = 0.85 * (chrom_len / max_len)
+            x0 = x_margin
+            y_base = 1 - ((i + 1) * y_space)
+
+            # Plot tracks
+            for j, (track_path, label) in enumerate(zip(all_tracks, track_labels)):
+                ax = fig.add_axes([x0, y_base + j * track_height, width_frac, track_height])
+                ax.set_facecolor("none")
+
+                bw = pyBigWig.open(track_path)
+                if chrom not in bw.chroms():
+                    print(f"Warning: {chrom} not in {track_path}", file=sys.stderr)
+                    bw.close()
+                    continue
+
+                chrom_len = min(chrom_len, bw.chroms()[chrom])
+                vals = np.array(bw.values(chrom, 0, chrom_len))  # keep NaNs!
+                x = np.arange(chrom_len)
+                valid = ~np.isnan(vals)
+                bw.close()
+
+                if np.any(valid):
+                    ax.plot(x[valid], vals[valid], lw=0.4, clip_on=False)
+
+                # Clean up axes
+                ax.set_xlim(0, chrom_len)
+                ymax = max(10, max(vals) * 1.1 if np.any(vals) else 1)
+                ax.set_ylim(0, ymax)
+                ax.set_yticks([ymax/2, ymax])
+                ax.set_yticklabels([label, round(ymax)], fontsize=5)
+                ax.tick_params(axis='y', length=0)
+                ax.set_xticks([])
+                ax.spines[:].set_visible(False)
+
+            # Plot black bar with ticks + chromosome label
+            ax_bar = fig.add_axes([x0, y_base - bar_height, width_frac, bar_height])
+            ax_bar.set_xlim(0, chrom_len)
+            ax_bar.set_ylim(0, 1)
+            ax_bar.hlines(0.5, 0, chrom_len, color="black", lw=3)
+            ax_bar.set_yticks([])
+
+            ax_bar.set_xticks([0, chrom_len])
+            ax_bar.set_xticklabels(["0", f"{chrom_len:,}"], fontsize=6)
+
+            ax_bar.spines[:].set_visible(False)
+            ax_bar.tick_params(axis='x', length=2, labelsize=6)
+            ax_bar.set_xlabel(chrom, fontsize=8, labelpad=3, loc='center')
+
+        fig.text(0.5, 0.01, 'Genomic position (bp)', ha='center', fontsize=10)
+        fig.savefig(output.plot, format="pdf")

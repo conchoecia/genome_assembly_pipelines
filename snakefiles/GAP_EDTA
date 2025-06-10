@@ -8,31 +8,21 @@ import subprocess
 minchromsize = 1000000
 configfile: "config.yaml"
 
-#def get_chromosome_sizes(assembly_file, minsize):
-#    """
-#    returns a set of chromosomes to keep
-#    """
-#    chroms = []
-#    with open(assembly_file) as handle:
-#        for record in SeqIO.parse(handle, "fasta"):
-#            if len(record.seq) >= minsize:
-#                chroms.append(record.id)
-#    return chroms
-
 config["tool"] = "GAP_EDTA"
-
-#def run_EDTA(commands):
 
 rule all:
     input:
-        #run EDTA on all the the genomes in the config file
-        expand(config["tool"] + "/output/EDTA/{nom}/{nom}_input.fasta.mod.EDTA.intact.gff3",
+        #expand(config["tool"] + "/input/{nom}_transcripts.fasta.transdecoder_dir/longest_orfs.cds",
+        #       nom = config["assemblies"]),
+        #expand(config["tool"] + "/input/longest_orfs.fasta",
+        #       nom = config["assemblies"]),
+        expand(config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.TEanno.gff3",
                nom = config["assemblies"])
-        #expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
+        ##run EDTA on all the the genomes in the config file
+        #expand(config["tool"] + "/output/EDTA/{nom}/{nom}_input.fasta.mod.EDTA.intact.gff3",
         #       nom = config["assemblies"])
-
-#for entry in config["assemblies"]:
-#    print(config["assemblies"][entry]["transcripts"])
+        ##expand(config["tool"] + "/output/{nom}/{nom}_chromsize.txt",
+        ##       nom = config["assemblies"])
 
 # make softlinks of the input files
 # files end up here:
@@ -43,7 +33,7 @@ softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlink
 rule softlink_assembly:
     """softlink the assembly"""
     input:
-        assem = lambda wildcards: os.path.abspath(config["assemblies"][wildcards.nom]["assembly"])
+        assem = lambda wildcards: os.path.abspath(config["assemblies"][wildcards.nom])
     output:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
     threads: 1
@@ -52,17 +42,40 @@ rule softlink_assembly:
         ln -s {input.assem} {output.assem}
         """
 
-rule softlink_cds:
-    """just softlink the transcripts so they're easier to refer to"""
+rule concat_transcripts:
+    """Concatenate all transcript FASTA files into one per assembly"""
     input:
-        #assem = lambda wildcards: os.path.abspath(config["assemblies"][wildcards.nom])
-        transcripts = lambda wildcards: os.path.abspath(config["assemblies"][wildcards.nom]["transcripts"])
+        transcripts=lambda wildcards: config["transcripts"]
     output:
-        transcripts = config["tool"] + "/input/transcripts/{nom}_transcripts.fasta"
+        combined=config["tool"] + "/input/transcripts.fasta"
     threads: 1
+    run:
+        import os
+        from Bio import SeqIO
+
+        os.makedirs(os.path.dirname(output.combined), exist_ok=True)
+
+        with open(output.combined, "w") as outfile:
+            for transcript_file in input.transcripts:
+                for record in SeqIO.parse(transcript_file, "fasta"):
+                    SeqIO.write(record, outfile, "fasta")
+
+rule transdecoder_longorfs:
+    """Run TransDecoder to extract CDS regions from transcripts"""
+    input:
+        transcripts=config["tool"] + "/input/transcripts.fasta"
+    output:
+        cds    = config["tool"] + "/input/longest_orfs.fasta"
+    params:
+        outdir = config["tool"] + "/input",
+        cds    = config["tool"] + "/input/transcripts.fasta.transdecoder_dir/longest_orfs.cds",
+        rmdir  = config["tool"] + "/input/transcripts.fasta.transdecoder_dir/"
+    threads: workflow.cores
     shell:
         """
-        ln -s {input.transcripts} {output.transcripts}
+        TransDecoder.LongOrfs -t {input.transcripts} --output_dir {params.outdir}
+        mv {params.cds} {output.cds}
+        rm -rf {params.rmdir}
         """
 
 rule run_EDTA:
@@ -71,32 +84,31 @@ rule run_EDTA:
     """
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
-        transcripts = config["tool"] + "/input/transcripts/{nom}_transcripts.fasta"
+        transcripts = config["tool"] + "/input/longest_orfs.fasta"
     output:
-        intact = config["tool"] + "/output/EDTA/{nom}/{nom}_input.fasta.mod.EDTA.intact.gff3",
-        anno   = config["tool"] + "/output/EDTA/{nom}/{nom}_input.fasta.mod.EDTA.TEanno.gff3",
-        stats  = config["tool"] + "/output/EDTA/{nom}/{nom}_input.fasta.mod.EDTA.TEanno.sum",
-        log  =   config["tool"] + "/output/EDTA/{nom}/{nom}_input.fasta.mod.EDTA.log"
+        intact = config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.intact.gff3",
+        anno   = config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.TEanno.gff3",
+        stats  = config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.TEanno.sum"
+        #log  =   config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.log"
     params:
         outdir1 = lambda wildcards: config["tool"] + "/output",
-        outdir2 = lambda wildcards: config["tool"] + "/output/EDTA",
-        outdir3 = lambda wildcards: config["tool"] + "/output/EDTA/{}".format(wildcards.nom)
-    threads: 20
-    run:
-        cmd = """
-              mkdir -p {};
-              mkdir -p {};
-              mkdir -p {};
-              cd {};
-              EDTA.pl --genome ../../../../{} \
-                --cds ../../../../{} \
-                --overwrite 1 \
-                --force 1 \
-                --sensitive 1 \
-                --anno 1 \
-                --evaluate 1 \
-                --threads {} > ../../../../{} 2>&1;
-              cd ../../../../
-              """.format(params.outdir1, params.outdir2, params.outdir3, params.outdir3,
-                         input.assem, input.transcripts, threads, output.log)
-        subprocess.run(cmd, shell = True)
+        outdir2 = lambda wildcards: config["tool"] + "/output/{}".format(wildcards.nom),
+        log     = lambda wildcards: config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.log".format(nom=wildcards.nom)
+    threads: workflow.cores
+    shell:
+        """
+        mkdir -p {params.outdir1}
+        mkdir -p {params.outdir2}
+        cd {params.outdir2}
+        EDTA.pl \
+          --genome ../../../{input.assem} \
+          --species others \
+          --cds ../../../{input.transcripts} \
+          --step all \
+          --overwrite 1 \
+          --force 1 \
+          --sensitive 1 \
+          --evaluate 1 \
+          --anno 1 \
+          --threads {threads} > ../../../{params.log} 2>&1;
+        """
