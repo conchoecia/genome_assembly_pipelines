@@ -4,6 +4,9 @@ This snakefile maps all the HiC reads to a final genome assembly
   - It also calculates the obs/exp matrix, and the pearson exp matrix of that
 """
 from Bio import SeqIO
+from Bio.SeqIO.FastaIO import FastaWriter
+import os
+
 import subprocess
 minchromsize = 1000000
 configfile: "config.yaml"
@@ -17,6 +20,10 @@ rule all:
         #expand(config["tool"] + "/input/longest_orfs.fasta",
         #       nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.TEanno.gff3",
+               nom = config["assemblies"]),
+        # masked genome
+        #expand(config["tool"] + "/input/assembly/{nom}_input.fasta.new.masked",
+        expand(config["tool"] + "/output/{nom}.masked.fasta",
                nom = config["assemblies"])
         ##run EDTA on all the the genomes in the config file
         #expand(config["tool"] + "/output/EDTA/{nom}/{nom}_input.fasta.mod.EDTA.intact.gff3",
@@ -88,8 +95,8 @@ rule run_EDTA:
     output:
         intact = config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.intact.gff3",
         anno   = config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.TEanno.gff3",
-        stats  = config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.TEanno.sum"
-        #log  =   config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.log"
+        stats  = config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.TEanno.sum",
+        RMout  = config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.anno/{nom}_input.fasta.mod.EDTA.RM.out"
     params:
         outdir1 = lambda wildcards: config["tool"] + "/output",
         outdir2 = lambda wildcards: config["tool"] + "/output/{}".format(wildcards.nom),
@@ -112,3 +119,60 @@ rule run_EDTA:
           --anno 1 \
           --threads {threads} > ../../../{params.log} 2>&1;
         """
+
+rule download_mask_script:
+    """
+    Download the EDTA softmasking script
+    """
+    output:
+        script   = config["tool"] + "/input/make_masked.pl",
+        subtract = config["tool"] + "/input/substract_parallel.pl",
+        combine  = config["tool"] + "/input/combine_overlap.pl"
+    threads: 1
+    params:
+        url = "https://raw.githubusercontent.com/oushujun/EDTA/refs/heads/master/bin/make_masked.pl",
+        url2 = "https://raw.githubusercontent.com/oushujun/EDTA/refs/heads/master/bin/substract_parallel.pl",
+        url3 = "https://raw.githubusercontent.com/oushujun/EDTA/refs/heads/master/bin/combine_overlap.pl"
+    shell:
+        """
+        wget {params.url} -O {output.script}
+        chmod +x {output.script}
+
+        wget {params.url2} -O {output.subtract}
+
+        wget {params.url3} -O {output.combine}
+        """
+
+rule softmask_genome:
+    """
+    Softmask the genome using the EDTA script
+    """
+    input:
+        script = config["tool"] + "/input/make_masked.pl",
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        rmout = config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.anno/{nom}_input.fasta.mod.EDTA.RM.out"
+    output:
+        masked = config["tool"] + "/input/assembly/{nom}_input.fasta.new.masked"
+    params:
+        outdir = config["tool"] + "/input",
+    threads: 1
+    shell:
+        """
+        perl {input.script} -genome {input.assem} \
+          -hardmask 0 \
+          -rmout {input.rmout}
+        """
+
+rule reformat_fasta_wrap60:
+    """
+    Reformat FASTA file to 60-character line width using Bio.SeqIO
+    """
+    input:
+        masked = config["tool"] + "/input/assembly/{nom}_input.fasta.new.masked"
+    output:
+        wrapped = config["tool"] + "/output/{nom}.masked.fasta"
+    threads: 1
+    run:
+        with open(input.masked) as infile, open(output.wrapped, "w") as outfile:
+            writer = FastaWriter(outfile, wrap=60)
+            writer.write_file(SeqIO.parse(infile, "fasta"))
