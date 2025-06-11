@@ -38,7 +38,9 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 
 rule softlink_assembly:
-    """softlink the assembly"""
+    """
+    softlink the assembly
+    """
     input:
         assem = lambda wildcards: os.path.abspath(config["assemblies"][wildcards.nom])
     output:
@@ -50,7 +52,9 @@ rule softlink_assembly:
         """
 
 rule concat_transcripts:
-    """Concatenate all transcript FASTA files into one per assembly"""
+    """
+    Concatenate all transcript FASTA files into one per assembly
+    """
     input:
         transcripts=lambda wildcards: config["transcripts"]
     output:
@@ -152,7 +156,7 @@ rule softmask_genome:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
         rmout = config["tool"] + "/output/{nom}/{nom}_input.fasta.mod.EDTA.anno/{nom}_input.fasta.mod.EDTA.RM.out"
     output:
-        masked = config["tool"] + "/input/assembly/{nom}_input.fasta.new.masked"
+        masked = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.new.masked")
     params:
         outdir = config["tool"] + "/input",
     threads: 1
@@ -168,11 +172,27 @@ rule reformat_fasta_wrap60:
     Reformat FASTA file to 60-character line width using Bio.SeqIO
     """
     input:
-        masked = config["tool"] + "/input/assembly/{nom}_input.fasta.new.masked"
+        masked = config["tool"] + "/input/assembly/{nom}_input.fasta.new.masked",
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
     output:
         wrapped = config["tool"] + "/output/{nom}.masked.fasta"
     threads: 1
     run:
-        with open(input.masked) as infile, open(output.wrapped, "w") as outfile:
-            writer = FastaWriter(outfile, wrap=60)
-            writer.write_file(SeqIO.parse(infile, "fasta"))
+        # scaffold order:
+        scaf_order = []
+        for record in SeqIO.parse(input.assem, "fasta"):
+            scaf_order.append(record.id)
+        print("Scaffold order:", scaf_order)
+        # load the entire fasta file into memory
+        seqs = SeqIO.to_dict(SeqIO.parse(input.masked, "fasta"))
+        # write the wrapped fasta file in the scaf order
+        with open(output.wrapped, "w") as out_handle:
+            writer = FastaWriter(out_handle, wrap=60)
+            for scaf in scaf_order:
+                if scaf in seqs:
+                    record = seqs[scaf]
+                    record.id = scaf
+                    record.description = ""
+                    writer.write_record(record)
+                else:
+                    raise ValueError(f"Scaffold {scaf} not found in input file {input.masked}")
