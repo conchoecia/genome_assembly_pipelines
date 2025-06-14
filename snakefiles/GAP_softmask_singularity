@@ -1,0 +1,91 @@
+"""
+This snakefile maps smaller scaffolds to chromosome-level scaffolds.
+Then it removes scaffolds that have greater than a cutoff percentage of their length
+  mapped to the chromosome-level scaffolds. These are likely haplotigs and they are
+  then removed from the assembly.
+
+If you're on a cluster, try "module load repeatmodeler" "module load repeatmasker"
+"""
+
+configfile: "config.yaml"
+config["tool"] = "GAP_softmask"
+
+for x in config["assemblies"]:
+    if "_" in x:
+        raise IOError("You must not have any special characters in the assembly names: {}. Just use [A-Za-z0-9]+".format(x))
+
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+
+wildcard_constraints:
+    nom="[A-Za-z0-9.]+",
+
+rule all:
+    input:
+        expand(config["tool"] + "/{nom}_rm_db.nsq",
+                nom=config["assemblies"]),
+        expand(config["tool"] + "/{nom}-families.fa",
+                nom=config["assemblies"]),
+        #expand(config["tool"] + "/{nom}.softmasked.fasta",
+        #        nom=config["assemblies"])
+
+# make softlinks of the input files
+# files end up here:
+#   assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
+include: softlinks_rule_path
+
+rule get_dfam_tetools_wrapper:
+    output:
+        script = config["tool"] + "/dfam-tetools.sh"
+    shell:
+        """
+        curl -sSLo {output.script} https://github.com/Dfam-consortium/TETools/raw/master/dfam-tetools.sh
+        chmod +x {output.script}
+        """
+
+rule build_repeatmodeler_db:
+    input:
+        fasta = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        script = config["tool"] + "/dfam-tetools.sh"
+    output:
+        db_prefix = config["tool"] + "/{nom}_rm_db.nsq"
+    params:
+        db_dir = config["tool"]
+    shell:
+        """
+        {input.script} --singularity -- \
+            BuildDatabase -name {params.db_dir}/{wildcards.nom}_rm_db {input.fasta}
+        """
+
+rule run_repeatmodeler:
+    input:
+        db_prefix = config["tool"] + "/{nom}_rm_db.nsq",
+        script = config["tool"] + "/dfam-tetools.sh"
+    output:
+        lib = config["tool"] + "/{nom}-families.fa"
+    params:
+        db_dir = config["tool"]
+    threads: workflow.cores
+    shell:
+        """
+        {input.script} --singularity -- \
+            RepeatModeler -database {params.db_dir}/{wildcards.nom}_rm_db \
+            -threads {threads} -dir {params.db_dir} -engine ncbi \
+            > {params.db_dir}/repeatmodeler.log 2>&1
+        """
+
+#rule softmask_with_repeatmasker:
+#    input:
+#        fasta = config["tool"] + "/input/assembly/{nom}_input.fasta",
+#        lib = config["tool"] + "/{nom}-families.fa"
+#    output:
+#        softmasked = config["tool"] + "/{nom}.softmasked.fasta"
+#    params:
+#        outdir = config["tool"]
+#    threads: workflow.cores
+#    shell:
+#        """
+#        RepeatMasker -threads {threads} -xsmall -lib {input.lib} -dir {params.outdir} -gff {input.fasta}
+#        mv {params.outdir}/{wildcards.nom}.fasta.masked {output.softmasked}
+#        """
