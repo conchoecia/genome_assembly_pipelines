@@ -266,8 +266,7 @@ rule filter_vcf:
             awk '/^#/ {{print; next}} $10 !~ /\\/5/ {{print}}' | \
             awk '/^#/ {{print; next}} $10 !~ /\\/6/ {{print}}' | \
             grep -v '\\./\\.' | \
-            grep -v '0/3' | \
-            grep -v '1/3' > {output.vcf}
+            grep -v '0/2' > {output.vcf}
         """
 
 # sort the vcf file based on the input assembly
@@ -517,8 +516,8 @@ rule split_bams:
         stub = config["tool"] + "/output/bams/split/{libtype}"
     threads: 1
     resources:
-        mem_mb  = 2000,
-        runtime = 60
+        mem_mb  = 8000,
+        runtime = 120
     shell:
         """
         bamtools split -in {input.bam} -reference -stub {params.stub}
