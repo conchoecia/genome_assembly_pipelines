@@ -251,7 +251,8 @@ rule filter_vcf:
     shell:
         """
         awk 'BEGIN{{OFS="\t"}} /^#/ {{print; next}} $7 != "RefCall" {{print}}' {input.vcf} | \
-            grep -v '\\./\\.' > {output.vcf}
+            grep -v '\\./\\.' \
+            grep -v '0/3' > {output.vcf}
         """
 
 # sort the vcf file based on the input assembly
