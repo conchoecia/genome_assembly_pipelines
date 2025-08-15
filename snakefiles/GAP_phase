@@ -289,9 +289,9 @@ rule index_vcf:
 
 rule list_of_chroms_from_reference:
     input:
-        ref = config["tool"] + "/input/assembly/input.fasta"
+        fai = config["tool"] + "/input/assembly/input.fasta.fai"
     output:
-        chrtxt = temp(config["tool"] + "/output/vcf/chromosomes.txt")
+        chrtxt = config["tool"] + "/output/vcf/chromosomes.txt"
     threads: 1
     resources:
         mem_mb  = 1000,
@@ -299,7 +299,7 @@ rule list_of_chroms_from_reference:
     shell:
         """
         # save all the chromosome names into a file
-        bioawk -cfastx '{{print($name)}}' {input.ref} > {output.chrtxt}
+        cut -f1 {input.fai} > {output.chrtxt}
         """
 
 rule list_of_chroms_from_config:
