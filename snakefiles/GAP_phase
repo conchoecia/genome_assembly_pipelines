@@ -8,8 +8,11 @@ Script inspired by:
 # 12/19/2016
 # email: pedge@eng.ucsd.edu
 
-Heavily modified by DTS in 2020-2021 dts@ucsc.edu.
- - Written using snakemake 5.10.0
+Build history:
+  - Updated in August 2025 to better work with SLURM and the new version of Picard.
+    Now it is on snakemake 9.
+  - Heavily modified by DTS in 2020-2021 dts@ucsc.edu. Written using snakemake 5.10.0
+
 """
 
 configfile: "config.yaml"
@@ -97,6 +100,9 @@ rule make_assem_softlink:
     output:
         assem = config["tool"] + "/input/assembly/input.fasta"
     threads: 1
+    resources:
+        mem_mb = 1000,
+        runtime = 5
     shell:
         """
         ln -s {input.ref} {output.assem}
@@ -107,12 +113,16 @@ rule make_assem_softlink:
 ######################################################################
 
 rule make_ill_softlink:
+    """Just symlink the reads to not occupy more disk space."""
     params:
         reads1 = config["ILL_R1"],
         reads2 = config["ILL_R2"]
     output:
         R1 = config["tool"] + "/input/reads/ill_R1.fastq.gz",
         R2 = config["tool"] + "/input/reads/ill_R2.fastq.gz"
+    resources:
+        mem_mb = 1000,
+        runtime = 2
     shell:
         """
         ln -s {params.reads1} {output.R1}
@@ -126,6 +136,9 @@ rule make_chi_softlink:
     output:
         R1 = config["tool"] + "/input/reads/chi_R1.fastq.gz",
         R2 = config["tool"] + "/input/reads/chi_R2.fastq.gz"
+    resources:
+        mem_mb = 1000,
+        runtime = 2
     shell:
         """
         ln -s {params.reads1} {output.R1}
@@ -139,6 +152,9 @@ rule make_hic_softlink:
     output:
         R1 = config["tool"] + "/input/reads/hic_R1.fastq.gz",
         R2 = config["tool"] + "/input/reads/hic_R2.fastq.gz"
+    resources:
+        mem_mb = 1000,
+        runtime = 2
     shell:
         """
         ln -s {params.reads1} {output.R1}
@@ -150,6 +166,9 @@ rule make_longreads_bam_softlink:
         longreads = config["LONGREAD_BAM"]
     output:
         bam = config["tool"] + "/output/bams/temp/longreads_sorted.bam"
+    resources:
+        mem_mb = 1000,
+        runtime = 2
     shell:
         """
         ln -s {params.longreads} {output.bam}
@@ -163,32 +182,50 @@ rule make_longreads_bam_softlink:
 
 # get a picard dict of the reference sequences
 rule picard_dict:
+    """
+    The latest version of picard uses a different format for the command line args.
+      Used to be like this: INPUT={input.bam}
+      Now it's like this:   -INPUT {input.bam}
+    """
     input:
         ref = config["tool"] + "/input/assembly/input.fasta",
         picard = config["PICARD"]
     output:
         seqdict = config["tool"] + "/input/ref/input.ref.dict"
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 10
     shell:
         """
-        java -jar {input.picard} CreateSequenceDictionary \
-          R={input.ref} O={output.seqdict}
+        java -jar -Xmx1g {input.picard} CreateSequenceDictionary \
+          -R {input.ref} \
+          -O {output.seqdict}
         """
 
 rule update_vcf_dict:
-    """update the header of the vcf file"""
+    """
+    Update the header of the vcf file
+
+    The latest version of picard uses a different format for the command line args.
+      Used to be like this: INPUT={input.bam}
+      Now it's like this:   -INPUT {input.bam}
+    """
     input:
         seqdict = config["tool"] + "/input/ref/input.ref.dict",
         vcf = config["VCFfile"]
     output:
         vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.vcf"
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 15
     shell:
         """
-        java -jar /usr/local/bin/picard/picard.jar UpdateVcfSequenceDictionary \
-          I={input.vcf} \
-          O={output.vcf} \
-          SD={input.seqdict}
+        java -jar -Xmx1g /usr/local/bin/picard/picard.jar UpdateVcfSequenceDictionary \
+          -I {input.vcf} \
+          -O {output.vcf} \
+          -SD {input.seqdict}
         """
 
 # sort the vcf file based on the input assembly
@@ -196,20 +233,27 @@ rule sort_input_vcf:
     """
     If the input VCF isn't sorted correctly, then the downstream steps
      won't work.
+
+    The latest version of picard uses a different format for the command line args.
+      Used to be like this: INPUT={input.bam}
+      Now it's like this:   -INPUT {input.bam}
     """
     input:
-        vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.vcf",
-        picard = config["PICARD"],
+        vcf     = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.vcf",
+        picard  = config["PICARD"],
         seqdict = config["tool"] + "/input/ref/input.ref.dict"
     output:
         vcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf"
     threads: 1
+    resources:
+        mem_mb  = 4000,
+        runtime = 30
     shell:
         """
-        java -jar /usr/local/bin/picard/picard.jar SortVcf \
-          I={input.vcf} \
-          O={output.vcf} \
-          SD={input.seqdict}
+        java -jar -Xmx3g /usr/local/bin/picard/picard.jar SortVcf \
+          -I {input.vcf} \
+          -O {output.vcf} \
+          -SD {input.seqdict}
         """
 
 # compress the vcf file
@@ -219,6 +263,9 @@ rule split_vcf_into_chr_zip:
     output:
         tvcf = temp(config["tool"] + "/output/vcf/orig/temp.vcf.gz")
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 10
     shell:
         """
         bgzip -c {input.vcf} > {output.tvcf}  #compress vcf
@@ -231,6 +278,9 @@ rule index_vcf:
     output:
         index = temp(config["tool"] + "/output/vcf/orig/temp.vcf.gz.tbi"),
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 10
     shell:
         """
         tabix -p vcf {input.tvcf}  # index compressed vcf
@@ -242,6 +292,9 @@ rule list_of_chroms_from_reference:
     output:
         chrtxt = temp(config["tool"] + "/output/vcf/chromosomes.txt")
     threads: 1
+    resources:
+        mem_mb  = 1000,
+        runtime = 5
     shell:
         """
         # save all the chromosome names into a file
@@ -254,6 +307,9 @@ rule list_of_chroms_from_config:
     output:
         chrtxt = config["tool"] + "/output/vcf/chroms_filt.txt"
     threads: 1
+    resources:
+        mem_mb  = 1000,
+        runtime = 5
     run:
         outhandle = open(output.chrtxt, "w")
         with open(input.chrtxt, "r") as f:
@@ -275,6 +331,9 @@ rule split_vcf_into_chr_remainder:
     params:
         outstub = config["tool"] + "/output/vcf/orig/split"
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 45
     shell:
         """
         while IFS= read -r line; do
@@ -293,6 +352,9 @@ rule index_genome:
     output:
         bwt = config["tool"] + "/input/assembly/input.fasta.bwt"
     threads: 1
+    resources:
+        mem_mb  = 16000,
+        runtime = 120
     shell:
         'bwa index {input.ref}'
 
@@ -302,6 +364,9 @@ rule index_genome_faidx:
     output:
         bwt = config["tool"] + "/input/assembly/input.fasta.fai"
     threads: 1
+    resources:
+        mem_mb  = 1000,
+        runtime = 10
     shell:
         'samtools faidx {input.ref}'
 
@@ -314,14 +379,14 @@ rule align_HiC_fastq:
         R2 = config["tool"] + "/input/reads/hic_R2.fastq.gz"
     output:
         hic_bam = config["tool"] + "/output/bams/temp/hic_sorted.bam"
-    threads: workflow.cores - 1
-    params:
-        sort_threads = int(workflow.cores/3)
+    resources:
+        mem_mb  = 48000,
+        runtime = 1440
     shell:
         """
         bwa mem -t {threads} -5SPM {input.ref} {input.R1} {input.R2} | \
-          samtools view -hb -@ {params.sort_threads} | \
-          samtools sort -@ {params.sort_threads} - > {output.hic_bam}
+          samtools view -hb -@ {threads} | \
+          samtools sort -@ {threads} - > {output.hic_bam}
         """
 
 rule align_Chicago_fastq:
@@ -332,14 +397,14 @@ rule align_Chicago_fastq:
         R2 = config["tool"] + "/input/reads/chi_R2.fastq.gz"
     output:
         chi_bam = config["tool"] + "/output/bams/temp/chi_sorted.bam"
-    threads: workflow.cores - 1
-    params:
-        sort_threads = int(workflow.cores/3)
+    resources:
+        mem_mb  = 48000,
+        runtime = 1440
     shell:
         """
         bwa mem -t {threads} -5SPM {input.ref} {input.R1} {input.R2} | \
-          samtools view -hb -@ {params.sort_threads} | \
-          samtools sort -@ {params.sort_threads} - > {output.chi_bam}
+          samtools view -hb -@ {threads} | \
+          samtools sort -@ {threads} - > {output.chi_bam}
         """
 
 rule align_Illumina_fastq:
@@ -350,14 +415,14 @@ rule align_Illumina_fastq:
         R2 = config["tool"] + "/input/reads/ill_R2.fastq.gz"
     output:
         ill_bam = config["tool"] + "/output/bams/temp/ill_sorted.bam"
-    threads: workflow.cores - 1
-    params:
-        sort_threads = int(workflow.cores/3)
+    resources:
+        mem_mb  = 48000,
+        runtime = 1440
     shell:
         """
         bwa mem -t {threads} {input.ref} {input.R1} {input.R2} | \
-          samtools view -hb -@ {params.sort_threads} | \
-          samtools sort -@ {params.sort_threads} - > {output.ill_bam}
+          samtools view -hb -@ {threads} | \
+          samtools sort -@ {threads} - > {output.ill_bam}
         """
 
 rule index_bams:
@@ -366,6 +431,9 @@ rule index_bams:
     output:
         bai = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai"
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 60
     shell:
         """
         samtools index {input.bam}
@@ -386,6 +454,9 @@ rule split_bams:
     params:
         stub = config["tool"] + "/output/bams/split/{libtype}"
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 60
     shell:
         """
         bamtools split -in {input.bam} -reference -stub {params.stub}
@@ -399,7 +470,11 @@ rule split_bams:
 
 rule mark_duplicates_in_split_bams:
     """
-    This marks the duplicates for chicago, illumina, and hi-c
+    This marks the duplicates for chicago, illumina, and hi-c.
+
+    The latest version of picard uses a different format for the command line args.
+      Used to be like this: INPUT={input.bam}
+      Now it's like this:   --INPUT {input.bam}
     """
     input:
         bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
@@ -408,12 +483,17 @@ rule mark_duplicates_in_split_bams:
         bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam",
         metrics = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.metrics"
     threads: 1
+    resources:
+        mem_mb  = 8000,
+        runtime = 30  # minutes
     shell:
         """
-        java -jar {input.picard} MarkDuplicates READ_NAME_REGEX=null \
-            INPUT={input.bam} OUTPUT={output.bam} \
-            METRICS_FILE={output.metrics} \
-            ASSUME_SORTED=true
+        java -jar {input.picard} MarkDuplicates \
+          --READ_NAME_REGEX null \
+          --INPUT {input.bam} \
+          --OUTPUT {output.bam} \
+          --METRICS_FILE {output.metrics} \
+          --ASSUME_SORTED true
         """
 
 rule index_markeddup_bams:
@@ -422,6 +502,9 @@ rule index_markeddup_bams:
     output:
         bai = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam.bai",
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 45
     shell:
         """
         samtools index {input.bam}
@@ -445,6 +528,9 @@ rule extract_hairs:
     threads: 1
     params:
         fragtype = lambda wildcards: wildcards.libtype
+    resources:
+        mem_mb  = 8000,
+        runtime = 120
     shell:
         """
         if [ "{params.fragtype}" == "longreads" ]; then
@@ -471,6 +557,9 @@ rule concatenate_HAPCUT2_evidence:
     output:
         cat = config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag"
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 15
     shell:
         """
         cat {input.frags} > {output.cat}
@@ -492,6 +581,9 @@ rule run_hapcut2_hic_longread:
         thischrom = lambda wildcards: wildcards.chrom,
         model = config["tool"] + "/output/hapcut2_results/{chrom}.htrans_model"
     threads: 1
+    resources:
+        mem_mb  = 4000,
+        runtime = 120
     shell:
         """
         HAPCUT2 --fragments {input.frag} --vcf {input.vcf} \
@@ -522,6 +614,9 @@ rule sort_final_vcf:
         hap = temp(config["tool"] + "/output/final_output/complete_assembly.hap"),
         vcf = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf")
     threads: 1
+    resources:
+        mem_mb  = 4000,
+        runtime = 60
     shell:
         """
         set +e
@@ -550,6 +645,10 @@ rule get_largest_hap_blocks:
         vcf = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf"
     output:
         txt = config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt"
+    threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 30
     run:
         biggest_blocks = {}
         this_block_header = ""
@@ -611,6 +710,9 @@ rule hap_blocks_to_vcf:
     output:
         final_vcf = temp(config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf")
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 30
     run:
         # first get the headers that we want
         headers = set()
@@ -667,6 +769,9 @@ rule compress_final_output:
         final_gz = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
         final_in = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz.tbi"
     threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 30
     shell:
         """
         # compress
@@ -681,6 +786,10 @@ rule gzip_hapcut2_vcf:
     output:
         vcf = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz",
         tbi = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz.tbi"
+    threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 30
     shell:
         """
         bgzip -c {input.vcf} > {output.vcf}
@@ -693,6 +802,10 @@ rule gzip_complete_assembly_hap_file:
         hap = config["tool"] + "/output/final_output/complete_assembly.hap"
     output:
         gzipped = config["tool"] + "/output/final_output/complete_assembly.hap.gz"
+    threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 30
     shell:
         """
         gzip {input.hap}
@@ -711,6 +824,9 @@ rule split_phased_into_individual_chromosomes:
         chromgz = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
         index = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi"
     threads: 1
+    resources:
+        mem_mb  = 4000,
+        runtime = 60
     params:
         tchrom = lambda w: w.chrom
     shell:
@@ -741,6 +857,10 @@ rule make_table_of_final_output:
         ref = config["tool"] + "/input/assembly/input.fasta"
     output:
         txt = config["tool"] + "/output/final_output/hapcut_largest_block_final_table.txt"
+    threads: 1
+    resources:
+        mem_mb  = 2000,
+        runtime = 30
     run:
         # get chrom sizes
         from Bio import SeqIO

@@ -1,8 +1,7 @@
-"""
-This is the example config for GAP_phase, based on Peter Edge's original
- snakemake pipeline
-"""
-# USER CONFIG
+# This is the example config for GAP_phase, based on Peter Edge's original
+#  snakemake pipeline
+#
+#  USER CONFIG
 REFERENCE: "/bigdata/user/darrin/hydra/hydra_hic_map/GAP_hic_map2/input/assembly/hydra_v2b_input.fasta"
 
 CHROMS:
@@ -10,8 +9,10 @@ CHROMS:
   - Scaffold15
   - Scaffold15.UN
 
+# LONGREAD_BAM should be a sorted bam file of whatever long reads you are using. HiFi recommended, or high-quality ONT.
 LONGREAD_BAM: ""
 VCFfile:      "Hydra_chr1chr15_calls.filtered.vcf"
+# Provide raw reads rather than a bam - uses bwa mem to map.
 HIC_R1:       ""
 HIC_R2:       ""
 CHI_R1:       ""
@@ -25,6 +26,7 @@ HAPCUT2:       'HAPCUT2'
 EXTRACTHAIRS:  'extractHAIRS'
 BWA:           'bwa'      # 0.7.12-r1044
 SAMTOOLS:      'samtools' # samtools 1-2, htslib 1.21
+# make sure that your java version is compatible with the most recent version of picard
 PICARD:        '/usr/local/bin/picard/picard.jar'   # picard version 2.8
 BAMTOOLS:      'bamtools' # version 2.4
 TABIX:         'tabix'
