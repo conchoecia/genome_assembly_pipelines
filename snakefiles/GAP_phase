@@ -69,6 +69,9 @@ if config["LONGREAD_BAM"] == "":
     if not os.path.exists(config["longread_bam"]):
         os.mknod(config["longread_bam"])
 
+# make sure everything in the config["CHROMS"] is a string
+config["CHROMS"] = [str(chrom) for chrom in config["CHROMS"]]
+
 wildcard_constraints:
     datatype="[A-Za-z0-9|.]+",
     libtype="[A-Za-z]+"
@@ -322,7 +325,8 @@ rule list_of_chroms_from_config:
     run:
         # first, print out the chromosomes so we are sure of what we're looking for
         print("The chromosomes we are looking for are:")
-        print(config["CHROMS"])
+        CHROMLIST = [str(chrom) for chrom in config["CHROMS"]]
+        print(CHROMLIST)
 
         matches = []
         outhandle = open(output.chrtxt, "w")
@@ -330,7 +334,7 @@ rule list_of_chroms_from_config:
             for line in f:
                 line = str(line.strip())
                 if line:
-                    if line in config["CHROMS"]:
+                    if line in CHROMLIST:
                         matches.append(line)
         # if there were no matches, state as much and raise an error. We should have found something
         if len(matches) == 0:
@@ -340,7 +344,6 @@ rule list_of_chroms_from_config:
         # If we found matches, write them to the output file
         for line in matches:
             print(line, file=outhandle)
-
 
 # split all vcf files by chromosome
 rule split_vcf_into_chr_remainder:
