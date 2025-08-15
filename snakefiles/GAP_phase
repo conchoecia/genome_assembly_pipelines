@@ -517,7 +517,7 @@ rule split_bams:
     threads: 1
     resources:
         mem_mb  = 8000,
-        runtime = 120
+        runtime = 480
     shell:
         """
         bamtools split -in {input.bam} -reference -stub {params.stub}
