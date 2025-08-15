@@ -15,6 +15,8 @@ Build history:
 
 """
 
+import sys
+
 configfile: "config.yaml"
 config["tool"] = "GAP_phase"
 
@@ -303,6 +305,12 @@ rule list_of_chroms_from_reference:
         """
 
 rule list_of_chroms_from_config:
+    """
+    The point of this is to get the list of chromosomes that we will keep for phasing.
+
+    Notes:
+      - Previously, this would fail sometimes, even if there were perfect matches
+    """
     input:
         chrtxt = config["tool"] + "/output/vcf/chromosomes.txt",
     output:
@@ -312,13 +320,27 @@ rule list_of_chroms_from_config:
         mem_mb  = 1000,
         runtime = 5
     run:
+        # first, print out the chromosomes so we are sure of what we're looking for
+        print("The chromosomes we are looking for are:")
+        print(config["CHROMS"])
+
+        matches = []
         outhandle = open(output.chrtxt, "w")
         with open(input.chrtxt, "r") as f:
             for line in f:
-                line = line.strip()
+                line = str(line.strip())
                 if line:
                     if line in config["CHROMS"]:
-                        print(line, file = outhandle)
+                        matches.append(line)
+        # if there were no matches, state as much and raise an error. We should have found something
+        if len(matches) == 0:
+            print("No matching chromosomes found.", file=outhandle)
+            raise ValueError("No matching chromosomes found.")
+
+        # If we found matches, write them to the output file
+        for line in matches:
+            print(line, file=outhandle)
+
 
 # split all vcf files by chromosome
 rule split_vcf_into_chr_remainder:
