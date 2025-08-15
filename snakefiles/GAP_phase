@@ -553,7 +553,7 @@ rule mark_duplicates_in_split_bams:
       Now it's like this:   --INPUT {input.bam}
     """
     input:
-        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.rg.bam"
+        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.rg.bam",
         picard = config["PICARD"]
     output:
         bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam",
