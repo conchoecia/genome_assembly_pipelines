@@ -532,7 +532,7 @@ rule add_rg:
         bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
         picard = config["PICARD"]
     output:
-        bam = temp(config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.rg.bam")
+        bam = temp(config["tool"] + "/output/bams/split/{libtype}.rg.REF_{chrom}.bam")
     threads: 2
     resources:
         mem_mb  = 4000,
@@ -553,7 +553,7 @@ rule mark_duplicates_in_split_bams:
       Now it's like this:   --INPUT {input.bam}
     """
     input:
-        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.rg.bam",
+        bam = config["tool"] + "/output/bams/split/{libtype}.rg.REF_{chrom}.bam",
         picard = config["PICARD"]
     output:
         bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam",
