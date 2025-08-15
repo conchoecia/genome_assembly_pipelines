@@ -434,7 +434,7 @@ rule index_bams:
     threads: 1
     resources:
         mem_mb  = 8000,
-        runtime = 60
+        runtime = 120
     shell:
         """
         samtools index {input.bam}
