@@ -506,27 +506,25 @@ rule index_bams:
 
 # SPLIT bam files by chromosome
 rule split_bams:
+    """
+    This is incredibly slow for any large bam file.
+    Needs reworking for parallelization, even though it is tough on the disks.
+    """
     input:
         bam = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam",
         bai = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai"
     output:
-        bams = expand(config["tool"] + "/output/bams/split/{{libtype}}.REF_{chrom}.bam",
-               chrom=config["CHROMS"])
+        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam"
     params:
-        stub = config["tool"] + "/output/bams/split/{libtype}"
-    threads: 1
+        stub = config["tool"] + "/output/bams/split/"
+    threads: 4
     resources:
-        mem_mb  = 8000,
-        runtime = 480
+        mem_mb=8000, runtime=60
     shell:
         """
-        bamtools split -in {input.bam} -reference -stub {params.stub}
-
-        for thisfile in {output.bams}; do
-            if [ ! -f ${{thisfile}} ]; then
-                samtools view -Hb {input.bam} > ${{thisfile}}
-            fi
-        done
+        set -euo pipefail
+        mkdir -p {params.stub}
+        samtools view -@ {threads} -bh {input.bam} "{wildcards.chrom}" -o {output.bam}
         """
 
 rule mark_duplicates_in_split_bams:
