@@ -536,7 +536,7 @@ rule add_rg:
     threads: 2
     resources:
         mem_mb  = 4000,
-        runtime = 20
+        runtime = 60
     shell:
         """
         java -Xmx3g -jar {input.picard} AddOrReplaceReadGroups \
