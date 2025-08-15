@@ -241,11 +241,14 @@ rule filter_vcf:
     These are not legal, so remove them.
      - ./. We remove these, since these are simply ref calls
      - 0/3 We remove these, since there are 3 alt alleles that will break HapCUT2
-     - 0/2 We should probably remove this, since one is ref, and there are two options for the alt.
      - 1/3 This isn't valid because there are still multiple alleles to pick from
+     - 0/2 We should probably remove this, since one is ref, and there are two options for the alt.
      - 1/2 ??
      - 0/2 ??
      - 2/3 ??
+     - n/4 too many, just remove this
+     - n/5 too many, just remove this
+     - n/6 too many, just remove this
     """
     input:
         vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.vcf"
@@ -258,6 +261,10 @@ rule filter_vcf:
     shell:
         """
         awk 'BEGIN{{OFS="\t"}} /^#/ {{print; next}} $7 != "RefCall" {{print}}' {input.vcf} | \
+            awk '/^#/ {print; next} $10 !~ /\/3/ {print}' | \
+            awk '/^#/ {print; next} $10 !~ /\/4/ {print}' | \
+            awk '/^#/ {print; next} $10 !~ /\/5/ {print}' | \
+            awk '/^#/ {print; next} $10 !~ /\/6/ {print}' | \
             grep -v '\\./\\.' | \
             grep -v '0/3' | \
             grep -v '1/3' > {output.vcf}
