@@ -213,7 +213,8 @@ rule update_vcf_dict:
     """
     input:
         seqdict = config["tool"] + "/input/ref/input.ref.dict",
-        vcf = config["VCFfile"]
+        vcf = config["VCFfile"],
+        picard = config["PICARD"]
     output:
         vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.vcf"
     threads: 1
@@ -222,7 +223,7 @@ rule update_vcf_dict:
         runtime = 15
     shell:
         """
-        java -jar -Xmx1g /usr/local/bin/picard/picard.jar UpdateVcfSequenceDictionary \
+        java -jar -Xmx1g {input.picard} UpdateVcfSequenceDictionary \
           -I {input.vcf} \
           -O {output.vcf} \
           -SD {input.seqdict}
@@ -250,7 +251,7 @@ rule sort_input_vcf:
         runtime = 30
     shell:
         """
-        java -jar -Xmx3g /usr/local/bin/picard/picard.jar SortVcf \
+        java -jar -Xmx3g {input.picard} SortVcf \
           -I {input.vcf} \
           -O {output.vcf} \
           -SD {input.seqdict}
