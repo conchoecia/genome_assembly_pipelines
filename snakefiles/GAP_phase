@@ -234,6 +234,26 @@ rule update_vcf_dict:
           -SD {input.seqdict}
         """
 
+# filter the vcf to remove entries that are not legal to hapcut2
+rule filter_vcf:
+    """
+    In DeepVariant, it makes reference calls and annotates them as ./.
+    These are not legal, so remove them.
+    """
+    input:
+        vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.vcf"
+    output:
+        vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.filtered.vcf"
+    threads: 1
+    resources:
+        mem_mb  = 4000,
+        runtime = 5
+    shell:
+        """
+        awk 'BEGIN{{OFS="\t"}} /^#/ {{print; next}} $7 != "RefCall" {{print}}' {input.vcf} | \
+            grep -v '\./\.' > {output.vcf}
+        """
+
 # sort the vcf file based on the input assembly
 rule sort_input_vcf:
     """
@@ -245,7 +265,7 @@ rule sort_input_vcf:
       Now it's like this:   -INPUT {input.bam}
     """
     input:
-        vcf     = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.vcf",
+        vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.filtered.vcf",
         picard  = config["PICARD"],
         seqdict = config["tool"] + "/input/ref/input.ref.dict"
     output:
