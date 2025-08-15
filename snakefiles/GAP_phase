@@ -432,7 +432,7 @@ rule index_bams:
         bai = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai"
     threads: 1
     resources:
-        mem_mb  = 2000,
+        mem_mb  = 8000,
         runtime = 60
     shell:
         """
