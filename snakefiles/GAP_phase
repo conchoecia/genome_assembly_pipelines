@@ -239,6 +239,12 @@ rule filter_vcf:
     """
     In DeepVariant, it makes reference calls and annotates them as ./.
     These are not legal, so remove them.
+     - ./. We remove these, since these are simply ref calls
+     - 0/3 We remove these, since there are 3 alt alleles that will break HapCUT2
+     - 0/2 We should probably remove this, since one is ref, and there are two options for the alt.
+     - 1/2 ??
+     - 0/2 ??
+     - 2/3 ??
     """
     input:
         vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.vcf"
@@ -251,7 +257,7 @@ rule filter_vcf:
     shell:
         """
         awk 'BEGIN{{OFS="\t"}} /^#/ {{print; next}} $7 != "RefCall" {{print}}' {input.vcf} | \
-            grep -v '\\./\\.' \
+            grep -v '\\./\\.' | \
             grep -v '0/3' > {output.vcf}
         """
 
