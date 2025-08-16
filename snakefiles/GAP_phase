@@ -1087,10 +1087,32 @@ def bam_size_mb(path: str) -> int:
     except FileNotFoundError:
         return 1
 
-def mem_for_bam_mb(path: str, floor=32000, ceil=131072, pct=0.18, base=2048) -> int:
-    """RAM MB ~ base + pct * BAM MB, clamped."""
+def mem_for_bam_mb(path: str, floor=8000, ceil=65536, pct=0.10, base=1024) -> int:
+    """Generic scaler: base + pct * size (MB), clamped."""
     mb = bam_size_mb(path)
     return int(max(floor, min(ceil, base + pct * mb)))
+
+def mem_for_hic_piecewise_mb(path: str) -> int:
+    """Conservative RAM for Hi-C shards based on your observed failures."""
+    gb = bam_size_mb(path) / 1024
+    if gb <= 4:   return 32000   # 32 GB
+    if gb <= 8:   return 40000   # 40 GB
+    if gb <= 10:  return 64000   # 64 GB  (40 GB failed >8 GB)
+    if gb <= 14:  return 80000   # 80 GB
+    if gb <= 18:  return 96000   # 96 GB
+    if gb <= 22:  return 128000  # 128 GB (future ~20 GB shards)
+    return 160000                # safety cap
+
+def mem_for_libtype_mb(libtype: str, path: str) -> int:
+    """Hi-C uses piecewise; long reads get a modest scaler; others lighter."""
+    lt = (libtype or "").lower()
+    if lt == "hic":
+        return mem_for_hic_piecewise_mb(path)
+    if lt in {"hifi","pb","pacbio","ont","nanopore","clr","ul"}:
+        # Long reads: slightly higher floor and slope than Illumina
+        return mem_for_bam_mb(path, floor=12000, ceil=98304, pct=0.15, base=1024)
+    # Illumina/other: lighter defaults
+    return mem_for_bam_mb(path, floor=8000, ceil=65536, pct=0.10, base=512)
 
 def runtime_for_bam_min(path: str, base=20, per_gb=1.0, ceil=600) -> int:
     size_gb = bam_size_mb(path) / 1024
@@ -1111,13 +1133,7 @@ rule haplotag_reads_chrom:
     threads: 1
     resources:
         # Bigger floor for Hi-C, modest floor for others
-        mem_mb  = lambda wc, input: mem_for_bam_mb(
-            input.bam,
-            floor = 40000 if wc.libtype == "hic" else 8000, #48 GB for Hi-C shards
-            ceil  = 131072,  # cap at 128 GB
-            pct   = 0.18,    # 18% of shard size in MB + base
-            base  = 2048     # +2 GB headroom
-        ),
+        mem_mb  = lambda wc, input: mem_for_libtype_mb(wc.libtype, input.bam),
         runtime = lambda wc, input: runtime_for_bam_min(input.bam, base=45, per_gb=10, ceil=2160),
         slurm_cpus_per_task = lambda wc, threads: threads,
     shell:
