@@ -16,6 +16,7 @@ Build history:
 """
 
 import sys
+from pathlib import Path
 
 configfile: "config.yaml"
 config["tool"] = "GAP_phase"
@@ -1050,6 +1051,32 @@ rule make_table_of_final_output:
 #    Now we use WhatsHap to haplotag the Hi-C and long reads
 ########################################################################
 
+def bam_size_mb(path: str) -> int:
+    """Return BAM size in MB (>=1)."""
+    try:
+        return max(1, int(Path(path).stat().st_size // (1024 * 1024)))
+    except FileNotFoundError:
+        return 1
+
+def mem_for_bam_mb(path: str,
+                   floor=4000,    # 4 GB minimum
+                   ceil=64000,    # 64 GB maximum
+                   pct=0.03,      # ~3% of file size
+                   base=2048) -> int:  # +2 GB headroom
+    """Estimate RAM in MB as base + pct * size, clamped."""
+    size_mb = bam_size_mb(path)
+    est = base + size_mb * pct
+    return int(max(floor, min(ceil, est)))
+
+def runtime_for_bam_min(path: str,
+                        base=30,     # 30 min minimum
+                        per_gb=1.5,  # ~1.5 min per GB
+                        ceil=720) -> int:  # cap at 12 h
+    """Estimate runtime in minutes based on BAM size."""
+    size_gb = bam_size_mb(path) / 1024
+    est = base + per_gb * size_gb
+    return int(max(base, min(ceil, est)))
+
 rule haplotag_reads:
     input:
         readbam = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam",
@@ -1064,9 +1091,26 @@ rule haplotag_reads:
     params:
         outputthreads = 3
     resources:
-        mem_mb=8000, runtime=120
+        mem_mb  = lambda wc, input: mem_for_bam_mb(input.readbam),
+        runtime = lambda wc, input: runtime_for_bam_min(input.readbam)
     shell:
         """
+        set -euo pipefail
+
+        # If BAM is invalid or has zero reads, write an empty-but-valid BAM and exit.
+        if ! samtools quickcheck -v {input.readbam} >/dev/null 2>&1 || \
+           [ "$(samtools view -c {input.readbam})" -eq 0 ]; then
+            echo "[haplotag_reads] Input has no reads; emitting header-only BAM."
+            if samtools view -H {input.readbam} >/dev/null 2>&1; then
+                samtools view -H {input.readbam} | samtools view -b -o {output.tagbam} -
+            else
+                awk 'BEGIN{{print "@HD\\tVN:1.6\\tSO:coordinate"}} {{printf "@SQ\\tSN:%s\\tLN:%s\\n",$1,$2}}' {input.fai} \
+                  | samtools view -b -T {input.ref} -o {output.tagbam} -
+            fi
+            samtools index -@ {threads} {output.tagbam}
+            exit 0
+        fi
+
         whatshap haplotag \
             -o {output.tagbam} \
             --reference {input.ref} \
@@ -1075,4 +1119,6 @@ rule haplotag_reads:
             --output-threads {params.outputthreads} \
             {input.vcf} \
             {input.readbam}
+
+        samtools index -@ {threads} {output.tagbam}
         """
