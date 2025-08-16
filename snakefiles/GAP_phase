@@ -1115,7 +1115,6 @@ rule haplotag_reads_chrom:
     shell:
         """
         set -euo pipefail
-        mkdir -p {config[tool]}/output/final_output/haplotagged_by_chrom
 
         # Empty or invalid BAM shard? Emit header-only BAM.
         if ! samtools quickcheck -v {input.bam} >/dev/null 2>&1 || \
@@ -1127,7 +1126,7 @@ rule haplotag_reads_chrom:
         fi
 
         # No variants in this VCF shard? Just pass the BAM through unchanged.
-        if ! bcftools view -H {input.vcfgz} | head -n1 | grep -q .; then
+        if [ "$(bcftools view -H {input.vcfgz} | wc -c)" -eq 0 ]; then
             echo "[haplotag_reads_chrom] {wildcards.chrom}: no variants; copying BAM shard."
             cp -p {input.bam} {output.bam}
             if [ -f {input.bai} ]; then cp -p {input.bai} {output.bai}; else samtools index -@ {threads} {output.bam}; fi
