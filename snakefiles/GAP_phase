@@ -671,49 +671,94 @@ rule run_hapcut2_hic_longread:
 
 ######################################################################
 # Once we have the HAPCUT2 output, put it in a useful format
+#
+# The rules cat_haps and merge_vcfs were previously in one rule.
+#  I encountered some errors so split them up.
 ######################################################################
 
-rule sort_final_vcf:
+rule cat_haps:
     """
-    This combines the vcf and hap files from hapcut2
-
-    I found a trick here to avoid grep crashing in case of a nonmatch
-    https://unix.stackexchange.com/questions/330660
+    This pools all of the haplotype files that we generated previously.
     """
     input:
-        origvcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf",
-        vcf = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap.phased.VCF",
-                     chrom = config["CHROMS"]),
         hap = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
-                     chrom = config["CHROMS"]),
+                     chrom=config["CHROMS"])
     output:
-        hap = temp(config["tool"] + "/output/final_output/complete_assembly.hap"),
-        vcf = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf")
+        hap = temp(config["tool"] + "/output/final_output/complete_assembly.hap")
     threads: 1
     resources:
-        mem_mb  = 8000,
-        runtime = 60
+        mem_mb=1000, runtime=10
     shell:
-        """
-        set +e
-
-        cat {input.origvcf} | grep '##fileformat'  > temp.vcf
-        cat {input.origvcf} | grep '##filedate'    >> temp.vcf
-        cat {input.origvcf} | grep '##source'      >> temp.vcf
-        cat {input.origvcf} | grep '##reference'   >> temp.vcf
-        cat {input.origvcf} | grep '##commandline' >> temp.vcf
-        cat {input.origvcf} | grep '##contig'      >> temp.vcf
-        cat {input.origvcf} | grep '##INFO'        >> temp.vcf
-        cat {input.origvcf} | grep '##FORMAT'      >> temp.vcf
-        cat {input.origvcf} | grep '#CHROM'        >> temp.vcf
-        echo '##SAMPLE=<ID=NONE>'        >> temp.vcf
-
-        cat {input.vcf} >> temp.vcf
+        r"""
+        mkdir -p {config[tool]}/output/final_output
         cat {input.hap} > {output.hap}
-        cat temp.vcf | awk '$1 ~ /^#/ {{print $0;next}} {{print $0 | "sort -k1,1 -k2,2n"}}' > {output.vcf}
-        rm temp.vcf
-        set -e
         """
+
+rule merge_vcfs:
+    input:
+        origvcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf",
+        vcfs    = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap.phased.VCF",
+                         chrom=config["CHROMS"])
+    output:
+        merged = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.unsorted.vcf")
+    threads: 2
+    resources:
+        mem_mb=4000, runtime=30
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p {config[tool]}/output/final_output
+
+        # Merge all per-chrom VCFs into one (keep all sites, even if contigs differ)
+        bcftools concat -a -D -O v -o {output.merged} {input.vcfs}
+
+        # If you need to ensure the header carries over metadata from origvcf,
+        # you can reheader (optional). Usually concat keeps a sane header:
+        # bcftools annotate --header-lines {input.origvcf} -O v -o {output.merged}.tmp {output.merged}
+        # mv {output.merged}.tmp {output.merged}
+        """
+
+#rule sort_final_vcf:
+#    """
+#    This combines the vcf and hap files from hapcut2
+#
+#    I found a trick here to avoid grep crashing in case of a nonmatch
+#    https://unix.stackexchange.com/questions/330660
+#    """
+#    input:
+#        origvcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf",
+#        vcf = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap.phased.VCF",
+#                     chrom = config["CHROMS"]),
+#        hap = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
+#                     chrom = config["CHROMS"]),
+#    output:
+#        hap = temp(config["tool"] + "/output/final_output/complete_assembly.hap"),
+#        vcf = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf")
+#    threads: 1
+#    resources:
+#        mem_mb  = 8000,
+#        runtime = 60
+#    shell:
+#        """
+#        set +e
+#
+#        cat {input.origvcf} | grep '##fileformat'  > temp.vcf
+#        cat {input.origvcf} | grep '##filedate'    >> temp.vcf
+#        cat {input.origvcf} | grep '##source'      >> temp.vcf
+#        cat {input.origvcf} | grep '##reference'   >> temp.vcf
+#        cat {input.origvcf} | grep '##commandline' >> temp.vcf
+#        cat {input.origvcf} | grep '##contig'      >> temp.vcf
+#        cat {input.origvcf} | grep '##INFO'        >> temp.vcf
+#        cat {input.origvcf} | grep '##FORMAT'      >> temp.vcf
+#        cat {input.origvcf} | grep '#CHROM'        >> temp.vcf
+#        echo '##SAMPLE=<ID=NONE>'        >> temp.vcf
+#
+#        cat {input.vcf} >> temp.vcf
+#        cat {input.hap} > {output.hap}
+#        cat temp.vcf | awk '$1 ~ /^#/ {{print $0;next}} {{print $0 | "sort -k1,1 -k2,2n"}}' > {output.vcf}
+#        rm temp.vcf
+#        set -e
+#        """
 
 rule get_largest_hap_blocks:
     input:
