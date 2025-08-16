@@ -691,7 +691,7 @@ rule sort_final_vcf:
         vcf = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf")
     threads: 1
     resources:
-        mem_mb  = 4000,
+        mem_mb  = 8000,
         runtime = 60
     shell:
         """
