@@ -1084,10 +1084,10 @@ def bam_size_mb(path: str) -> int:
     except FileNotFoundError:
         return 1
 
-def mem_for_bam_mb(path: str, floor=8000, ceil=96000, pct=0.25, base=1024) -> int:
-    """RAM in MB ~ base + pct * bam_size, clamped."""
-    size = bam_size_mb(path)
-    return int(max(floor, min(ceil, base + pct * size)))
+def mem_for_bam_mb(path: str, floor=32000, ceil=131072, pct=0.18, base=2048) -> int:
+    """RAM MB ~ base + pct * BAM MB, clamped."""
+    mb = bam_size_mb(path)
+    return int(max(floor, min(ceil, base + pct * mb)))
 
 def runtime_for_bam_min(path: str, base=20, per_gb=1.0, ceil=600) -> int:
     size_gb = bam_size_mb(path) / 1024
@@ -1105,15 +1105,15 @@ rule haplotag_reads_chrom:
     output:
         bam = config["tool"] + "/output/final_output/haplotagged_by_chrom/{libtype}.REF_{chrom}.haplotagged.bam",
         bai = config["tool"] + "/output/final_output/haplotagged_by_chrom/{libtype}.REF_{chrom}.haplotagged.bam.bai"
-    threads: 4
+    threads: 1
     resources:
         # Bigger floor for Hi-C, modest floor for others
         mem_mb  = lambda wc, input: mem_for_bam_mb(
             input.bam,
-            floor = 16000 if wc.libtype == "hic" else 6000,
-            ceil  = 96000,
-            pct   = 0.25,   # 25% of shard size in MB + base
-            base  = 2048    # +2 GB headroom
+            floor = 48000 if wc.libtype == "hic" else 8000, #48 GB for Hi-C shards
+            ceil  = 131072,  # cap at 128 GB
+            pct   = 0.18,    # 18% of shard size in MB + base
+            base  = 2048     # +2 GB headroom
         ),
         runtime = lambda wc, input: runtime_for_bam_min(input.bam, base=30, per_gb=1.2, ceil=720)
     shell:
