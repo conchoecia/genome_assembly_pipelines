@@ -99,7 +99,10 @@ rule all:
 
         # also generate haplotagged bam files:
         expand(config["tool"] + "/output/final_output/{libtype}_haplotagged.bam",
+               libtype = ["ill", "chi", "hic", "longreads"]),
+        expand(config["tool"] + "/output/final_output/{libtype}_haplotagged.bam.bai",
                libtype = ["ill", "chi", "hic", "longreads"])
+
 
 ######################################################################
 #  Make a softlink of the assembly
@@ -1162,4 +1165,17 @@ rule merge_haplotagged:
     shell:
         """
         samtools merge -@ {threads} -o {output.bam} {input}
+        """
+
+rule index_haplotagged:
+    input:
+        bam = config["tool"] + "/output/final_output/{libtype}_haplotagged.bam"
+    output:
+        bam = config["tool"] + "/output/final_output/{libtype}_haplotagged.bam.bai"
+    threads: 1
+    resources:
+        mem_mb=8000, runtime=60
+    shell:
+        """
+        samtools index -@ {threads} {input.bam}
         """
