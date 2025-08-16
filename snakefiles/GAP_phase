@@ -695,6 +695,9 @@ rule cat_haps:
         """
 
 rule merge_vcfs:
+    """
+    202508 - This file isn't used for anything
+    """
     input:
         origvcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf",
         vcfs    = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap.phased.VCF",
@@ -929,7 +932,7 @@ rule gzip_complete_assembly_hap_file:
         runtime = 30
     shell:
         """
-        gzip {input.hap}
+        cat {input.hap} > {output.gzipped}
         """
 
 ########################################################################
