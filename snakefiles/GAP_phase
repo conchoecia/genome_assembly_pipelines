@@ -1079,30 +1079,19 @@ rule index_vcf_individual_chromosomes:
         """
 
 def bam_size_mb(path: str) -> int:
-    """Return BAM size in MB (>=1)."""
     try:
-        return max(1, int(Path(path).stat().st_size // (1024 * 1024)))
+        return max(1, int(Path(path).stat().st_size // (1024*1024)))
     except FileNotFoundError:
         return 1
 
-def mem_for_bam_mb(path: str,
-                   floor=4000,    # 4 GB minimum
-                   ceil=64000,    # 64 GB maximum
-                   pct=0.03,      # ~3% of file size
-                   base=2048) -> int:  # +2 GB headroom
-    """Estimate RAM in MB as base + pct * size, clamped."""
-    size_mb = bam_size_mb(path)
-    est = base + size_mb * pct
-    return int(max(floor, min(ceil, est)))
+def mem_for_bam_mb(path: str, floor=8000, ceil=96000, pct=0.25, base=1024) -> int:
+    """RAM in MB ~ base + pct * bam_size, clamped."""
+    size = bam_size_mb(path)
+    return int(max(floor, min(ceil, base + pct * size)))
 
-def runtime_for_bam_min(path: str,
-                        base=30,     # 30 min minimum
-                        per_gb=1.5,  # ~1.5 min per GB
-                        ceil=720) -> int:  # cap at 12 h
-    """Estimate runtime in minutes based on BAM size."""
+def runtime_for_bam_min(path: str, base=20, per_gb=1.0, ceil=600) -> int:
     size_gb = bam_size_mb(path) / 1024
-    est = base + per_gb * size_gb
-    return int(max(base, min(ceil, est)))
+    return int(max(base, min(ceil, base + per_gb * size_gb)))
 
 rule haplotag_reads_chrom:
     input:
@@ -1118,8 +1107,15 @@ rule haplotag_reads_chrom:
         bai = config["tool"] + "/output/final_output/haplotagged_by_chrom/{libtype}.REF_{chrom}.haplotagged.bam.bai"
     threads: 4
     resources:
-        mem_mb  = lambda wc, input: mem_for_bam_mb(input.bam, floor=1500, ceil=16000, pct=0.01, base=512),
-        runtime = lambda wc, input: runtime_for_bam_min(input.bam, base=15, per_gb=0.7, ceil=240)
+        # Bigger floor for Hi-C, modest floor for others
+        mem_mb  = lambda wc, input: mem_for_bam_mb(
+            input.bam,
+            floor = 16000 if wc.libtype == "hic" else 6000,
+            ceil  = 96000,
+            pct   = 0.25,   # 25% of shard size in MB + base
+            base  = 2048    # +2 GB headroom
+        ),
+        runtime = lambda wc, input: runtime_for_bam_min(input.bam, base=30, per_gb=1.2, ceil=720)
     shell:
         """
         set -euo pipefail
