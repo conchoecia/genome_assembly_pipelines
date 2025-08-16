@@ -932,7 +932,7 @@ rule gzip_complete_assembly_hap_file:
         runtime = 30
     shell:
         """
-        cat {input.hap} > {output.gzipped}
+        cat {input.hap} | gzip > {output.gzipped}
         """
 
 ########################################################################
