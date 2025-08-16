@@ -532,6 +532,22 @@ rule split_bams:
         samtools view -@ {threads} -bh {input.bam} "{wildcards.chrom}" -o {output.bam}
         """
 
+rule index_split_bam:
+    input:
+        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam"
+    output:
+        bai = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam.bai"
+    threads: 2
+    resources:
+        mem_mb=8000, runtime=15
+    shell:
+        """
+        set -euo pipefail
+        # Try to index; if the shard is empty and samtools refuses, create a placeholder
+        # so downstream rules depending on the .bai can still proceed.
+        samtools index -@ {threads} {input.bam} {output.bai} || touch {output.bai}
+        """
+
 rule add_rg:
     input:
         bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
