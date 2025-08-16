@@ -536,7 +536,7 @@ rule add_rg:
     threads: 2
     resources:
         mem_mb  = 4000,
-        runtime = 60
+        runtime = 90
     shell:
         """
         java -Xmx3g -jar {input.picard} AddOrReplaceReadGroups \
@@ -561,10 +561,10 @@ rule mark_duplicates_in_split_bams:
     threads: 1
     resources:
         mem_mb  = 8000,
-        runtime = 30  # minutes
+        runtime = 90  # minutes
     shell:
         """
-        java -jar {input.picard} MarkDuplicates \
+        java -jar -Xmx7g {input.picard} MarkDuplicates \
           --READ_NAME_REGEX null \
           --INPUT {input.bam} \
           --OUTPUT {output.bam} \
