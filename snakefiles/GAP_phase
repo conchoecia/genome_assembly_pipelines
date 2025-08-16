@@ -944,28 +944,6 @@ rule gzip_complete_assembly_hap_file:
 #    Now split this into different chromosomes and make the final table
 ########################################################################
 
-rule split_phased_into_individual_chromosomes:
-    input:
-        final_gz = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
-        final_in = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz.tbi"
-    output:
-        chroms = temp(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf"),
-        chromgz = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
-        index = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi"
-    threads: 1
-    resources:
-        mem_mb  = 4000,
-        runtime = 60
-    params:
-        tchrom = lambda w: w.chrom
-    shell:
-        """
-        bcftools filter -r {params.tchrom} {input.final_gz} > {output.chroms}
-        # compress
-        bgzip -c {output.chroms} > {output.chromgz}
-        # index
-        tabix -p vcf {output.chromgz}
-        """
 
 rule make_table_of_final_output:
     """
@@ -1051,6 +1029,32 @@ rule make_table_of_final_output:
 #    Now we use WhatsHap to haplotag the Hi-C and long reads
 ########################################################################
 
+rule split_phased_into_individual_chromosomes:
+    input:
+        final_gz = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
+        final_in = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz.tbi"
+    output:
+        chromgz = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
+        index   = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi"
+    threads: 1
+    resources:
+        mem_mb  = 4000,
+        runtime = 60
+    params:
+        tchrom = lambda w: w.chrom
+    shell:
+        """
+        bcftools view -r {wildcards.chrom} -Oz -o {output.chromgz} {input.final_gz}
+        # Index only if there are data lines (avoids tabix error on empty shards)
+        if bcftools view -H {output.chromgz} | head -n1 | grep -q .; then
+            tabix -p vcf {output.chromgz}
+        else
+            touch {output.index}
+            # Or just let downstream rules detect empty VCF and skip tagging.
+        fi
+        """
+
+
 def bam_size_mb(path: str) -> int:
     """Return BAM size in MB (>=1)."""
     try:
@@ -1077,48 +1081,66 @@ def runtime_for_bam_min(path: str,
     est = base + per_gb * size_gb
     return int(max(base, min(ceil, est)))
 
-rule haplotag_reads:
+rule haplotag_reads_chrom:
     input:
-        readbam = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam",
-        bambai  = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai",
-        vcf     = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
-        vcf_in  = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz.tbi",
-        ref     = config["tool"] + "/input/assembly/input.fasta",
-        fai     = config["tool"] + "/input/assembly/input.fasta.fai"
+        bam    = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
+        bai    = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam.bai",
+        vcfgz  = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
+        # index may not exist for empty shard; keep optional in logic
+        ref    = config["tool"] + "/input/assembly/input.fasta",
+        fai    = config["tool"] + "/input/assembly/input.fasta.fai"
     output:
-        tagbam = config["tool"] + "/output/final_output/{libtype}_haplotagged.bam"
+        bam = config["tool"] + "/output/final_output/haplotagged_by_chrom/{libtype}.REF_{chrom}.haplotagged.bam",
+        bai = config["tool"] + "/output/final_output/haplotagged_by_chrom/{libtype}.REF_{chrom}.haplotagged.bam.bai"
     threads: 4
-    params:
-        outputthreads = 3
     resources:
-        mem_mb  = lambda wc, input: mem_for_bam_mb(input.readbam),
-        runtime = lambda wc, input: runtime_for_bam_min(input.readbam)
+        mem_mb  = lambda wc, input: mem_for_bam_mb(input.bam, floor=1500, ceil=16000, pct=0.01, base=512),
+        runtime = lambda wc, input: runtime_for_bam_min(input.bam, base=15, per_gb=0.7, ceil=240)
     shell:
         """
         set -euo pipefail
+        mkdir -p {config[tool]}/output/final_output/haplotagged_by_chrom
 
-        # If BAM is invalid or has zero reads, write an empty-but-valid BAM and exit.
-        if ! samtools quickcheck -v {input.readbam} >/dev/null 2>&1 || \
-           [ "$(samtools view -c {input.readbam})" -eq 0 ]; then
-            echo "[haplotag_reads] Input has no reads; emitting header-only BAM."
-            if samtools view -H {input.readbam} >/dev/null 2>&1; then
-                samtools view -H {input.readbam} | samtools view -b -o {output.tagbam} -
-            else
-                awk 'BEGIN{{print "@HD\\tVN:1.6\\tSO:coordinate"}} {{printf "@SQ\\tSN:%s\\tLN:%s\\n",$1,$2}}' {input.fai} \
-                  | samtools view -b -T {input.ref} -o {output.tagbam} -
-            fi
-            samtools index -@ {threads} {output.tagbam}
+        # Empty or invalid BAM shard? Emit header-only BAM.
+        if ! samtools quickcheck -v {input.bam} >/dev/null 2>&1 || \
+           [ "$(samtools view -c {input.bam})" -eq 0 ]; then
+            echo "[haplotag_reads_chrom] {wildcards.chrom}: empty BAM shard; writing header-only BAM."
+            samtools view -H {input.bam} | samtools view -b -o {output.bam} -
+            samtools index -@ {threads} {output.bam}
             exit 0
         fi
 
+        # No variants in this VCF shard? Just pass the BAM through unchanged.
+        if ! bcftools view -H {input.vcfgz} | head -n1 | grep -q .; then
+            echo "[haplotag_reads_chrom] {wildcards.chrom}: no variants; copying BAM shard."
+            cp -p {input.bam} {output.bam}
+            if [ -f {input.bai} ]; then cp -p {input.bai} {output.bai}; else samtools index -@ {threads} {output.bam}; fi
+            exit 0
+        fi
+
+        # Otherwise, haplotag normally.
         whatshap haplotag \
-            -o {output.tagbam} \
+            -o {output.bam} \
             --reference {input.ref} \
             --ignore-read-groups \
             --ploidy 2 \
-            --output-threads {params.outputthreads} \
-            {input.vcf} \
-            {input.readbam}
+            --output-threads {threads} \
+            {input.vcfgz} \
+            {input.bam}
 
-        samtools index -@ {threads} {output.tagbam}
+        samtools index -@ {threads} {output.bam}
+        """
+
+rule merge_haplotagged:
+    input:
+        expand(config["tool"] + "/output/final_output/haplotagged_by_chrom/{{libtype}}.REF_{chrom}.haplotagged.bam",
+               chrom=config["CHROMS"])
+    output:
+        bam = config["tool"] + "/output/final_output/{libtype}_haplotagged.bam"
+    threads: 8
+    resources:
+        mem_mb=4000, runtime=60
+    shell:
+        """
+        samtools merge -@ {threads} -o {output.bam} {input}
         """
