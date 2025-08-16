@@ -1113,12 +1113,13 @@ rule haplotag_reads_chrom:
         # Bigger floor for Hi-C, modest floor for others
         mem_mb  = lambda wc, input: mem_for_bam_mb(
             input.bam,
-            floor = 48000 if wc.libtype == "hic" else 8000, #48 GB for Hi-C shards
+            floor = 40000 if wc.libtype == "hic" else 8000, #48 GB for Hi-C shards
             ceil  = 131072,  # cap at 128 GB
             pct   = 0.18,    # 18% of shard size in MB + base
             base  = 2048     # +2 GB headroom
         ),
-        runtime = lambda wc, input: runtime_for_bam_min(input.bam, base=30, per_gb=1.2, ceil=720)
+        runtime = lambda wc, input: runtime_for_bam_min(input.bam, base=30, per_gb=3, ceil=2160),
+        slurm_cpus_per_task = lambda wc, threads: threads,
     shell:
         """
         set -euo pipefail
