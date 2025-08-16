@@ -1118,7 +1118,7 @@ rule haplotag_reads_chrom:
             pct   = 0.18,    # 18% of shard size in MB + base
             base  = 2048     # +2 GB headroom
         ),
-        runtime = lambda wc, input: runtime_for_bam_min(input.bam, base=15, per_gb=5, ceil=2160),
+        runtime = lambda wc, input: runtime_for_bam_min(input.bam, base=45, per_gb=10, ceil=2160),
         slurm_cpus_per_task = lambda wc, threads: threads,
     shell:
         """
