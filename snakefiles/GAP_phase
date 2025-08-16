@@ -1050,26 +1050,33 @@ rule split_phased_into_individual_chromosomes:
         final_gz = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
         final_in = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz.tbi"
     output:
-        chromgz = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
-        index   = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi"
+        chromgz = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz"
     threads: 1
     resources:
         mem_mb  = 4000,
-        runtime = 60
+        runtime = 20
     params:
         tchrom = lambda w: w.chrom
     shell:
         """
         bcftools view -r {wildcards.chrom} -Oz -o {output.chromgz} {input.final_gz}
-        # Index only if there are data lines (avoids tabix error on empty shards)
-        if bcftools view -H {output.chromgz} | head -n1 | grep -q .; then
-            tabix -p vcf {output.chromgz}
-        else
-            touch {output.index}
-            # Or just let downstream rules detect empty VCF and skip tagging.
-        fi
         """
 
+rule index_vcf_individual_chromosomes:
+    input:
+        chromgz = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz"
+    output:
+        index   = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi"
+    threads: 1
+    resources:
+        mem_mb  = 4000,
+        runtime = 20
+    params:
+        tchrom = lambda w: w.chrom
+    shell:
+        """
+        tabix -p vcf {output.chromgz}
+        """
 
 def bam_size_mb(path: str) -> int:
     """Return BAM size in MB (>=1)."""
@@ -1102,6 +1109,7 @@ rule haplotag_reads_chrom:
         bam    = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
         bai    = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam.bai",
         vcfgz  = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
+        vcfin  = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi",
         # index may not exist for empty shard; keep optional in logic
         ref    = config["tool"] + "/input/assembly/input.fasta",
         fai    = config["tool"] + "/input/assembly/input.fasta.fai"
