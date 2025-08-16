@@ -1075,7 +1075,7 @@ rule index_vcf_individual_chromosomes:
         tchrom = lambda w: w.chrom
     shell:
         """
-        tabix -p vcf {output.chromgz}
+        tabix -p vcf {input.chromgz}
         """
 
 def bam_size_mb(path: str) -> int:
