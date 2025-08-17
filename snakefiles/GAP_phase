@@ -1190,7 +1190,7 @@ def runtime_for_merge_minutes(libtype: str, paths,
 
 rule merge_haplotagged:
     input:
-        expand(config["tool"] + "/output/final_output/haplotagged_by_chrom/{{libtype}}.REF_{chrom}.haplotagged.bam",
+        bams = expand(config["tool"] + "/output/final_output/haplotagged_by_chrom/{{libtype}}.REF_{chrom}.haplotagged.bam",
                chrom=config["CHROMS"])
     output:
         bam = config["tool"] + "/output/final_output/{libtype}_haplotagged.bam"
