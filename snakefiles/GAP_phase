@@ -1170,6 +1170,24 @@ rule haplotag_reads_chrom:
         samtools index -@ {threads} {output.bam}
         """
 
+
+def total_bam_size_mb(paths) -> int:
+    tot = 0
+    for p in paths:
+        try: tot += int(Path(p).stat().st_size // (1024*1024))
+        except FileNotFoundError: pass
+    return max(1, tot)
+
+def runtime_for_merge_minutes(libtype: str, paths,
+                              hic_base=45, hic_per_gb=1.1, hic_ceil=2160,
+                              pb_base=45,  pb_per_gb=0.8,  pb_ceil=720) -> int:
+    gb = total_bam_size_mb(paths) / 1024
+    lt = (libtype or "").lower()
+    if lt == "hic":
+        return int(min(hic_ceil, max(hic_base, hic_base + hic_per_gb * gb)))
+    # PacBio / long reads default
+    return int(min(pb_ceil, max(pb_base, pb_base + pb_per_gb * gb)))
+
 rule merge_haplotagged:
     input:
         expand(config["tool"] + "/output/final_output/haplotagged_by_chrom/{{libtype}}.REF_{chrom}.haplotagged.bam",
@@ -1178,7 +1196,8 @@ rule merge_haplotagged:
         bam = config["tool"] + "/output/final_output/{libtype}_haplotagged.bam"
     threads: 8
     resources:
-        mem_mb=4000, runtime=60
+        mem_mb  = 8000,  # merge is light on RAM
+        runtime = lambda wc, input: runtime_for_merge_minutes(wc.libtype, input.bams)
     shell:
         """
         samtools merge -@ {threads} -o {output.bam} {input}
