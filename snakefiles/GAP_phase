@@ -1179,7 +1179,7 @@ def total_bam_size_mb(paths) -> int:
     return max(1, tot)
 
 def runtime_for_merge_minutes(libtype: str, paths,
-                              hic_base=45, hic_per_gb=1.1, hic_ceil=2160,
+                              hic_base=45, hic_per_gb=1.2, hic_ceil=2160,
                               pb_base=45,  pb_per_gb=0.8,  pb_ceil=720) -> int:
     gb = total_bam_size_mb(paths) / 1024
     lt = (libtype or "").lower()
@@ -1210,7 +1210,8 @@ rule index_haplotagged:
         bam = config["tool"] + "/output/final_output/{libtype}_haplotagged.bam.bai"
     threads: 1
     resources:
-        mem_mb=8000, runtime=60
+        mem_mb=8000,
+        runtime = lambda wc, input: runtime_for_bam_min(input.bam, base=15, per_gb=1.5, ceil=600)
     shell:
         """
         samtools index -@ {threads} {input.bam}
