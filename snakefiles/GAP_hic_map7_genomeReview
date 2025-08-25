@@ -197,8 +197,6 @@ rule download_input_fasta:
         fi
         """
 
-
-
 rule download_hic_fastqgz:
     """
     Download the HiC fastq.gz files
@@ -422,7 +420,7 @@ rule JBAT_pairs_to_hic:
         mkdir -p "{wildcards.nom}TEMP"
         cd "{wildcards.nom}TEMP"
         for QVAL in {params.qvalsp}; do
-           bash {input.hicvis} -p false ../{input.assembly} ../{params.longprefix}${{QVAL}}{params.longsuffix} || true
+           bash {input.hicvis} -p false ../{input.assembly} ../{params.longprefix}${{QVAL}}{params.longsuffix}
            mv {params.outprefix} ../{params.mvprefix}${{QVAL}}{params.mvsuffix}
         done
         rm ./*scaffold_track.txt
