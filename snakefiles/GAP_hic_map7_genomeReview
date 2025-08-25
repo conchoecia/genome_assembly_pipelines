@@ -176,9 +176,6 @@ rule all:
 #        fi
 #        """
 rule download_input_fasta:
-    """
-    Download input FASTA (handles gzipped or plain automatically).
-    """
     output:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
     threads: 1
@@ -187,12 +184,11 @@ rule download_input_fasta:
     shell:
         r"""
         if [ ! -f {output.assem} ]; then
-            # download with original filename from server
             tmpfile=$(basename {params.URL})
-            wget --no-check-certificate -O "$tmpfile" "{params.URL}"
+            wget --no-check-certificate -O "$tmpfile" "{params.URL}" || { echo "Download failed"; exit 1; }
+            [ -s "$tmpfile" ] || { echo "Downloaded file is empty"; exit 1; }
 
-            # if gzipped, decompress to final name
-            if file "$tmpfile" | grep -q 'gzip compressed'; then
+            if gzip -t "$tmpfile" 2>/dev/null; then
                 gunzip -c "$tmpfile" > {output.assem}
                 rm -f "$tmpfile"
             else
