@@ -420,7 +420,7 @@ rule JBAT_pairs_to_hic:
         mkdir -p "{wildcards.nom}TEMP"
         cd "{wildcards.nom}TEMP"
         for QVAL in {params.qvalsp}; do
-           bash {input.hicvis} -p false ../{input.assembly} ../{params.longprefix}${{QVAL}}{params.longsuffix}
+           bash {input.hicvis} -p false ../{input.assembly} ../{params.longprefix}${{QVAL}}{params.longsuffix} || true
            mv {params.outprefix} ../{params.mvprefix}${{QVAL}}{params.mvsuffix}
         done
         rm ./*scaffold_track.txt
