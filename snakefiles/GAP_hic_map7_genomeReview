@@ -52,6 +52,7 @@ if "minimap2arg" not in config:
 ###
 ###  KMER PARSING SECTION
 ###
+
 # if kmers not specified in config, add
 if "kmers" not in config:
     config["kmers"] = {}
@@ -158,9 +159,25 @@ rule all:
                nom = config["assemblies"], qval = config["qvals"]),
 
 
+#DELETE
+#rule download_input_fasta:
+#    """
+#    Usually there will be a link to the input fasta file
+#    """
+#    output:
+#        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+#    threads: 1
+#    params:
+#        URL = lambda wildcards: config["assemblies"][wildcards.nom]
+#    shell:
+#        """
+#        if [ ! -f {output.assem} ]; then
+#            wget "{params.URL}" -O {output.assem}
+#        fi
+#        """
 rule download_input_fasta:
     """
-    Usually there will be a link to the input fasta file
+    Download input FASTA (handles gzipped or plain automatically).
     """
     output:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
@@ -168,11 +185,22 @@ rule download_input_fasta:
     params:
         URL = lambda wildcards: config["assemblies"][wildcards.nom]
     shell:
-        """
+        r"""
         if [ ! -f {output.assem} ]; then
-            wget "{params.URL}" -O {output.assem}
+            # download with original filename from server
+            tmpfile=$(basename {params.URL})
+            wget -O "$tmpfile" "{params.URL}"
+
+            # if gzipped, decompress to final name
+            if file "$tmpfile" | grep -q 'gzip compressed'; then
+                gunzip -c "$tmpfile" > {output.assem}
+                rm -f "$tmpfile"
+            else
+                mv "$tmpfile" {output.assem}
+            fi
         fi
         """
+
 
 rule download_hic_fastqgz:
     """
