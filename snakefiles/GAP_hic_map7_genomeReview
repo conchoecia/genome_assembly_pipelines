@@ -189,7 +189,7 @@ rule download_input_fasta:
         if [ ! -f {output.assem} ]; then
             # download with original filename from server
             tmpfile=$(basename {params.URL})
-            wget -O "$tmpfile" "{params.URL}"
+            wget --no-check-certificate -O "$tmpfile" "{params.URL}"
 
             # if gzipped, decompress to final name
             if file "$tmpfile" | grep -q 'gzip compressed'; then
