@@ -185,8 +185,8 @@ rule download_input_fasta:
         r"""
         if [ ! -f {output.assem} ]; then
             tmpfile=$(basename {params.URL})
-            wget --no-check-certificate -O "$tmpfile" "{params.URL}" || { echo "Download failed"; exit 1; }
-            [ -s "$tmpfile" ] || { echo "Downloaded file is empty"; exit 1; }
+            wget --no-check-certificate -O "$tmpfile" "{params.URL}" || {{ echo "Download failed"; exit 1; }}
+            [ -s "$tmpfile" ] || {{ echo "Downloaded file is empty"; exit 1; }}
 
             if gzip -t "$tmpfile" 2>/dev/null; then
                 gunzip -c "$tmpfile" > {output.assem}
@@ -196,6 +196,7 @@ rule download_input_fasta:
             fi
         fi
         """
+
 
 
 rule download_hic_fastqgz:
