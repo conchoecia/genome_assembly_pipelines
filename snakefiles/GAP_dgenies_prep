@@ -70,7 +70,7 @@ rule minimap2:
         paf = config["tool"] + "/output/paf_raw/{qname}_to_{rname}.raw.paf"
     params:
         minimap2args = config["minimap2args"]
-    threads: max(1, int(workflow.cores/len(config["queries"])))
+    threads: workflow.cores
     shell:
         """
         minimap2 -t {threads} {params.minimap2args} {input.reference} {input.reads} > {output.paf}
@@ -85,6 +85,7 @@ rule cleanup_paf:
         paf    = config["tool"] + "/output/paf_raw/{qname}_to_{rname}.raw.paf"
     output:
         paf    = config["tool"] + "/output/paf/{qname}_to_{rname}.paf"
+    threads: 1
     run:
         # first we get the scaffold size
         scaf_to_size = {}

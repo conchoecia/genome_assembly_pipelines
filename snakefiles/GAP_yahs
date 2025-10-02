@@ -45,8 +45,8 @@ rule all:
                 nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
                 nom = config["assemblies"]),
-        expand(config["tool"] + "/output/{nom}/yahs/{nom}.long",
-                nom = config["assemblies"])
+        #expand(config["tool"] + "/output/{nom}/yahs/{nom}.long",
+        #        nom = config["assemblies"])
         #expand(config["tool"] + "/output/{nom}/yahs/{nom}.hic",
         #        nom = config["assemblies"])
 
@@ -220,8 +220,7 @@ rule compile_yahs:
     compile chromap if it does not yet exist
     """
     output:
-        yahs   = os.path.join(filepath, "../bin/yahs/yahs"),
-        juicer = os.path.join(filepath, "../bin/yahs/juicer")
+        yahs   = os.path.join(filepath, "../bin/yahs/yahs")
     params:
         mvdir = os.path.join(filepath, "../bin/")
     threads: 1
@@ -256,114 +255,114 @@ rule run_yahs_on_the_data:
             {input.assem} {input.bam}
         """
 
-rule generate_long_file_for_JBAT:
-    """
-    generates a .long file for making a hic file
-
-    modified from the instructions from the yahs github
-
-    3d-dna long spec can be found here: https://github.com/aidenlab/juicer/wiki/Pre#long-format
-
-    0	scaffold_1	100000148	0	1	scaffold_1	101849186	1
-    0	scaffold_1	100000148	0	1	scaffold_1	101849186	1
-    0	scaffold_1	100000558	0	1	scaffold_1	100002257	1
-    0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
-    0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
-    0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
-    0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
-
-    0 Scaffold5 12278 0 0 Scaffold5 33988 1 1 - - 1  - - -
-    0 Scaffold5 12278 0 0 Scaffold5 33988 1 1 - - 1  - - -
-    0 Scaffold5 12278 0 0 Scaffold5 33988 1 1 - - 1  - - -
-    16 Scaffold5 12297 0 16 Scaffold5 80797992 1 1 - - 1  - - -
-    0 Scaffold5 12652 0 0 Scaffold5 2028951 1 1 - - 1  - - -
-    0 Scaffold5 12652 0 0 Scaffold5 2028951 1 1 - - 1  - - -
-    0 Scaffold5 12864 0 16 Scaffold5 178772324 1 1 - - 1  - - -
-
-    We used to use this command for sort:
-           sort -k2,2d -k6,6d -T ./ --parallel={threads} -S32G | \
-            $2<=$4{{print $6, $2, $3, 0, $7, $4, $5, 1, "1 - - 1  - - -" }} \
-            $4<$2{{print $7, $4, $5, 0, $6, $2, $3, 1, "1 - - 1  - - -" }}' > {output.longp}
-
-    """
-    input:
-        yahsbin  = config["tool"] + "/output/{nom}/yahs/{nom}.bin",
-        agp      = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.agp",
-        fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai",
-        juicer = os.path.join(filepath, "../bin/yahs/juicer")
-    output:
-        long  = config["tool"] + "/output/{nom}/yahs/{nom}.long"
-    threads: max(workflow.cores - 1, 1)
-    resources:
-        mem_mb = 32000
-    shell:
-        """
-        {input.juicer} pre {input.yahsbin} {input.agp} {input.fai} | \
-           sort -k2,2d -k6,6d -k3,3n -k7,7n -T ./ --parallel={threads} -S32G | \
-           awk 'NF' | \
-           awk '$2<=$6{{print $1, $2, $3, $4, 0, $6, $7, $8, "1 - - 1  - - -" }} \
-                 $6<$2{{print $1, $6, $7, $4, 0, $2, $3, $8, "1 - - 1  - - -" }}' > {output.long}
-        """
-
-rule generate_assembly_for_hic_gen:
-    input:
-        assem = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
-        awkscript= os.path.abspath(os.path.join( filepath, "../bin/generate-assembly-file-from-fasta.awk"))
-    output:
-        assembly = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa.assembly"
-    threads: 1
-    shell:
-        """
-        awk -f {input.awkscript} {input.assem} > {output.assembly}
-        """
-
-rule get3ddna:
-    """
-    from https://github.com/Yujiaxin419/ALLHiC/wiki/Manually-refine-ALLHiC-scaffold-assembly-through-juicebox#hic-files
-    """
-    output:
-        hicvis = os.path.join(filepath, "../bin/3d-dna/visualize/run-assembly-visualizer.sh")
-    params:
-        mvdir = os.path.join(filepath, "../bin/"),
-        rmdir = os.path.join(filepath, "../bin/3d-dna"),
-    threads: 1
-    shell:
-        """
-        rm -rf 3d-dna
-        rm -rf {params.rmdir}
-        git clone https://github.com/aidenlab/3d-dna.git
-        mv 3d-dna/ {params.mvdir}
-        """
-
-rule JBAT_pairs_to_hic:
-    """
-    Use 3D DNA to make an editable hic file
-
-    This is done in a for loop to avoid race conditions.
-    Done with reverse sorting order to get files faster.
-    """
-    input:
-        hicvis   = os.path.join(filepath, "../bin/3d-dna/visualize/run-assembly-visualizer.sh"),
-        longp    = config["tool"] + "/output/{nom}/yahs/{nom}.long",
-        assembly = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa.assembly"
-    output:
-        hicmap = config["tool"] + "/output/{nom}/yahs_hic/{nom}.hic"
-    params:
-        outprefix  = lambda wildcards: "{}.hic".format(wildcards.nom)
-    threads: 1
-    shell:
-        """
-        # make a directory
-        mkdir -p "{wildcards.nom}TEMP"
-        cd "{wildcards.nom}TEMP"
-
-        # make a hic file
-        bash {input.hicvis} -p false ../{input.assembly} ../{input.longp} || true
-        cp {params.outprefix} ../{output.hicmap}
-
-        #rm ./*scaffold_track.txt
-        #rm ./*superscaf_track.txt
-        #rm ./*asm_mnd.txt
-        #cd ../
-        #rm -rf  "{wildcards.nom}TEMP"
-        """
+#rule generate_long_file_for_JBAT:
+#    """
+#    generates a .long file for making a hic file
+#
+#    modified from the instructions from the yahs github
+#
+#    3d-dna long spec can be found here: https://github.com/aidenlab/juicer/wiki/Pre#long-format
+#
+#    0	scaffold_1	100000148	0	1	scaffold_1	101849186	1
+#    0	scaffold_1	100000148	0	1	scaffold_1	101849186	1
+#    0	scaffold_1	100000558	0	1	scaffold_1	100002257	1
+#    0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
+#    0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
+#    0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
+#    0	scaffold_1	100000561	0	1	scaffold_1	49722485	1
+#
+#    0 Scaffold5 12278 0 0 Scaffold5 33988 1 1 - - 1  - - -
+#    0 Scaffold5 12278 0 0 Scaffold5 33988 1 1 - - 1  - - -
+#    0 Scaffold5 12278 0 0 Scaffold5 33988 1 1 - - 1  - - -
+#    16 Scaffold5 12297 0 16 Scaffold5 80797992 1 1 - - 1  - - -
+#    0 Scaffold5 12652 0 0 Scaffold5 2028951 1 1 - - 1  - - -
+#    0 Scaffold5 12652 0 0 Scaffold5 2028951 1 1 - - 1  - - -
+#    0 Scaffold5 12864 0 16 Scaffold5 178772324 1 1 - - 1  - - -
+#
+#    We used to use this command for sort:
+#           sort -k2,2d -k6,6d -T ./ --parallel={threads} -S32G | \
+#            $2<=$4{{print $6, $2, $3, 0, $7, $4, $5, 1, "1 - - 1  - - -" }} \
+#            $4<$2{{print $7, $4, $5, 0, $6, $2, $3, 1, "1 - - 1  - - -" }}' > {output.longp}
+#
+#    """
+#    input:
+#        yahsbin  = config["tool"] + "/output/{nom}/yahs/{nom}.bin",
+#        agp      = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.agp",
+#        fai = config["tool"] + "/input/assembly/{nom}_input.fasta.fai",
+#        juicer = os.path.join(filepath, "../bin/yahs/juicer")
+#    output:
+#        long  = config["tool"] + "/output/{nom}/yahs/{nom}.long"
+#    threads: max(workflow.cores - 1, 1)
+#    resources:
+#        mem_mb = 32000
+#    shell:
+#        """
+#        {input.juicer} pre {input.yahsbin} {input.agp} {input.fai} | \
+#           sort -k2,2d -k6,6d -k3,3n -k7,7n -T ./ --parallel={threads} -S32G | \
+#           awk 'NF' | \
+#           awk '$2<=$6{{print $1, $2, $3, $4, 0, $6, $7, $8, "1 - - 1  - - -" }} \
+#                 $6<$2{{print $1, $6, $7, $4, 0, $2, $3, $8, "1 - - 1  - - -" }}' > {output.long}
+#        """
+#
+#rule generate_assembly_for_hic_gen:
+#    input:
+#        assem = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa",
+#        awkscript= os.path.abspath(os.path.join( filepath, "../bin/generate-assembly-file-from-fasta.awk"))
+#    output:
+#        assembly = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa.assembly"
+#    threads: 1
+#    shell:
+#        """
+#        awk -f {input.awkscript} {input.assem} > {output.assembly}
+#        """
+#
+#rule get3ddna:
+#    """
+#    from https://github.com/Yujiaxin419/ALLHiC/wiki/Manually-refine-ALLHiC-scaffold-assembly-through-juicebox#hic-files
+#    """
+#    output:
+#        hicvis = os.path.join(filepath, "../bin/3d-dna/visualize/run-assembly-visualizer.sh")
+#    params:
+#        mvdir = os.path.join(filepath, "../bin/"),
+#        rmdir = os.path.join(filepath, "../bin/3d-dna"),
+#    threads: 1
+#    shell:
+#        """
+#        rm -rf 3d-dna
+#        rm -rf {params.rmdir}
+#        git clone https://github.com/aidenlab/3d-dna.git
+#        mv 3d-dna/ {params.mvdir}
+#        """
+#
+#rule JBAT_pairs_to_hic:
+#    """
+#    Use 3D DNA to make an editable hic file
+#
+#    This is done in a for loop to avoid race conditions.
+#    Done with reverse sorting order to get files faster.
+#    """
+#    input:
+#        hicvis   = os.path.join(filepath, "../bin/3d-dna/visualize/run-assembly-visualizer.sh"),
+#        longp    = config["tool"] + "/output/{nom}/yahs/{nom}.long",
+#        assembly = config["tool"] + "/output/{nom}/yahs/{nom}_scaffolds_final.fa.assembly"
+#    output:
+#        hicmap = config["tool"] + "/output/{nom}/yahs_hic/{nom}.hic"
+#    params:
+#        outprefix  = lambda wildcards: "{}.hic".format(wildcards.nom)
+#    threads: 1
+#    shell:
+#        """
+#        # make a directory
+#        mkdir -p "{wildcards.nom}TEMP"
+#        cd "{wildcards.nom}TEMP"
+#
+#        # make a hic file
+#        bash {input.hicvis} -p false ../{input.assembly} ../{input.longp} || true
+#        cp {params.outprefix} ../{output.hicmap}
+#
+#        #rm ./*scaffold_track.txt
+#        #rm ./*superscaf_track.txt
+#        #rm ./*asm_mnd.txt
+#        #cd ../
+#        #rm -rf  "{wildcards.nom}TEMP"
+#        """

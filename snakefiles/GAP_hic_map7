@@ -227,6 +227,9 @@ rule chrom_size:
     output:
         cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
     threads: 1
+    resources:
+        mem_mb=2000,
+        runtime=5
     shell:
         """
         bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
@@ -246,6 +249,9 @@ rule compile_chromap:
     params:
         mvdir = os.path.join(filepath, "../bin/chromap/")
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=15
     shell:
         """
         rm -rf ./chromap
@@ -267,6 +273,9 @@ rule check_assembly:
     output:
         check = config["tool"] + "/input/assembly/{nom}_input.fasta.check"
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
     run:
         chromlist = set()
         with open(input.assem) as handle:
@@ -284,6 +293,9 @@ rule index_ref:
         chromap = os.path.join(filepath, "../bin/chromap/chromap")
     output:
         index = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.index")
+    resources:
+        mem_mb=lambda wildcards, input: max(8000, int(os.path.getsize(input.assem) / 1000000 * 2)),
+        runtime=30
     shell:
         """
         {input.chromap} -i -r {input.assem} -o {output.index}
@@ -297,6 +309,9 @@ rule generate_assembly_for_hic_gen:
     output:
         assembly = config["tool"] + "/input/assembly/{nom}_input.fasta.assembly"
     threads: 1
+    resources:
+        mem_mb=2000,
+        runtime=5
     shell:
         """
         awk -f {input.awkscript} {input.assem} > {output.assembly}
@@ -316,6 +331,9 @@ rule editable_assembly_file:
         outprefix = lambda wildcards: config["tool"] + "/output/{d}/{d}".format(
                      d=wildcards.nom)
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
     shell:
         """
         python {input.assemfromfasta} -c {input.assem} {params.outprefix}
@@ -336,6 +354,9 @@ rule hic_to_pairs:
         right = " -2 ".join(flatten([config["libs"][x]["read2"] for x in config["libs"]])),
         qval  = lambda wildcards: wildcards.qval
     threads: workflow.cores - 2
+    resources:
+        mem_mb=lambda wildcards, input: max(32000, int(os.path.getsize(input.assem) / 1000000 * 8)),
+        runtime=lambda wildcards, input: max(180, int(sum([os.path.getsize(f) for f in input.left]) / 1000000000 * 2))
     shell:
         """
         {input.chromap} --preset hic -x {input.index} \
@@ -353,6 +374,9 @@ rule gzip_pairs:
     output:
         pairs = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz"
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=30
     shell:
         """
         bgzip -c {input.pairs} > {output.pairs}
@@ -368,6 +392,9 @@ rule pairs2hiclongformat:
     output:
         longp = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.long"
     threads: 1
+    resources:
+        mem_mb=8000,
+        runtime=30
     shell:
         """
         grep -v '#' {input.pairs} | \
@@ -386,6 +413,9 @@ rule get3ddna:
         mvdir = os.path.join(filepath, "../bin/"),
         rmdir = os.path.join(filepath, "../bin/3d-dna"),
     threads: 1
+    resources:
+        mem_mb=2000,
+        runtime=10
     shell:
         """
         rm -rf 3d-dna
@@ -418,6 +448,9 @@ rule JBAT_pairs_to_hic:
         mvsuffix  = ".hic",
         qvalsp = " ".join([str(x) for x in sorted(config["qvals"], reverse=True)])
     threads: 1
+    resources:
+        mem_mb=64000,
+        runtime=120
     shell:
         """
         mkdir -p "{wildcards.nom}TEMP"
@@ -448,6 +481,9 @@ rule generate_coverage_stats_final_pairs:
     output:
         stats = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.covstats"
     threads: 1
+    resources:
+        mem_mb=8000,
+        runtime=30
     run:
         scaf_to_size = {}
         # first get the chromosome sizes
@@ -502,6 +538,9 @@ rule index_pairs:
     output:
         index = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.pairs.gz.px2"
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=15
     shell:
         """
         pairix -f {input.pairs}
@@ -518,7 +557,7 @@ rule make_bins_individual:
         cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
     output:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
-    threads: 1
+    threads: max(8, int((workflow.cores -1)/4))
     params:
         bs = lambda wildcards: wildcards.binsize,
         nom = lambda wildcards: wildcards.nom,
@@ -526,7 +565,9 @@ rule make_bins_individual:
             tool=config["tool"], nom = wildcards.nom,
             binsize = wildcards.binsize,
             qval = wildcards.qval)
-    threads: max(8, int((workflow.cores -1)/4))
+    resources:
+        mem_mb=16000,
+        runtime=60
     shell:
         """
         cooler cload pairix --nproc {threads} {input.cs}:{params.bs} {input.final} {params.outname}
@@ -540,6 +581,9 @@ rule diagnostic_plot:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
     output:
         png = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool.png"
+    resources:
+        mem_mb=8000,
+        runtime=20
     shell:
         """
         hicCorrectMatrix diagnostic_plot -m {input.cool} -o {output.png}
@@ -553,6 +597,9 @@ rule normalize_matrix:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
     output:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.cool"
+    resources:
+        mem_mb=12000,
+        runtime=30
     shell:
         """
         hicNormalize -m {input.cool} --normalize norm_range -o {output.cool}
@@ -568,6 +615,9 @@ rule balance_matrix:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.cool"
     output:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.cool"
+    resources:
+        mem_mb=16000,
+        runtime=45
     shell:
         """
         cp {input.cool} {output.cool}
@@ -584,6 +634,9 @@ rule zoomify_normalized_and_balanced_matrix:
     output:
         mcool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.mcool"
     threads: 1
+    resources:
+        mem_mb=12000,
+        runtime=30
     shell:
         """
         cooler zoomify -o {output.mcool} {input.cool}
@@ -599,6 +652,9 @@ rule zoomify_matrix:
     output:
         mcool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.mcool"
     threads: 1
+    resources:
+        mem_mb=12000,
+        runtime=30
     shell:
         """
         cooler zoomify -o {output.mcool} {input.cool}
@@ -618,6 +674,9 @@ rule make_pretextmap:
         left  = ",".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
         right = ",".join(flatten([config["libs"][x]["read2"] for x in config["libs"]]))
     threads: workflow.cores - 2
+    resources:
+        mem_mb=lambda wildcards, input: max(32000, int(os.path.getsize(input.assem) / 1000000 * 8)),
+        runtime=lambda wildcards, input: max(180, int(sum([os.path.getsize(f) for f in input.left]) / 1000000000 * 2))
     shell:
         """
         {input.chromap}  -x {input.index} \
@@ -645,6 +704,9 @@ rule genome_bed:
     output:
         bed = config["tool"] + "/output/{nom}/{nom}.bed"
     threads: 1
+    resources:
+        mem_mb=2000,
+        runtime=5
     shell:
         """
         bioawk -cfastx '{{printf("%s\\t0\\t%d\\n", $name, length($seq))}}' {input.assem} | \
@@ -657,6 +719,9 @@ rule gaps_from_assembly:
     output:
         gapbed = config["tool"] + "/output/{nom}/{nom}_gaps.bed"
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=15
     run:
         # this block of code from https://www.biostars.org/p/133742/
         #import the SeqIO module from Biopython
@@ -695,6 +760,9 @@ rule make_gaps_beddb:
     output:
         beddb = config["tool"] + "/output/{nom}/{nom}_gaps.beddb"
     threads: 1
+    resources:
+        mem_mb=8000,
+        runtime=20
     shell:
         """
         clodius aggregate bedfile \
@@ -720,6 +788,9 @@ rule make_hic_matrix_simple:
     params:
         gi = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.gi"
     threads: 1
+    resources:
+        mem_mb=12000,
+        runtime=30
     shell:
         """
         hicConvertFormat -m {input.cool} \
@@ -743,6 +814,9 @@ rule best_connected_scaffold:
     output:
         hicm = config["tool"] + "/output/{nom}/text_hic_map/{nom}.q_{qval}.{binsize}.best_connection.tsv"
     threads: 1
+    resources:
+        mem_mb=16000,
+        runtime=45
     run:
         scaf_sizes = {}
         # first we need to get the scaffold sizes without gaps
@@ -826,6 +900,9 @@ rule telomere_kmer_positions_bigwig:
         telokmer = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir],
         k = lambda wildcards: len(config["telomere_seqs"][wildcards.telo][wildcards.telodir])
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=20
     shell:
         """
         # get the kmer positions
@@ -868,6 +945,9 @@ rule telomere_kmer_bigwig_to_multivec:
     output:
         multivec = config["tool"] + "/output/{nom}/{nom}_telomereKmerDepth_{telo}.bw.mv5"
     threads: 1
+    resources:
+        mem_mb=6000,
+        runtime=15
     shell:
         """
         clodius convert bigwigs-to-multivec {input.bw_f} {input.bw_r} \
@@ -893,6 +973,9 @@ rule kmer_positions_bigwig:
         tkmers = lambda wildcards: " ".join(config["kmers"][wildcards.kmer]),
         k = lambda wildcards: int(list(set([len(x) for x in config["kmers"][wildcards.kmer]]))[0])
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=20
     shell:
         """
         # get the kmer positions
@@ -936,6 +1019,9 @@ rule telomere_lookup_longreads:
     threads: 1
     params:
         grep_string = lambda wildcards: config["telomere_seqs"][wildcards.telo][wildcards.telodir]
+    resources:
+        mem_mb=4000,
+        runtime=30
     shell:
         """
         zcat -f {input.long_reads} | \
@@ -956,6 +1042,9 @@ rule filter_telo_bams_longreads:
     output:
         bam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}.bam"
     threads: 1
+    resources:
+        mem_mb=8000,
+        runtime=30
     shell:
         """
         {{ # try
@@ -980,6 +1069,9 @@ rule filter_telodir_mapdir:
         fbam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}_f.bam",
         rbam = config["tool"] + "/input/telo_reads/{LR}_to_{nom}_{telo}_{telodir}_r.bam"
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=15
     shell:
         """
         samtools view -hb -F 20 {input.bam} | \
@@ -1002,6 +1094,9 @@ rule bedgraph_of_telomeres:
         bg_f  =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bg",
         bg_r  =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bg",
     threads: max(4, int(workflow.cores /4))
+    resources:
+        mem_mb=8000,
+        runtime=30
     shell:
         """
         samtools cat {input.fbam} | \
@@ -1025,6 +1120,9 @@ rule bigwig_of_telomeres:
         bg_s =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.s.bg",
         bw   =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_{telodir}.bw",
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
     shell:
         """
         chmod u+x {input.bedsort}
@@ -1048,6 +1146,9 @@ rule telomere_bigwig_to_multivec:
     output:
         multivec = config["tool"] + "/output/{nom}/{nom}_telomereLRDepth_{telo}.bw.mv5"
     threads: 1
+    resources:
+        mem_mb=6000,
+        runtime=15
     shell:
         """
         clodius convert bigwigs-to-multivec {input.bw_f} {input.bw_r} \
@@ -1072,6 +1173,9 @@ rule bedgraph_and_bed2bigwig:
         depth = temp(config["tool"] + "/output/depth/{nom}_{datatype}.s.bg"),
         bw    = config["tool"] + "/output/{nom}/{nom}_{datatype}.bw"
     threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
     shell:
         """
         chmod u+x {input.bedsort}
@@ -1100,6 +1204,9 @@ rule symlink_the_transcripts:
     params:
         fileprefix = config["tool"] + "/input/transcripts/"
     threads: 1
+    resources:
+        mem_mb=1000,
+        runtime=2
     run:
         for thisfile in config["transcripts"]:
             fname = os.path.basename(thisfile)
@@ -1118,6 +1225,9 @@ rule map_transcripts_to_genome:
     params:
         tx_name = lambda wildcards: wildcards.tx
     threads: workflow.cores - 1
+    resources:
+        mem_mb=lambda wildcards, input: max(16000, int(os.path.getsize(input.assem) / 1000000 * 4)),
+        runtime=lambda wildcards, input: max(60, int(os.path.getsize(input.transcripts) / 1000000000 * 30))
     shell:
         """
         minimap2 -t {threads} -ax splice:hq {input.assem} \
@@ -1133,6 +1243,9 @@ rule index_transcripts_bams:
     output:
         bai = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam.bai"
     threads: 1
+    resources:
+        mem_mb=2000,
+        runtime=10
     shell:
         """
         samtools index {input.bam}
@@ -1147,6 +1260,9 @@ rule get_coverage_of_transcripts_bams:
     output:
         depth = config["tool"] + "/output/depth/{nom}_TXdepth.bg"
     threads: max(4, int(workflow.cores /4))
+    resources:
+        mem_mb=8000,
+        runtime=30
     shell:
         """
         samtools cat {input.bams} | \
@@ -1172,6 +1288,9 @@ rule symlink_the_LRs:
                        LR = [os.path.basename(x) for x in config["LR"]])
     params:
         fileprefix = config["tool"] + "/input/longreads/"
+    resources:
+        mem_mb=1000,
+        runtime=2
     run:
         for thisfile in config["LR"]:
             fname = os.path.basename(thisfile)
@@ -1191,6 +1310,9 @@ rule map_LR_to_genome:
         minimaparg = config["minimap2arg"],
         LR_name = lambda wildcards: wildcards.LR
     threads: workflow.cores - 1
+    resources:
+        mem_mb=lambda wildcards, input: max(16000, int(os.path.getsize(input.assem) / 1000000 * 4)),
+        runtime=lambda wildcards, input: max(60, int(os.path.getsize(input.long_reads) / 1000000000 * 30))
     shell:
         """
         minimap2 -t {threads} -ax {params.minimaparg} {input.assem} \
@@ -1205,6 +1327,9 @@ rule index_LR_bams:
     output:
         bai = config["tool"] + "/input/bams_LR/LR_{LR}_to_{nom}.bam.bai"
     threads: 1
+    resources:
+        mem_mb=2000,
+        runtime=10
     shell:
         """
         samtools index {input.bam}
@@ -1219,6 +1344,9 @@ rule get_coverage_of_LR_bams:
     output:
         depth = config["tool"] + "/output/depth/{nom}_LRdepth.bg"
     threads: max(4, int(workflow.cores /4))
+    resources:
+        mem_mb=8000,
+        runtime=30
     shell:
         """
         samtools cat {input.bams} | \

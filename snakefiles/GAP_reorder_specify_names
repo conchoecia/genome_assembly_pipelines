@@ -14,6 +14,14 @@ config["tool"] = "GAP_reorder_specify_names"
 if "sort_scaffolds" not in config:
     config["sort_scaffolds"] = True
 
+# ensure that scaf_to_name or scaf_to_name_csv in the config file
+if ("scaf_to_name" not in config) and ("scaf_to_name_csv" not in config):
+    raise ValueError("You must provide either scaf_to_name or scaf_to_name_csv in the config file")
+
+# the config should not contain both scaf_to_name and scaf_to_name_csv
+if ("scaf_to_name" in config) and ("scaf_to_name_csv" in config):
+    raise ValueError("You cannot provide both scaf_to_name and scaf_to_name_csv in the config file")
+
 rule all:
     input:
         expand(config["tool"] + "/output/assembly/{nom}_output.fasta",
@@ -70,9 +78,39 @@ rule reorder_fasta:
         unprinted = {}
         already_printed = set()
         old_to_new = {}
+        old_to_orientation = {}
         for record in SeqIO.parse(input.assem, "fasta"):
             unprinted[record.id] = record
         outhandle = open(output.assem, "w")
+
+        # now print out the specified scaffolds
+        if "scaf_to_name_csv" in config:
+            # the file is simply "oldname,newname,orientation"
+            # orientation is + or -
+            # if +, the sequence is printed as is
+            # if -, the reverse complement is printed
+            import csv
+            seen_in_file = set()
+            with open(config["scaf_to_name_csv"], "r") as csvfile:
+                reader = csv.reader(csvfile)
+                config["scaf_to_name"] = []
+                for row in reader:
+                    if len(row) != 3:
+                        raise IOError("Each row of the csv file must have exactly three columns")
+                    if row[0] in seen_in_file:
+                        raise IOError("The oldname {} appears more than once in the csv file".format(row[0]))
+                    seen_in_file.add(row[0])
+                    config["scaf_to_name"].append((row[0], row[1], row[2]))
+
+        # if the scaf_to_name entry doesn't have orientation, add a + to everything
+        for i, entrypair in enumerate(config["scaf_to_name"]):
+            if len(entrypair) == 2:
+                config["scaf_to_name"][i] = (entrypair[0], entrypair[1], "+")
+            elif len(entrypair) == 3:
+                if entrypair[2] not in ["+", "-"]:
+                    raise IOError("Orientation must be either + or -")
+            else:
+                raise IOError("Each entry in scaf_to_name must have either two or three entries")
 
         # now print out the specified scaffolds
         for entrypair in config["scaf_to_name"]:
@@ -81,9 +119,12 @@ rule reorder_fasta:
             old_to_new[entrypair[0]] = entrypair[1]
             unprinted[entrypair[0]].id          = old_to_new[entrypair[0]]
             unprinted[entrypair[0]].description = old_to_new[entrypair[0]]
+            if entrypair[2] == "-":
+                unprinted[entrypair[0]].seq = unprinted[entrypair[0]].seq.reverse_complement()
             SeqIO.write(unprinted[entrypair[0]], outhandle, 'fasta')
             del unprinted[entrypair[0]]
             already_printed.add(entrypair[0])
+
         # get the sort list depending on whether things will be lensorted
         sort_list = []
         scacounter = 1

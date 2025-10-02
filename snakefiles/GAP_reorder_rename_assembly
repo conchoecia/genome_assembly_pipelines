@@ -36,7 +36,7 @@ rule make_a_renamed_file:
         scaf_counter = 1
         from Bio import SeqIO
         outhandle = open(output.assem, "w")
-        with open(input.assem, "rU") as handle:
+        with open(input.assem, "r") as handle:
             for record in SeqIO.parse(handle, "fasta"):
                 scaf_to_size[record.id] = len(record.seq)
                 scaf_dict[record.id] = record

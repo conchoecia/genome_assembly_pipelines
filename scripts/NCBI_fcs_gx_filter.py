@@ -76,10 +76,10 @@ def parse_fcs_gx_contamination_txt(filepath):
                 continue  # skip headers and metadata
 
             parts = line.split("\t")
-            if len(parts) < 3 or parts[4] not in ["EXCLUDE", "REVIEW"]:
-                if parts[4] not in ["EXCLUDE", "REVIEW"]:
+            if len(parts) < 3 or parts[4] not in ["EXCLUDE", "REVIEW", "FIX"]:
+                if parts[4] not in ["EXCLUDE", "REVIEW", "FIX"]:
                     print(parts)
-                    raise IOError("We only know how to handle EXCLUDE and REVIEW lines.")
+                    raise IOError("We only know how to handle EXCLUDE, REVIEW, and FIX lines.")
                 continue  # skip malformed or non-EXCLUDE lines
 
             seq_id = parts[0]
