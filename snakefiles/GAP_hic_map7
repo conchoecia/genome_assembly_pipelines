@@ -293,8 +293,9 @@ rule index_ref:
         chromap = os.path.join(filepath, "../bin/chromap/chromap")
     output:
         index = temp(config["tool"] + "/input/assembly/{nom}_input.fasta.index")
+    threads: 1
     resources:
-        mem_mb=lambda wildcards, input: max(8000, int(os.path.getsize(input.assem) / 1000000 * 2)),
+        mem_mb=lambda wildcards, input: max(16000, int(os.path.getsize(input.assem) / 1000000 * 5)),
         runtime=30
     shell:
         """
@@ -353,10 +354,10 @@ rule hic_to_pairs:
         left  = " -1 ".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
         right = " -2 ".join(flatten([config["libs"][x]["read2"] for x in config["libs"]])),
         qval  = lambda wildcards: wildcards.qval
-    threads: workflow.cores - 2
+    threads: config.get("hic_threads", 32)
     resources:
         mem_mb=lambda wildcards, input: max(32000, int(os.path.getsize(input.assem) / 1000000 * 8)),
-        runtime=lambda wildcards, input: max(180, int(sum([os.path.getsize(f) for f in input.left]) / 1000000000 * 2))
+        runtime=lambda wildcards, input, threads: int(max(180, int(sum([os.path.getsize(f) for f in input.left]) / 1000000000 * 2)) * 1.25 * (32 / threads))
     shell:
         """
         {input.chromap} --preset hic -x {input.index} \
@@ -428,42 +429,55 @@ rule JBAT_pairs_to_hic:
     """
     Use 3D DNA to make an editable hic file
 
-    This is done in a for loop to avoid race conditions.
-    Done with reverse sorting order to get files faster.
+    Each quality score is processed separately to allow parallel execution.
+    Uses unique temp directory per quality score to avoid race conditions.
+
+    The memory and runtime resources are estimated based on the sizes of the input files and the quality score.
     """
     input:
         hicvis = os.path.join(filepath, "../bin/3d-dna/visualize/run-assembly-visualizer.sh"),
-        longp = expand(config["tool"] + "/output/pairs/{{nom}}/{{nom}}_q_{qval}.long",
-                       qval = config["qvals"]),
+        longp = config["tool"] + "/output/pairs/{nom}/{nom}_q_{qval}.long",
         assembly = config["tool"] + "/input/assembly/{nom}_input.fasta.assembly"
     output:
-        hicmap = expand(config["tool"] + "/output/{{nom}}/{{nom}}_allLibs_q_{qval}.hic",
-                        qval = config["qvals"])
+        hicmap = config["tool"] + "/output/{nom}/{nom}_allLibs_q_{qval}.hic"
     params:
         outprefix  = lambda wildcards: "{}_input.fasta.hic".format(wildcards.nom),
-        longprefix = config["tool"] + "/output/pairs/{nom}/{nom}_q_",
-        longsuffix = ".long",
-        nom = lambda wildcards: wildcards.nom,
-        mvprefix  = config["tool"] + "/output/{nom}/{nom}_allLibs_q_",
-        mvsuffix  = ".hic",
-        qvalsp = " ".join([str(x) for x in sorted(config["qvals"], reverse=True)])
+        tempdir = lambda wildcards: "{}_q{}_TEMP".format(wildcards.nom, wildcards.qval)
     threads: 1
     resources:
-        mem_mb=64000,
-        runtime=120
+        mem_mb=lambda wildcards, input: max(
+            80000,  # Minimum 80GB base
+            int(
+                # Assembly size component: 10MB RAM per MB assembly
+                (os.path.getsize(input.assembly) / 1000000 * 10) +
+                # Pairs file component: 2MB RAM per MB pairs
+                (os.path.getsize(input.longp) / 1000000 * 2) +
+                # Quality score penalty: Lower quality = more RAM needed
+                # q=0 adds 100GB, q=10 adds 80GB, q=30 adds 40GB, q=60 adds 0GB
+                max(0, (60 - int(wildcards.qval)) * 1000 * 1.67)
+            )
+        ),
+        runtime=lambda wildcards, input: max(
+            30,  # Minimum 30 minutes for small genomes
+            int(
+                # Base time scales with assembly size: 10 min per 100MB assembly
+                (os.path.getsize(input.assembly) / 1000000 / 100 * 10) +
+                # Scale with pairs file size: 3 min per GB
+                (os.path.getsize(input.longp) / 1000000000 * 3) +
+                # Quality score penalty: Lower quality = more time
+                # q=0 adds 120 min, q=5 adds 110 min, q=30 adds 60 min, q=60 adds 0 min
+                max(0, (60 - int(wildcards.qval)) * 2)
+            )
+        )
     shell:
         """
-        mkdir -p "{wildcards.nom}TEMP"
-        cd "{wildcards.nom}TEMP"
-        for QVAL in {params.qvalsp}; do
-           bash {input.hicvis} -p false ../{input.assembly} ../{params.longprefix}${{QVAL}}{params.longsuffix} || true
-           mv {params.outprefix} ../{params.mvprefix}${{QVAL}}{params.mvsuffix}
-        done
-        rm ./*scaffold_track.txt
-        rm ./*superscaf_track.txt
-        rm ./*asm_mnd.txt
+        mkdir -p "{params.tempdir}"
+        cd "{params.tempdir}"
+        bash {input.hicvis} -p false ../{input.assembly} ../{input.longp} || true
+        mv {params.outprefix} ../{output.hicmap}
+        rm -f ./*scaffold_track.txt ./*superscaf_track.txt ./*asm_mnd.txt
         cd ../
-        rm -rf  "{wildcards.nom}TEMP"
+        rm -rf "{params.tempdir}"
         """
 #   _  _ _  ___ _              __  __      _       _
 #  | || (_)/ __| |__ _ ______ |  \/  |__ _| |_ _ _(_)_ __
@@ -557,7 +571,7 @@ rule make_bins_individual:
         cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
     output:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
-    threads: max(8, int((workflow.cores -1)/4))
+    threads: 8
     params:
         bs = lambda wildcards: wildcards.binsize,
         nom = lambda wildcards: wildcards.nom,
@@ -581,6 +595,7 @@ rule diagnostic_plot:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
     output:
         png = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool.png"
+    threads: 1
     resources:
         mem_mb=8000,
         runtime=20
@@ -597,6 +612,7 @@ rule normalize_matrix:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.cool"
     output:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.cool"
+    threads: 1
     resources:
         mem_mb=12000,
         runtime=30
@@ -615,6 +631,7 @@ rule balance_matrix:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.cool"
     output:
         cool = config["tool"] + "/output/{nom}/{nom}.q_{qval}.{binsize}.normalized.balanced.cool"
+    threads: 1
     resources:
         mem_mb=16000,
         runtime=45
@@ -673,10 +690,10 @@ rule make_pretextmap:
     params:
         left  = ",".join(flatten([config["libs"][x]["read1"] for x in config["libs"]])),
         right = ",".join(flatten([config["libs"][x]["read2"] for x in config["libs"]]))
-    threads: workflow.cores - 2
+    threads: config.get("hic_threads", 32)
     resources:
         mem_mb=lambda wildcards, input: max(32000, int(os.path.getsize(input.assem) / 1000000 * 8)),
-        runtime=lambda wildcards, input: max(180, int(sum([os.path.getsize(f) for f in input.left]) / 1000000000 * 2))
+        runtime=lambda wildcards, input, threads: int(max(180, int(sum([os.path.getsize(f) for f in input.left]) / 1000000000 * 2)) * 1.25 * (32 / threads))
     shell:
         """
         {input.chromap}  -x {input.index} \
@@ -1093,7 +1110,7 @@ rule bedgraph_of_telomeres:
     output:
         bg_f  =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_f.bg",
         bg_r  =      config["tool"] + "/output/depth/{nom}_telomereLRDepth_{telo}_r.bg",
-    threads: max(4, int(workflow.cores /4))
+    threads: 4
     resources:
         mem_mb=8000,
         runtime=30
@@ -1224,7 +1241,7 @@ rule map_transcripts_to_genome:
         bam = config["tool"] + "/input/bams_transcripts/LR_{tx}_to_{nom}.bam"
     params:
         tx_name = lambda wildcards: wildcards.tx
-    threads: workflow.cores - 1
+    threads: 32
     resources:
         mem_mb=lambda wildcards, input: max(16000, int(os.path.getsize(input.assem) / 1000000 * 4)),
         runtime=lambda wildcards, input: max(60, int(os.path.getsize(input.transcripts) / 1000000000 * 30))
@@ -1259,7 +1276,7 @@ rule get_coverage_of_transcripts_bams:
                        tx = [os.path.basename(x) for x in config["transcripts"]])
     output:
         depth = config["tool"] + "/output/depth/{nom}_TXdepth.bg"
-    threads: max(4, int(workflow.cores /4))
+    threads: 4
     resources:
         mem_mb=8000,
         runtime=30
@@ -1288,6 +1305,7 @@ rule symlink_the_LRs:
                        LR = [os.path.basename(x) for x in config["LR"]])
     params:
         fileprefix = config["tool"] + "/input/longreads/"
+    threads: 1
     resources:
         mem_mb=1000,
         runtime=2
@@ -1309,7 +1327,7 @@ rule map_LR_to_genome:
     params:
         minimaparg = config["minimap2arg"],
         LR_name = lambda wildcards: wildcards.LR
-    threads: workflow.cores - 1
+    threads: config.get("hic_threads", 32)
     resources:
         mem_mb=lambda wildcards, input: max(16000, int(os.path.getsize(input.assem) / 1000000 * 4)),
         runtime=lambda wildcards, input: max(60, int(os.path.getsize(input.long_reads) / 1000000000 * 30))
@@ -1343,7 +1361,7 @@ rule get_coverage_of_LR_bams:
                        LR = [os.path.basename(x) for x in config["LR"]]),
     output:
         depth = config["tool"] + "/output/depth/{nom}_LRdepth.bg"
-    threads: max(4, int(workflow.cores /4))
+    threads: 4
     resources:
         mem_mb=8000,
         runtime=30
