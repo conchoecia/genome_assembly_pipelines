@@ -3,12 +3,25 @@ This snakemake file is used for phasing a genome given a set of input data.
 If some of the data types are missing, that is OK.
 Uses HAPCUT2.
 
+Important notes for Hi-C data:
+  - For Hi-C, the paired-end reads (fastq) should be aligned using BWA with the -5, -S,
+    and -P options for optimal results with HapCUT2.
+  - Reference: https://github.com/vibansal/HapCUT2/issues/122
+
 Script inspired by:
 # author: Peter Edge
 # 12/19/2016
 # email: pedge@eng.ucsd.edu
 
 Build history:
+  - Updated in November 2025 to improve robustness and resource allocation:
+    * Added dynamic memory and runtime allocation based on BAM file sizes
+    * Implemented piecewise memory scaling for Hi-C data (32-160 GB based on shard size)
+    * Added handling for empty BAM shards in haplotagging step
+    * Added checks for VCF files with no variants to avoid unnecessary processing
+    * Improved merge and indexing steps with size-based runtime estimates
+    * Enhanced error handling with samtools quickcheck for invalid BAM files
+    * Split haplotagging by chromosome for better parallelization and resource control
   - Updated in August 2025 to better work with SLURM and the new version of Picard.
     Now it is on snakemake 9.
   - Heavily modified by DTS in 2020-2021 dts@ucsc.edu. Written using snakemake 5.10.0

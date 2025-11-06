@@ -6,7 +6,7 @@ all: bin/fasta_stats dependencies/SALSA/run_pipeline.py \
      bin/bbmap/reformat.sh \
      bin/pilon-1.23.jar dependencies/pairix/bin/pairix \
      bin/fqjt bin/minlen_pair \
-     dependencies/miniprot
+     dependencies/miniprot bin/sambamba
 
 bin/fqjt: src/fq-jt.c
 	mkdir -p bin
@@ -46,3 +46,14 @@ dependencies/miniprot:
 	mkdir -p dependencies
 	cd dependencies; git clone https://github.com/lh3/miniprot.git
 	cd dependencies/miniprot; make
+
+bin/sambamba:
+	@echo "Installing sambamba for Linux..."
+	@mkdir -p bin
+	@SAMBAMBA_URL=$$(curl -s https://api.github.com/repos/biod/sambamba/releases/latest | grep "browser_download_url.*linux-amd64-static" | cut -d '"' -f 4); \
+	echo "Downloading from: $$SAMBAMBA_URL"; \
+	wget -O bin/sambamba.gz "$$SAMBAMBA_URL"; \
+	gunzip -f bin/sambamba.gz; \
+	chmod +x bin/sambamba
+	@echo "sambamba installed successfully to bin/sambamba"
+
