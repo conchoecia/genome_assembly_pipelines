@@ -583,30 +583,23 @@ rule add_rg:
 
 rule mark_duplicates_in_split_bams:
     """
-    This marks the duplicates for chicago, illumina, and hi-c.
-
-    The latest version of picard uses a different format for the command line args.
-      Used to be like this: INPUT={input.bam}
-      Now it's like this:   --INPUT {input.bam}
+    This removes duplicates for chicago, illumina, and hi-c using sambamba.
+    
+    Sambamba markdup is faster than Picard and removes duplicates by default with -r flag.
+    Uses multiple threads for better performance.
     """
     input:
         bam = config["tool"] + "/output/bams/split/{libtype}.rg.REF_{chrom}.bam",
-        picard = config["PICARD"]
+        sambamba = os.path.join(filepath, "../bin/sambamba")
     output:
-        bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam",
-        metrics = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.metrics"
-    threads: 1
+        bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam"
+    threads: 4
     resources:
         mem_mb  = 8000,
-        runtime = 90  # minutes
+        runtime = 60  # minutes - sambamba is faster than Picard
     shell:
         """
-        java -jar -Xmx7g {input.picard} MarkDuplicates \
-          --READ_NAME_REGEX null \
-          --INPUT {input.bam} \
-          --OUTPUT {output.bam} \
-          --METRICS_FILE {output.metrics} \
-          --ASSUME_SORTED true
+        {input.sambamba} markdup -r -t {threads} {input.bam} {output.bam}
         """
 
 rule index_markeddup_bams:
