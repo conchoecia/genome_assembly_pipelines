@@ -41,63 +41,71 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 include: softlinks_rule_path
 
-# if Illumina data missing
-if config["ILL_R1"] == "" or config["ILL_R2"] == "":
-    outstem = config["tool"] + "/input/reads"
-    if not os.path.exists(outstem):
+###############################################################################
+# Parse library configuration - supports both old and new config formats
+# ALL LIBRARIES NOW USE BAM FILES (not FASTQ)
+###############################################################################
+
+# Check if using new library format
+if "libraries" in config:
+    # New format: config["libraries"][libtype][libname] = {bam: "/path/to/file.bam"}
+    config["LIBRARY_STRUCTURE"] = "new"
+    
+    # Build library lists for each type
+    config["LIB_NAMES"] = {}
+    for libtype in ["hic", "chi", "ill", "longreads"]:
+        if libtype in config["libraries"]:
+            config["LIB_NAMES"][libtype] = list(config["libraries"][libtype].keys())
+        else:
+            config["LIB_NAMES"][libtype] = []
+    
+else:
+    # Old format: convert to new format for backward compatibility
+    config["LIBRARY_STRUCTURE"] = "old"
+    config["libraries"] = {"hic": {}, "chi": {}, "ill": {}, "longreads": {}}
+    config["LIB_NAMES"] = {"hic": [], "chi": [], "ill": [], "longreads": []}
+    
+    # Convert old BAM paths to new format
+    if "HIC_BAM" in config and config["HIC_BAM"] != "":
+        config["libraries"]["hic"]["hic_lib1"] = {"bam": config["HIC_BAM"]}
+        config["LIB_NAMES"]["hic"] = ["hic_lib1"]
+    
+    if "CHI_BAM" in config and config["CHI_BAM"] != "":
+        config["libraries"]["chi"]["chi_lib1"] = {"bam": config["CHI_BAM"]}
+        config["LIB_NAMES"]["chi"] = ["chi_lib1"]
+    
+    if "ILL_BAM" in config and config["ILL_BAM"] != "":
+        config["libraries"]["ill"]["ill_lib1"] = {"bam": config["ILL_BAM"]}
+        config["LIB_NAMES"]["ill"] = ["ill_lib1"]
+    
+    if "LONGREAD_BAM" in config and config["LONGREAD_BAM"] != "":
+        config["libraries"]["longreads"]["longreads_lib1"] = {"bam": config["LONGREAD_BAM"]}
+        config["LIB_NAMES"]["longreads"] = ["longreads_lib1"]
+
+# Create empty placeholder BAM files for missing library types
+for libtype in ["hic", "chi", "ill", "longreads"]:
+    if len(config["LIB_NAMES"][libtype]) == 0:
+        outstem = config["tool"] + "/input/bams"
         os.makedirs(outstem, exist_ok=True)
-    config["ILL_R1"] = outstem + "/ill_R1.fastq.gz"
-    config["ILL_R2"] = outstem + "/ill_R2.fastq.gz"
-    if not os.path.exists(config["ILL_R1"]):
-        os.mknod(config["ILL_R1"])
-    if not os.path.exists(config["ILL_R2"]):
-        os.mknod(config["ILL_R2"])
-
-if config["CHI_R1"] == "" or config["CHI_R2"] == "":
-    outstem = config["tool"] + "/input/reads"
-    if not os.path.exists(outstem):
-        os.makedirs(outstem)
-    config["CHI_R1"] = outstem + "/chi_R1.fastq.gz"
-    config["CHI_R2"] = outstem + "/chi_R2.fastq.gz"
-    if not os.path.exists(config["CHI_R1"]):
-        os.mknod(config["CHI_R1"])
-    if not os.path.exists(config["CHI_R2"]):
-        os.mknod(config["CHI_R2"])
-
-if config["HIC_R1"] == "" or config["HIC_R2"] == "":
-    outstem = config["tool"] + "/input/reads"
-    if not os.path.exists(outstem):
-        os.makedirs(outstem)
-    config["HIC_R1"] = outstem + "/hic_R1.fastq.gz"
-    config["HIC_R2"] = outstem + "/hic_R2.fastq.gz"
-    if not os.path.exists(config["HIC_R1"]):
-        os.mknod(config["HIC_R1"])
-    if not os.path.exists(config["HIC_R2"]):
-        os.mknod(config["HIC_R2"])
-
-if config["LONGREAD_BAM"] == "":
-    outstem = config["tool"] + "/output/bams/temp"
-    if not os.path.exists(outstem):
-        os.makedirs(outstem)
-    config["longread_bam"] = outstem + "/longreads_sorted.bam"
-    if not os.path.exists(config["longread_bam"]):
-        os.mknod(config["longread_bam"])
+        
+        placeholder = outstem + f"/{libtype}_empty.bam"
+        if not os.path.exists(placeholder):
+            os.mknod(placeholder)
+        config["libraries"][libtype]["empty"] = {"bam": placeholder}
+        config["LIB_NAMES"][libtype] = ["empty"]
 
 # make sure everything in the config["CHROMS"] is a string
 config["CHROMS"] = [str(chrom) for chrom in config["CHROMS"]]
 
 wildcard_constraints:
     datatype="[A-Za-z0-9|.]+",
-    libtype="[A-Za-z]+"
+    libtype="[A-Za-z]+",
+    libname="[A-Za-z0-9_]+"
 
 rule all:
     input:
         expand(config["tool"] + "/output/vcf/orig/split/{chrom}.vcf",
                     chrom=config["CHROMS"]),
-        expand(config["tool"] + "/output/bams/temp/{libtype}_sorted.bam",
-               libtype = ["ill", "chi", "hic", "longreads"]),
-        expand(config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai",
-               libtype = ["ill", "chi", "hic", "longreads"]),
         expand(config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag",
                chrom = config["CHROMS"]),
         expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
@@ -135,69 +143,24 @@ rule make_assem_softlink:
         """
 
 ######################################################################
-#   Make symlinks of the input reads
+#   Make symlinks of the input BAM files for each library
 ######################################################################
 
-rule make_ill_softlink:
-    """Just symlink the reads to not occupy more disk space."""
-    params:
-        reads1 = config["ILL_R1"],
-        reads2 = config["ILL_R2"]
+rule make_library_bam_softlink:
+    """
+    Create symlinks for BAM files for each library.
+    All library types (Hi-C, Chicago, Illumina, long reads) now use BAM files.
+    """
     output:
-        R1 = config["tool"] + "/input/reads/ill_R1.fastq.gz",
-        R2 = config["tool"] + "/input/reads/ill_R2.fastq.gz"
+        bam = config["tool"] + "/input/bams/{libtype}.{libname}.bam"
+    params:
+        bam = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["bam"]
     resources:
         mem_mb = 1000,
         runtime = 2
     shell:
         """
-        ln -s {params.reads1} {output.R1}
-        ln -s {params.reads2} {output.R2}
-        """
-
-rule make_chi_softlink:
-    params:
-        reads1 = config["CHI_R1"],
-        reads2 = config["CHI_R2"]
-    output:
-        R1 = config["tool"] + "/input/reads/chi_R1.fastq.gz",
-        R2 = config["tool"] + "/input/reads/chi_R2.fastq.gz"
-    resources:
-        mem_mb = 1000,
-        runtime = 2
-    shell:
-        """
-        ln -s {params.reads1} {output.R1}
-        ln -s {params.reads2} {output.R2}
-        """
-
-rule make_hic_softlink:
-    params:
-        reads1 = config["HIC_R1"],
-        reads2 = config["HIC_R2"]
-    output:
-        R1 = config["tool"] + "/input/reads/hic_R1.fastq.gz",
-        R2 = config["tool"] + "/input/reads/hic_R2.fastq.gz"
-    resources:
-        mem_mb = 1000,
-        runtime = 2
-    shell:
-        """
-        ln -s {params.reads1} {output.R1}
-        ln -s {params.reads2} {output.R2}
-        """
-
-rule make_longreads_bam_softlink:
-    params:
-        longreads = config["LONGREAD_BAM"]
-    output:
-        bam = config["tool"] + "/output/bams/temp/longreads_sorted.bam"
-    resources:
-        mem_mb = 1000,
-        runtime = 2
-    shell:
-        """
-        ln -s {params.longreads} {output.bam}
+        ln -sf {params.bam} {output.bam}
         """
 
 ######################################################################
@@ -452,101 +415,113 @@ rule index_genome_faidx:
     shell:
         'samtools faidx {input.ref}'
 
-# align HiC fastq file to reference
-rule align_HiC_fastq:
-    input:
-        ref = config["tool"] + "/input/assembly/input.fasta",
-        bwt = config["tool"] + "/input/assembly/input.fasta.bwt",
-        R1 = config["tool"] + "/input/reads/hic_R1.fastq.gz",
-        R2 = config["tool"] + "/input/reads/hic_R2.fastq.gz"
-    output:
-        hic_bam = config["tool"] + "/output/bams/temp/hic_sorted.bam"
-    resources:
-        mem_mb  = 48000,
-        runtime = 1440
-    shell:
-        """
-        bwa mem -t {threads} -5SPM {input.ref} {input.R1} {input.R2} | \
-          samtools view -hb -@ {threads} | \
-          samtools sort -@ {threads} - > {output.hic_bam}
-        """
-
-rule align_Chicago_fastq:
-    input:
-        ref = config["tool"] + "/input/assembly/input.fasta",
-        bwt = config["tool"] + "/input/assembly/input.fasta.bwt",
-        R1 = config["tool"] + "/input/reads/chi_R1.fastq.gz",
-        R2 = config["tool"] + "/input/reads/chi_R2.fastq.gz"
-    output:
-        chi_bam = config["tool"] + "/output/bams/temp/chi_sorted.bam"
-    resources:
-        mem_mb  = 48000,
-        runtime = 1440
-    shell:
-        """
-        bwa mem -t {threads} -5SPM {input.ref} {input.R1} {input.R2} | \
-          samtools view -hb -@ {threads} | \
-          samtools sort -@ {threads} - > {output.chi_bam}
-        """
-
-rule align_Illumina_fastq:
-    input:
-        ref = config["tool"] + "/input/assembly/input.fasta",
-        bwt = config["tool"] + "/input/assembly/input.fasta.bwt",
-        R1 = config["tool"] + "/input/reads/ill_R1.fastq.gz",
-        R2 = config["tool"] + "/input/reads/ill_R2.fastq.gz"
-    output:
-        ill_bam = config["tool"] + "/output/bams/temp/ill_sorted.bam"
-    resources:
-        mem_mb  = 48000,
-        runtime = 1440
-    shell:
-        """
-        bwa mem -t {threads} {input.ref} {input.R1} {input.R2} | \
-          samtools view -hb -@ {threads} | \
-          samtools sort -@ {threads} - > {output.ill_bam}
-        """
-
-rule index_bams:
-    input:
-        bam = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam"
-    output:
-        bai = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai"
-    threads: 1
-    resources:
-        mem_mb  = 8000,
-        runtime = 120
-    shell:
-        """
-        samtools index {input.bam}
-        """
-
 ######################################################################
-# Split the chromosomes
+# Split each library BAM by chromosome (before merging)
 ######################################################################
 
-# SPLIT bam files by chromosome
-rule split_bams:
+rule split_library_by_chromosome:
     """
-    This is incredibly slow for any large bam file.
-    Needs reworking for parallelization, even though it is tough on the disks.
+    Split each individual library BAM by chromosome.
+    This is done before merging so we can add library-specific read groups.
     """
     input:
-        bam = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam",
-        bai = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai"
+        bam = config["tool"] + "/input/bams/{libtype}.{libname}.bam"
     output:
-        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam"
-    params:
-        stub = config["tool"] + "/output/bams/split/"
+        bam = temp(config["tool"] + "/output/bams/split_per_library/{libtype}.{libname}.REF_{chrom}.bam")
     threads: 4
     resources:
         mem_mb=8000, runtime=60
     shell:
         """
         set -euo pipefail
-        mkdir -p {params.stub}
         samtools view -@ {threads} -bh {input.bam} "{wildcards.chrom}" -o {output.bam}
         """
+
+rule add_library_rg_to_split:
+    """
+    Add library-specific read groups to each chromosome split.
+    This is where library tracking is implemented.
+    
+    Tags added:
+      - LB: Library name (e.g., DpnII, MboI, PacBio_run1)
+      - ID: Read group ID (libtype.libname.chrom)
+      - SM: Sample name (from config or default to 'sample1')
+      - PL: Platform (LONG for all read types - could be PacBio, ONT, Hi-C, etc.)
+    """
+    input:
+        bam = config["tool"] + "/output/bams/split_per_library/{libtype}.{libname}.REF_{chrom}.bam",
+        picard = config["PICARD"]
+    output:
+        bam = temp(config["tool"] + "/output/bams/split_per_library/{libtype}.{libname}.REF_{chrom}.rg.bam")
+    params:
+        libname = lambda wildcards: wildcards.libname,
+        rgid = lambda wildcards: f"{wildcards.libtype}.{wildcards.libname}.{wildcards.chrom}",
+        sample = lambda wildcards: config.get("SAMPLE_NAME", "sample1")
+    threads: 2
+    resources:
+        mem_mb  = 4000,
+        runtime = 60
+    shell:
+        """
+        java -Xmx3g -jar {input.picard} AddOrReplaceReadGroups \
+          -I {input.bam} -O {output.bam} \
+          --RGID {params.rgid} \
+          --RGLB {params.libname} \
+          --RGPL LONG \
+          --RGSM {params.sample}
+        """
+
+def get_library_splits_for_chrom(wildcards):
+    """Get all library BAM files for a given library type and chromosome"""
+    libtype = wildcards.libtype
+    chrom = wildcards.chrom
+    bams = []
+    
+    for libname in config["LIB_NAMES"][libtype]:
+        bams.append(config["tool"] + f"/output/bams/split_per_library/{libtype}.{libname}.REF_{chrom}.rg.bam")
+    
+    return bams
+
+rule merge_libraries_per_chromosome:
+    """
+    Merge all libraries of the same type for a specific chromosome.
+    Library information is preserved in the LB tag of each read.
+    If only one library exists, this will just create a symlink.
+    """
+    input:
+        bams = get_library_splits_for_chrom
+    output:
+        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam"
+    threads: 4
+    resources:
+        mem_mb  = 8000,
+        runtime = 60
+    run:
+        if len(input.bams) == 1:
+            # Only one library, just create a symlink
+            shell("ln -sf $(realpath {input.bams[0]}) {output.bam}")
+        else:
+            # Multiple libraries, merge them (preserves read groups)
+            shell("samtools merge -@ {threads} {output.bam} {input.bams}")
+
+# mark for deletion
+#rule index_bams:
+#    input:
+#        bam = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam"
+#    output:
+#        bai = config["tool"] + "/output/bams/temp/{libtype}_sorted.bam.bai"
+#    threads: 1
+#    resources:
+#        mem_mb  = 8000,
+#        runtime = 120
+#    shell:
+#        """
+#        samtools index {input.bam}
+#        """
+
+######################################################################
+# Index and validate split BAMs
+######################################################################
 
 rule index_split_bam:
     input:
@@ -564,35 +539,38 @@ rule index_split_bam:
         samtools index -@ {threads} {input.bam} {output.bai} || touch {output.bai}
         """
 
-rule add_rg:
-    input:
-        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
-        picard = config["PICARD"]
-    output:
-        bam = temp(config["tool"] + "/output/bams/split/{libtype}.rg.REF_{chrom}.bam")
-    threads: 2
-    resources:
-        mem_mb  = 4000,
-        runtime = 90
-    shell:
-        """
-        java -Xmx3g -jar {input.picard} AddOrReplaceReadGroups \
-          -I {input.bam} -O {output.bam} \
-          --RGID rg1 --RGLB lib1 --RGPL ILLUMINA --RGPU unit1 --RGSM sample1
-        """
+# we don't need this anymore since we added RGs in merge_libraries_per_chromosome
+#rule pass_through_rg:
+#    """
+#    Pass-through rule for compatibility with downstream rules.
+#    Read groups are already set in merge_libraries_per_chromosome,
+#    so we just create a symlink.
+#    """
+#    input:
+#        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam"
+#    output:
+#        bam = temp(config["tool"] + "/output/bams/split/{libtype}.rg.REF_{chrom}.bam")
+#    threads: 1
+#    resources:
+#        mem_mb  = 1000,
+#        runtime = 5
+#    shell:
+#        """
+#        ln -sf $(realpath {input.bam}) {output.bam}
+#        """
 
-rule mark_duplicates_in_split_bams:
+rule rm_duplicates_in_split_bams:
     """
     This removes duplicates for chicago, illumina, and hi-c using sambamba.
-    
+
     Sambamba markdup is faster than Picard and removes duplicates by default with -r flag.
     Uses multiple threads for better performance.
     """
     input:
-        bam = config["tool"] + "/output/bams/split/{libtype}.rg.REF_{chrom}.bam",
+        bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
         sambamba = os.path.join(filepath, "../bin/sambamba")
     output:
-        bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam"
+        bam = config["tool"] + "/output/bams/rm_rmdups/{libtype}.REF_{chrom}.rmdups.bam"
     threads: 4
     resources:
         mem_mb  = 8000,
@@ -602,11 +580,11 @@ rule mark_duplicates_in_split_bams:
         {input.sambamba} markdup -r -t {threads} {input.bam} {output.bam}
         """
 
-rule index_markeddup_bams:
+rule index_rmdup_bams:
     input:
-        bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam",
+        bam = config["tool"] + "/output/bams/rm_rmdups/{libtype}.REF_{chrom}.rmdups.bam",
     output:
-        bai = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam.bai",
+        bai = config["tool"] + "/output/bams/rm_rmdups/{libtype}.REF_{chrom}.rmdups.bam.bai",
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -626,8 +604,8 @@ rule extract_hairs:
         ref = config["tool"] + "/input/assembly/input.fasta",
         bwt = config["tool"] + "/input/assembly/input.fasta.bwt",
         fai = config["tool"] + "/input/assembly/input.fasta.fai",
-        bam = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam",
-        bai = config["tool"] + "/output/bams/split_markeddups/{libtype}.REF_{chrom}.markeddups.bam.bai",
+        bam = config["tool"] + "/output/bams/split_rmdups/{libtype}.REF_{chrom}.rmdups.bam",
+        bai = config["tool"] + "/output/bams/split_rmdups/{libtype}.REF_{chrom}.rmdups.bam.bai",
         vcf = config["tool"] + "/output/vcf/orig/split/{chrom}.vcf"
     output:
         frag = config["tool"] + "/output/hapcut2_evidence/per-datatype/{libtype}.{chrom}.frag"
