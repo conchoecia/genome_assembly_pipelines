@@ -97,17 +97,15 @@ else:
         config["libraries"]["longreads"]["longreads_lib1"] = {"bam": config["LONGREAD_BAM"]}
         config["LIB_NAMES"]["longreads"] = ["longreads_lib1"]
 
-# Create empty placeholder BAM files for missing library types
+# Remove empty library types from the workflow
+# No need to process library types with no data
 for libtype in ["hic", "chi", "ill", "longreads"]:
     if len(config["LIB_NAMES"][libtype]) == 0:
-        outstem = config["tool"] + "/input/bams"
-        os.makedirs(outstem, exist_ok=True)
-        
-        placeholder = outstem + f"/{libtype}_empty.bam"
-        if not os.path.exists(placeholder):
-            os.mknod(placeholder)
-        config["libraries"][libtype]["empty"] = {"bam": placeholder}
-        config["LIB_NAMES"][libtype] = ["empty"]
+        del config["libraries"][libtype]
+        del config["LIB_NAMES"][libtype]
+
+# Get list of active library types (those with actual data)
+config["ACTIVE_LIBTYPES"] = list(config["LIB_NAMES"].keys())
 
 # make sure everything in the config["CHROMS"] is a string
 config["CHROMS"] = [str(chrom) for chrom in config["CHROMS"]]
@@ -135,9 +133,9 @@ rule all:
 
         # also generate haplotagged bam files:
         expand(config["tool"] + "/output/final_output/{libtype}_haplotagged.bam",
-               libtype = ["ill", "chi", "hic", "longreads"]),
+               libtype = config["ACTIVE_LIBTYPES"]),
         expand(config["tool"] + "/output/final_output/{libtype}_haplotagged.bam.bai",
-               libtype = ["ill", "chi", "hic", "longreads"])
+               libtype = config["ACTIVE_LIBTYPES"])
 
 
 ######################################################################
@@ -176,6 +174,32 @@ rule make_library_bam_softlink:
     shell:
         """
         ln -sf {params.bam} {output.bam}
+        """
+
+rule make_library_bai_softlink:
+    """
+    Create symlinks for BAM index (.bai) files for each library.
+    The index file must exist alongside the BAM file, or this rule will fail.
+    """
+    input:
+        bam = config["tool"] + "/input/bams/{libtype}.{libname}.bam"
+    output:
+        bai = config["tool"] + "/input/bams/{libtype}.{libname}.bam.bai"
+    params:
+        original_bam = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["bam"]
+    resources:
+        mem_mb = 1000,
+        runtime = 2
+    shell:
+        """
+        # Check if the .bai file exists next to the original BAM
+        if [ -f "{params.original_bam}.bai" ]; then
+            ln -sf {params.original_bam}.bai {output.bai}
+        else
+            echo "ERROR: Index file {params.original_bam}.bai not found!"
+            echo "Please create an index for {params.original_bam} using: samtools index {params.original_bam}"
+            exit 1
+        fi
         """
 
 ######################################################################
@@ -438,9 +462,11 @@ rule split_library_by_chromosome:
     """
     Split each individual library BAM by chromosome.
     This is done before merging so we can add library-specific read groups.
+    Requires the BAM index file to efficiently extract reads by chromosome.
     """
     input:
-        bam = config["tool"] + "/input/bams/{libtype}.{libname}.bam"
+        bam = config["tool"] + "/input/bams/{libtype}.{libname}.bam",
+        bai = config["tool"] + "/input/bams/{libtype}.{libname}.bam.bai"
     output:
         bam = temp(config["tool"] + "/output/bams/split_per_library/{libtype}/{libtype}.{libname}.REF_{chrom}.bam")
     threads: 4
@@ -652,7 +678,7 @@ rule extract_hairs:
 rule concatenate_HAPCUT2_evidence:
     input:
         frags = expand(config["tool"] + "/output/hapcut2_evidence/per-datatype/{libtype}.{{chrom}}.frag",
-                       libtype = ["ill", "chi", "hic", "longreads"])
+                       libtype = config["ACTIVE_LIBTYPES"])
     output:
         cat = config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag"
     threads: 1
