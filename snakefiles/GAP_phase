@@ -577,7 +577,7 @@ rule rm_duplicates_in_split_bams:
         bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
         sambamba = os.path.join(filepath, "../bin/sambamba")
     output:
-        bam = config["tool"] + "/output/bams/rm_rmdups/{libtype}.REF_{chrom}.rmdups.bam"
+        bam = config["tool"] + "/output/bams/split_rmdups/{libtype}.REF_{chrom}.rmdups.bam"
     threads: 4
     resources:
         mem_mb  = 8000,
@@ -589,9 +589,9 @@ rule rm_duplicates_in_split_bams:
 
 rule index_rmdup_bams:
     input:
-        bam = config["tool"] + "/output/bams/rm_rmdups/{libtype}.REF_{chrom}.rmdups.bam",
+        bam = config["tool"] + "/output/bams/split_rmdups/{libtype}.REF_{chrom}.rmdups.bam",
     output:
-        bai = config["tool"] + "/output/bams/rm_rmdups/{libtype}.REF_{chrom}.rmdups.bam.bai",
+        bai = config["tool"] + "/output/bams/split_rmdups/{libtype}.REF_{chrom}.rmdups.bam.bai",
     threads: 1
     resources:
         mem_mb  = 2000,
