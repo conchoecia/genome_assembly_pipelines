@@ -8,6 +8,14 @@ Important notes for Hi-C data:
     and -P options for optimal results with HapCUT2.
   - Reference: https://github.com/vibansal/HapCUT2/issues/122
 
+Wildcard character restrictions:
+  - libtype: Letters only [A-Za-z]+ (e.g., "hic", "chi", "ill", "longreads")
+  - libname: Letters and numbers only [A-Za-z0-9]+ (e.g., "DpnII", "MboI", "lib1", "PacBio2")
+  - datatype: Letters only [A-Za-z]+ (e.g., "hic", "chi", "ill", "longreads")
+  
+  Note: Underscores, hyphens, and other special characters are NOT allowed in library names.
+        Use only alphanumeric characters to avoid snakemake wildcard matching issues.
+
 Script inspired by:
 # author: Peter Edge
 # 12/19/2016
@@ -105,9 +113,9 @@ for libtype in ["hic", "chi", "ill", "longreads"]:
 config["CHROMS"] = [str(chrom) for chrom in config["CHROMS"]]
 
 wildcard_constraints:
-    datatype="[A-Za-z0-9|.]+",
     libtype="[A-Za-z]+",
-    libname="[A-Za-z0-9_]+"
+    libname="[A-Za-z0-9]+",
+    datatype="[A-Za-z]+"
 
 rule all:
     input:
@@ -434,7 +442,7 @@ rule split_library_by_chromosome:
     input:
         bam = config["tool"] + "/input/bams/{libtype}.{libname}.bam"
     output:
-        bam = temp(config["tool"] + "/output/bams/split_per_library/{libtype}.{libname}.REF_{chrom}.bam")
+        bam = temp(config["tool"] + "/output/bams/split_per_library/{libtype}/{libtype}.{libname}.REF_{chrom}.bam")
     threads: 4
     resources:
         mem_mb=8000, runtime=60
@@ -456,10 +464,10 @@ rule add_library_rg_to_split:
       - PL: Platform (LONG for all read types - could be PacBio, ONT, Hi-C, etc.)
     """
     input:
-        bam = config["tool"] + "/output/bams/split_per_library/{libtype}.{libname}.REF_{chrom}.bam",
+        bam = config["tool"] + "/output/bams/split_per_library/{libtype}/{libtype}.{libname}.REF_{chrom}.bam",
         picard = config["PICARD"]
     output:
-        bam = temp(config["tool"] + "/output/bams/split_per_library/{libtype}.{libname}.REF_{chrom}.rg.bam")
+        bam = temp(config["tool"] + "/output/bams/split_per_library/{libtype}/{libtype}.{libname}.REF_{chrom}.rg.bam")
     params:
         libname = lambda wildcards: wildcards.libname,
         rgid = lambda wildcards: f"{wildcards.libtype}.{wildcards.libname}.{wildcards.chrom}",
@@ -485,7 +493,7 @@ def get_library_splits_for_chrom(wildcards):
     bams = []
     
     for libname in config["LIB_NAMES"][libtype]:
-        bams.append(config["tool"] + f"/output/bams/split_per_library/{libtype}.{libname}.REF_{chrom}.rg.bam")
+        bams.append(config["tool"] + f"/output/bams/split_per_library/{libtype}/{libtype}.{libname}.REF_{chrom}.rg.bam")
     
     return bams
 
