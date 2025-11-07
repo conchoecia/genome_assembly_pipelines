@@ -51,13 +51,20 @@ if "libraries" in config:
     # New format: config["libraries"][libtype][libname] = {bam: "/path/to/file.bam"}
     config["LIBRARY_STRUCTURE"] = "new"
     
+    # Ensure config["libraries"] is a dict
+    if not isinstance(config["libraries"], dict):
+        config["libraries"] = {}
+    
     # Build library lists for each type
     config["LIB_NAMES"] = {}
     for libtype in ["hic", "chi", "ill", "longreads"]:
-        if libtype in config["libraries"]:
+        if libtype in config["libraries"] and isinstance(config["libraries"][libtype], dict):
             config["LIB_NAMES"][libtype] = list(config["libraries"][libtype].keys())
         else:
             config["LIB_NAMES"][libtype] = []
+            # Ensure the libtype key exists in libraries
+            if libtype not in config["libraries"]:
+                config["libraries"][libtype] = {}
     
 else:
     # Old format: convert to new format for backward compatibility
