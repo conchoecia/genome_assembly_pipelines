@@ -744,6 +744,23 @@ rule merge_vcfs:
         # mv {output.merged}.tmp {output.merged}
         """
 
+rule sort_merged_vcf:
+    """
+    Sort the merged phased VCF by chromosome and position.
+    This completes the workflow that was split from the old sort_final_vcf rule.
+    """
+    input:
+        unsorted = config["tool"] + "/output/final_output/complete_assembly.hap.phased.unsorted.vcf"
+    output:
+        sorted_vcf = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf")
+    threads: 2
+    resources:
+        mem_mb=4000, runtime=30
+    shell:
+        """
+        bcftools sort -O v -o {output.sorted_vcf} {input.unsorted}
+        """
+
 rule get_largest_hap_blocks:
     """
     These are the "most variants phased" (MVP) haplotype blocks.
