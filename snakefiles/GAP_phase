@@ -652,7 +652,7 @@ rule add_library_rg_to_split:
         libname = lambda wildcards: wildcards.libname,
         rgid = lambda wildcards: f"{wildcards.libtype}.{wildcards.libname}.{wildcards.chrom}",
         sample = lambda wildcards: config.get("SAMPLE_NAME", "sample1"),
-        platform = lambda wildcards: wildcards.libtype.upper if wildcards.libtype in ["ill", "chi", "hic"] else "LONG"
+        platform = lambda wildcards: str.upper(wildcards.libtype) if wildcards.libtype in ["ill", "chi", "hic"] else "LONG"
     threads: 2
     resources:
         mem_mb  = 4000,
