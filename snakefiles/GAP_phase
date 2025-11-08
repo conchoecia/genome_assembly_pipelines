@@ -506,30 +506,35 @@ def get_bwa_index_runtime(wildcards, input):
     
     Minimum: 30 minutes
     """
-    fai_file = input.fai
-    total_bases = 0
-    
-    with open(fai_file, 'r') as f:
-        for line in f:
-            fields = line.strip().split('\t')
-            if len(fields) >= 2:
-                total_bases += int(fields[1])
-    
-    # Convert to gigabases
-    genome_size_gb = total_bases / 1_000_000_000
-    
-    # Scale runtime based on genome size
-    if genome_size_gb < 1.0:
-        runtime = max(30, int(genome_size_gb * 30 * 60))  # 30 min/Gb
-    elif genome_size_gb < 3.0:
-        runtime = int(genome_size_gb * 45 * 60)  # 45 min/Gb
-    else:
-        runtime = int(genome_size_gb * 60 * 60)  # 60 min/Gb
-    
-    # Add 20% buffer for safety
-    runtime = int(runtime * 1.2)
-    
-    return runtime
+    try:
+        fai_file = input.fai
+        total_bases = 0
+        
+        with open(fai_file, 'r') as f:
+            for line in f:
+                fields = line.strip().split('\t')
+                if len(fields) >= 2:
+                    total_bases += int(fields[1])
+        
+        # Convert to gigabases
+        genome_size_gb = total_bases / 1_000_000_000
+        
+        # Scale runtime based on genome size
+        if genome_size_gb < 1.0:
+            runtime = max(30, int(genome_size_gb * 30 * 60))  # 30 min/Gb
+        elif genome_size_gb < 3.0:
+            runtime = int(genome_size_gb * 45 * 60)  # 45 min/Gb
+        else:
+            runtime = int(genome_size_gb * 60 * 60)  # 60 min/Gb
+        
+        # Add 20% buffer for safety
+        runtime = int(runtime * 1.2)
+        
+        return runtime
+    except Exception as e:
+        # If anything fails, return a safe default
+        print(f"Warning: Could not calculate BWA index runtime from fai file: {e}")
+        return 180  # 3 hours default
 
 # index reference genome
 rule index_genome:
@@ -546,16 +551,31 @@ rule index_genome:
         'bwa index {input.ref}'
 
 rule index_genome_faidx:
+    """
+    Create fai index for the reference genome.
+    First tries to copy existing .fai from original location, otherwise indexes from scratch.
+    """
     input:
         ref = config["tool"] + "/input/assembly/input.fasta",
     output:
-        bwt = config["tool"] + "/input/assembly/input.fasta.fai"
+        fai = config["tool"] + "/input/assembly/input.fasta.fai"
+    params:
+        original_ref = lambda wildcards: config["REFERENCE"]
     threads: 1
     resources:
         mem_mb  = 1000,
         runtime = 10
     shell:
-        'samtools faidx {input.ref}'
+        """
+        # Try to copy existing fai index first
+        if [ -f "{params.original_ref}.fai" ]; then
+            echo "Found existing fai index, copying..."
+            cp "{params.original_ref}.fai" {output.fai}
+        else
+            echo "No existing fai index found, creating with samtools faidx..."
+            samtools faidx {input.ref}
+        fi
+        """
 
 ######################################################################
 # Split each library BAM by chromosome (before merging)
