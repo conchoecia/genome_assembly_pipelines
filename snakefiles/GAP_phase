@@ -185,13 +185,14 @@ def get_bam_index_runtime(wildcards):
     - Double the estimate for safety buffer on slow filesystems
     
     For a 247 GB file: ~3-4 hours estimated
-    Minimum: 10 minutes
+    
+    Note: We allocate time for full indexing even if .bai exists, because
+    the shell script will detect it and copy quickly. This avoids issues
+    with filesystem caching/permissions during DAG planning phase.
+    
+    Minimum: 15 minutes (enough for copy or small BAM index)
     """
     original_bam = config["libraries"][wildcards.libtype][wildcards.libname]["bam"]
-    
-    # Check if index already exists (will be fast copy operation)
-    if os.path.exists(original_bam + ".bai"):
-        return 5  # Just enough time to copy the index
     
     # Get BAM file size for runtime calculation
     try:
@@ -205,8 +206,8 @@ def get_bam_index_runtime(wildcards):
         # Double it for safety on network filesystems and cluster load
         runtime = int(estimated_minutes * 2.0)
         
-        # Minimum 10 minutes, maximum 720 minutes (12 hours)
-        return max(10, min(runtime, 720))
+        # Minimum 15 minutes, maximum 720 minutes (12 hours)
+        return max(15, min(runtime, 720))
     except:
         # If we can't get size, use a safe default
         return 180
@@ -222,20 +223,30 @@ rule index_library_bam:
     output:
         bai = config["tool"] + "/input/bams/{libtype}.{libname}.bam.bai"
     params:
-        original_bam = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["bam"]
+        original_bam = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["bam"],
+        original_bai = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["bam"] + ".bai"
     threads: 4
     resources:
         mem_mb = 4000,
         runtime = get_bam_index_runtime
     shell:
         """
+        set -euo pipefail
+        
+        # Debug: show what we're looking for
+        echo "Original BAM: {params.original_bam}"
+        echo "Looking for index: {params.original_bai}"
+        
         # Try to copy existing index first
-        if [ -f "{params.original_bam}.bai" ]; then
-            echo "Found existing index, copying..."
-            cp {params.original_bam}.bai {output.bai}
+        if [ -f "{params.original_bai}" ]; then
+            echo "Found existing index at {params.original_bai}, copying..."
+            cp "{params.original_bai}" {output.bai}
+            echo "Index copied successfully"
         else
-            echo "No existing index found, indexing BAM (this may take a while for large files)..."
+            echo "No existing index found at {params.original_bai}"
+            echo "Indexing BAM (this may take a while for large files)..."
             samtools index -@ {threads} {input.bam}
+            echo "Indexing complete"
         fi
         """
 
