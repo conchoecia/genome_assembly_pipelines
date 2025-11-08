@@ -581,11 +581,34 @@ rule index_genome_faidx:
 # Split each library BAM by chromosome (before merging)
 ######################################################################
 
+def get_split_bam_runtime(wildcards):
+    """
+    Calculate runtime for splitting BAM by chromosome based on file size.
+    Large BAMs need more time to seek through and extract.
+    
+    For a 247 GB BAM: ~8-10 hours per chromosome (conservative)
+    """
+    original_bam = config["libraries"][wildcards.libtype][wildcards.libname]["bam"]
+    
+    try:
+        bam_size_bytes = os.path.getsize(original_bam)
+        bam_size_gb = bam_size_bytes / (1024**3)
+        
+        # Very conservative: ~3 minutes per GB, minimum 30 min, max 12 hours
+        # For 247 GB: 247 * 3 = 741 minutes = ~12 hours
+        runtime = int(bam_size_gb * 3)
+        
+        return max(30, min(runtime, 720))
+    except:
+        return 120  # 2 hours default
+
 rule split_library_by_chromosome:
     """
     Split each individual library BAM by chromosome.
     This is done before merging so we can add library-specific read groups.
     Requires the BAM index file to efficiently extract reads by chromosome.
+    
+    Runtime scales with BAM file size (large files take longer to seek through).
     """
     input:
         bam = config["tool"] + "/input/bams/{libtype}.{libname}.bam",
@@ -594,7 +617,8 @@ rule split_library_by_chromosome:
         bam = temp(config["tool"] + "/output/bams/split_per_library/{libtype}/{libtype}.{libname}.REF_{chrom}.bam")
     threads: 4
     resources:
-        mem_mb=8000, runtime=60
+        mem_mb=8000, 
+        runtime=get_split_bam_runtime
     shell:
         """
         set -euo pipefail
