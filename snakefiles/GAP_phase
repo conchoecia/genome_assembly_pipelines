@@ -58,11 +58,11 @@ include: softlinks_rule_path
 if "libraries" in config:
     # New format: config["libraries"][libtype][libname] = {bam: "/path/to/file.bam"}
     config["LIBRARY_STRUCTURE"] = "new"
-    
+
     # Ensure config["libraries"] is a dict
     if not isinstance(config["libraries"], dict):
         config["libraries"] = {}
-    
+
     # Build library lists for each type
     config["LIB_NAMES"] = {}
     for libtype in ["hic", "chi", "ill", "longreads"]:
@@ -73,22 +73,22 @@ if "libraries" in config:
             # Ensure the libtype key exists in libraries
             if libtype not in config["libraries"]:
                 config["libraries"][libtype] = {}
-    
+
 else:
     # Old format: convert to new format for backward compatibility
     config["LIBRARY_STRUCTURE"] = "old"
     config["libraries"] = {"hic": {}, "chi": {}, "ill": {}, "longreads": {}}
     config["LIB_NAMES"] = {"hic": [], "chi": [], "ill": [], "longreads": []}
-    
+
     # Convert old BAM paths to new format
     if "HIC_BAM" in config and config["HIC_BAM"] != "":
         config["libraries"]["hic"]["hic_lib1"] = {"bam": config["HIC_BAM"]}
         config["LIB_NAMES"]["hic"] = ["hic_lib1"]
-    
+
     if "CHI_BAM" in config and config["CHI_BAM"] != "":
         config["libraries"]["chi"]["chi_lib1"] = {"bam": config["CHI_BAM"]}
         config["LIB_NAMES"]["chi"] = ["chi_lib1"]
-    
+
     if "ILL_BAM" in config and config["ILL_BAM"] != "":
         config["libraries"]["ill"]["ill_lib1"] = {"bam": config["ILL_BAM"]}
         config["LIB_NAMES"]["ill"] = ["ill_lib1"]
@@ -429,16 +429,57 @@ rule split_vcf_into_chr_remainder:
 #  Now handle the read mapping
 ######################################################################
 
+def get_bwa_index_runtime(wildcards, input):
+    """
+    Calculate appropriate runtime for BWA indexing based on genome size.
+    Reads the .fai file to get total genome size in bases.
+    
+    The .fai file has format: chrom_name, length, offset, bases_per_line, bytes_per_line
+    We sum the second column to get total genome size.
+    
+    Runtime scaling (empirically determined):
+    - ~30 minutes per Gb for genomes < 1 Gb
+    - ~45 minutes per Gb for genomes 1-3 Gb  
+    - ~60 minutes per Gb for genomes > 3 Gb
+    
+    Minimum: 30 minutes
+    """
+    fai_file = input.fai
+    total_bases = 0
+    
+    with open(fai_file, 'r') as f:
+        for line in f:
+            fields = line.strip().split('\t')
+            if len(fields) >= 2:
+                total_bases += int(fields[1])
+    
+    # Convert to gigabases
+    genome_size_gb = total_bases / 1_000_000_000
+    
+    # Scale runtime based on genome size
+    if genome_size_gb < 1.0:
+        runtime = max(30, int(genome_size_gb * 30 * 60))  # 30 min/Gb
+    elif genome_size_gb < 3.0:
+        runtime = int(genome_size_gb * 45 * 60)  # 45 min/Gb
+    else:
+        runtime = int(genome_size_gb * 60 * 60)  # 60 min/Gb
+    
+    # Add 20% buffer for safety
+    runtime = int(runtime * 1.2)
+    
+    return runtime
+
 # index reference genome
 rule index_genome:
     input:
         ref = config["tool"] + "/input/assembly/input.fasta",
+        fai = config["tool"] + "/input/assembly/input.fasta.fai",
     output:
         bwt = config["tool"] + "/input/assembly/input.fasta.bwt"
     threads: 1
     resources:
         mem_mb  = 16000,
-        runtime = 120
+        runtime = get_bwa_index_runtime
     shell:
         'bwa index {input.ref}'
 
