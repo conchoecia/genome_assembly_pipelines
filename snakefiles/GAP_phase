@@ -97,10 +97,24 @@ else:
         config["libraries"]["longreads"]["longreads_lib1"] = {"bam": config["LONGREAD_BAM"]}
         config["LIB_NAMES"]["longreads"] = ["longreads_lib1"]
 
+# Validate BAM file paths - check for leading/trailing whitespace
+for libtype in config["libraries"]:
+    for libname in config["libraries"][libtype]:
+        bam_path = config["libraries"][libtype][libname]["bam"]
+        if bam_path != bam_path.strip():
+            raise ValueError(
+                f"\n\nERROR: BAM file path has leading or trailing whitespace!\n"
+                f"Library type: {libtype}\n"
+                f"Library name: {libname}\n"
+                f"Path: '{bam_path}'\n"
+                f"Fixed path should be: '{bam_path.strip()}'\n\n"
+                f"Please fix your config file and remove the extra whitespace."
+            )
+
 # Remove empty library types from the workflow
 # No need to process library types with no data
 for libtype in ["hic", "chi", "ill", "longreads"]:
-    if len(config["LIB_NAMES"][libtype]) == 0:
+    if libtype in config["LIB_NAMES"] and len(config["LIB_NAMES"][libtype]) == 0:
         del config["libraries"][libtype]
         del config["LIB_NAMES"][libtype]
 
