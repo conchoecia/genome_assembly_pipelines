@@ -176,22 +176,67 @@ rule make_library_bam_softlink:
         ln -sf {params.bam} {output.bam}
         """
 
+def get_bam_index_runtime(wildcards):
+    """
+    Calculate runtime for BAM indexing based on file size.
+    
+    Conservative estimates for HPC with network storage:
+    - Assume ~60-80 MB/sec effective throughput with 4 threads
+    - Double the estimate for safety buffer on slow filesystems
+    
+    For a 247 GB file: ~3-4 hours estimated
+    Minimum: 10 minutes
+    """
+    original_bam = config["libraries"][wildcards.libtype][wildcards.libname]["bam"]
+    
+    # Check if index already exists (will be fast copy operation)
+    if os.path.exists(original_bam + ".bai"):
+        return 5  # Just enough time to copy the index
+    
+    # Get BAM file size for runtime calculation
+    try:
+        bam_size_bytes = os.path.getsize(original_bam)
+        bam_size_gb = bam_size_bytes / (1024**3)
+        
+        # Conservative estimate: ~70 MB/sec = ~0.07 GB/sec with 4 threads on HPC
+        # Time in seconds = size_gb / 0.07, convert to minutes
+        estimated_minutes = (bam_size_gb / 0.07) / 60
+        
+        # Double it for safety on network filesystems and cluster load
+        runtime = int(estimated_minutes * 2.0)
+        
+        # Minimum 10 minutes, maximum 720 minutes (12 hours)
+        return max(10, min(runtime, 720))
+    except:
+        # If we can't get size, use a safe default
+        return 180
+
 rule index_library_bam:
     """
     Index the symlinked BAM files for each library.
-    This ensures we have the index available for chromosome splitting.
+    First tries to copy existing .bai from original location, otherwise indexes from scratch.
+    Runtime scales with BAM file size.
     """
     input:
         bam = config["tool"] + "/input/bams/{libtype}.{libname}.bam"
     output:
         bai = config["tool"] + "/input/bams/{libtype}.{libname}.bam.bai"
+    params:
+        original_bam = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["bam"]
     threads: 4
     resources:
         mem_mb = 4000,
-        runtime = 60
+        runtime = get_bam_index_runtime
     shell:
         """
-        samtools index -@ {threads} {input.bam}
+        # Try to copy existing index first
+        if [ -f "{params.original_bam}.bai" ]; then
+            echo "Found existing index, copying..."
+            cp {params.original_bam}.bai {output.bai}
+        else
+            echo "No existing index found, indexing BAM (this may take a while for large files)..."
+            samtools index -@ {threads} {input.bam}
+        fi
         """
 
 ######################################################################
