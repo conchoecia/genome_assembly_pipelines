@@ -176,30 +176,22 @@ rule make_library_bam_softlink:
         ln -sf {params.bam} {output.bam}
         """
 
-rule make_library_bai_softlink:
+rule index_library_bam:
     """
-    Create symlinks for BAM index (.bai) files for each library.
-    The index file must exist alongside the BAM file, or this rule will fail.
+    Index the symlinked BAM files for each library.
+    This ensures we have the index available for chromosome splitting.
     """
     input:
         bam = config["tool"] + "/input/bams/{libtype}.{libname}.bam"
     output:
         bai = config["tool"] + "/input/bams/{libtype}.{libname}.bam.bai"
-    params:
-        original_bam = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["bam"]
+    threads: 4
     resources:
-        mem_mb = 1000,
-        runtime = 2
+        mem_mb = 4000,
+        runtime = 60
     shell:
         """
-        # Check if the .bai file exists next to the original BAM
-        if [ -f "{params.original_bam}.bai" ]; then
-            ln -sf {params.original_bam}.bai {output.bai}
-        else
-            echo "ERROR: Index file {params.original_bam}.bai not found!"
-            echo "Please create an index for {params.original_bam} using: samtools index {params.original_bam}"
-            exit 1
-        fi
+        samtools index -@ {threads} {input.bam}
         """
 
 ######################################################################
