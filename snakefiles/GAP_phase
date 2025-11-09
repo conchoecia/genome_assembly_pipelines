@@ -190,6 +190,37 @@ rule make_library_bam_softlink:
         ln -sf {params.bam} {output.bam}
         """
 
+def get_add_rg_runtime(wildcards, input):
+    """
+    Calculate runtime for AddOrReplaceReadGroups based on input BAM size.
+    
+    Picard AddOrReplaceReadGroups needs to read and write the entire BAM file.
+    Based on empirical data: 3.3 GB BAM takes ~60 minutes (close call)
+    
+    Conservative estimate: ~55 MB/min read+write throughput on network storage
+    Formula: (BAM_size_GB * 1024) / 55 = minutes
+    Add 50% safety buffer for cluster load and network I/O variance
+    
+    Minimum: 30 minutes
+    Maximum: 360 minutes (6 hours)
+    """
+    try:
+        bam_size_bytes = os.path.getsize(input.bam)
+        bam_size_gb = bam_size_bytes / (1024**3)
+        
+        # 3.3 GB takes ~60 min, so ~55 MB/min throughput
+        # Convert GB to MB: bam_size_gb * 1024
+        estimated_minutes = (bam_size_gb * 1024) / 55
+        
+        # Add 50% safety buffer
+        runtime = int(estimated_minutes * 1.5)
+        
+        # Minimum 30 minutes, maximum 360 minutes (6 hours)
+        return max(30, min(runtime, 360))
+    except Exception as e:
+        print(f"Warning: Could not calculate AddRG runtime for {wildcards}: {e}")
+        return 90  # Safe default: 1.5 hours
+
 def get_bam_index_runtime(wildcards):
     """
     Calculate runtime for BAM indexing based on file size.
@@ -546,7 +577,7 @@ rule index_genome:
     threads: 1
     resources:
         mem_mb  = 16000,
-        runtime = get_bwa_index_runtime
+        runtime = lambda wildcards, input: get_bwa_index_runtime(wildcards, input)
     shell:
         'bwa index {input.ref}'
 
@@ -642,6 +673,12 @@ rule add_library_rg_to_split:
       - ID: Read group ID (libtype.libname.chrom)
       - SM: Sample name (from config or default to 'sample1')
       - PL: Platform (LONG for all read types - could be PacBio, ONT, Hi-C, etc.)
+    
+    TODO: For performance improvement, implement local disk I/O:
+      1. Copy input BAM to $TMPDIR or /scratch/local
+      2. Run AddOrReplaceReadGroups on local copy
+      3. Copy output back to final location
+      This reduces network I/O latency for large BAM files.
     """
     input:
         bam =      config["tool"] + "/output/bams/split_per_library/{libtype}/{libtype}.{libname}.REF_{chrom}.bam",
@@ -656,7 +693,7 @@ rule add_library_rg_to_split:
     threads: 2
     resources:
         mem_mb  = 4000,
-        runtime = 60
+        runtime = lambda wildcards, input: get_add_rg_runtime(wildcards, input)
     shell:
         """
         java -Xmx3g -jar {input.picard} AddOrReplaceReadGroups \
