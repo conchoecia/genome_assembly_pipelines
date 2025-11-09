@@ -221,6 +221,35 @@ def get_add_rg_runtime(wildcards, input):
         print(f"Warning: Could not calculate AddRG runtime for {wildcards}: {e}")
         return 90  # Safe default: 1.5 hours
 
+def get_merge_bam_runtime(wildcards, input):
+    """
+    Calculate runtime for samtools merge based on total input BAM sizes.
+    
+    samtools merge reads all input BAMs and writes one output BAM.
+    With 4 threads, this is I/O bound on network storage.
+    
+    Conservative estimate: ~100 MB/min total throughput with 4 threads
+    Add 50% safety buffer for cluster load
+    
+    Minimum: 30 minutes
+    Maximum: 360 minutes (6 hours)
+    """
+    try:
+        total_size_bytes = sum(os.path.getsize(bam) for bam in input.bams)
+        total_size_gb = total_size_bytes / (1024**3)
+        
+        # ~100 MB/min with 4 threads
+        estimated_minutes = (total_size_gb * 1024) / 100
+        
+        # Add 50% safety buffer
+        runtime = int(estimated_minutes * 1.5)
+        
+        # Minimum 30 minutes, maximum 360 minutes (6 hours)
+        return max(30, min(runtime, 360))
+    except Exception as e:
+        print(f"Warning: Could not calculate merge runtime for {wildcards}: {e}")
+        return 120  # Safe default: 2 hours
+
 def get_bam_index_runtime(wildcards):
     """
     Calculate runtime for BAM indexing based on file size.
@@ -550,13 +579,13 @@ def get_bwa_index_runtime(wildcards, input):
         # Convert to gigabases
         genome_size_gb = total_bases / 1_000_000_000
         
-        # Scale runtime based on genome size
+        # Scale runtime based on genome size (in minutes)
         if genome_size_gb < 1.0:
-            runtime = max(30, int(genome_size_gb * 30 * 60))  # 30 min/Gb
+            runtime = max(30, int(genome_size_gb * 30))  # 30 min/Gb
         elif genome_size_gb < 3.0:
-            runtime = int(genome_size_gb * 45 * 60)  # 45 min/Gb
+            runtime = int(genome_size_gb * 45)  # 45 min/Gb
         else:
-            runtime = int(genome_size_gb * 60 * 60)  # 60 min/Gb
+            runtime = int(genome_size_gb * 60)  # 60 min/Gb
         
         # Add 20% buffer for safety
         runtime = int(runtime * 1.2)
@@ -729,7 +758,7 @@ rule merge_libraries_per_chromosome:
     threads: 4
     resources:
         mem_mb  = 8000,
-        runtime = 60
+        runtime = lambda wildcards, input: get_merge_bam_runtime(wildcards, input)
     run:
         if len(input.bams) == 1:
             # Only one library, just create a symlink
