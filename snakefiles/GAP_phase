@@ -761,8 +761,8 @@ rule merge_libraries_per_chromosome:
         runtime = lambda wildcards, input: get_merge_bam_runtime(wildcards, input)
     run:
         if len(input.bams) == 1:
-            # Only one library, just create a symlink
-            shell("ln -sf $(realpath {input.bams[0]}) {output.bam}")
+            # Only one library, just copy it (safer than symlink with temp files)
+            shell("cp {input.bams[0]} {output.bam}")
         else:
             # Multiple libraries, merge them (preserves read groups)
             shell("samtools merge -@ {threads} {output.bam} {input.bams}")
