@@ -317,10 +317,10 @@ def get_sambamba_markdup_runtime(wildcards, input):
     - Write cleaned BAM file
     
     With 4 threads, sambamba is quite fast.
-    Estimate: ~500 MB/min throughput with 4 threads
-    Add 20% safety buffer for complex files with many duplicates
+    More conservative estimate: ~300 MB/min throughput with 4 threads on network storage
+    Add 50% safety buffer for complex files with many duplicates and I/O variance
     
-    Target: ~180 minutes for 86 GB file
+    Target: ~180 minutes for 62 GB file, scales up for larger files
     Minimum: 30 minutes
     Maximum: 1440 minutes (24 hours for very large files)
     """
@@ -328,11 +328,11 @@ def get_sambamba_markdup_runtime(wildcards, input):
         bam_size_bytes = os.path.getsize(input.bam)
         bam_size_gb = bam_size_bytes / (1024**3)
         
-        # ~500 MB/min with 4 threads
-        estimated_minutes = (bam_size_gb * 1024) / 500
+        # ~300 MB/min with 4 threads
+        estimated_minutes = (bam_size_gb * 1024) / 300
         
-        # Add 20% safety buffer
-        runtime = int(estimated_minutes * 1.2)
+        # Add 50% safety buffer
+        runtime = int(estimated_minutes * 1.5)
         
         # Minimum 30 minutes, maximum 1440 minutes (24 hours)
         return max(30, min(runtime, 1440))
