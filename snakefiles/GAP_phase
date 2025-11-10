@@ -316,26 +316,26 @@ def get_sambamba_markdup_runtime(wildcards, input):
     - Sort by coordinates and identify duplicates
     - Write cleaned BAM file
     
-    With 4 threads, sambamba is quite fast.
-    More conservative estimate: ~300 MB/min throughput with 4 threads on network storage
-    Add 50% safety buffer for complex files with many duplicates and I/O variance
+    With 4 threads on network storage, sambamba markdup can be slow.
+    Very conservative estimate: ~150 MB/min throughput with 4 threads
+    Add 100% safety buffer (double the estimate) for I/O variance and high duplicate rates
     
-    Target: ~180 minutes for 62 GB file, scales up for larger files
-    Minimum: 30 minutes
+    Target: ~6 hours for 62 GB file
+    Minimum: 60 minutes
     Maximum: 1440 minutes (24 hours for very large files)
     """
     try:
         bam_size_bytes = os.path.getsize(input.bam)
         bam_size_gb = bam_size_bytes / (1024**3)
         
-        # ~300 MB/min with 4 threads
-        estimated_minutes = (bam_size_gb * 1024) / 300
+        # ~150 MB/min with 4 threads (very conservative)
+        estimated_minutes = (bam_size_gb * 1024) / 150
         
-        # Add 50% safety buffer
-        runtime = int(estimated_minutes * 1.5)
+        # Double it for safety (100% buffer)
+        runtime = int(estimated_minutes * 2.0)
         
-        # Minimum 30 minutes, maximum 1440 minutes (24 hours)
-        return max(30, min(runtime, 1440))
+        # Minimum 60 minutes, maximum 1440 minutes (24 hours)
+        return max(60, min(runtime, 1440))
     except Exception as e:
         print(f"Warning: Could not calculate sambamba markdup runtime for {wildcards}: {e}")
         return 120  # Safe default: 2 hours
@@ -919,6 +919,9 @@ rule rm_duplicates_in_split_bams:
 
     Sambamba markdup is faster than Picard and removes duplicates by default with -r flag.
     Uses multiple threads for better performance.
+    
+    Performance optimization: Copy to local disk first, process there, then copy back.
+    This dramatically improves I/O performance compared to processing on network storage.
     """
     input:
         bam = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
@@ -931,7 +934,28 @@ rule rm_duplicates_in_split_bams:
         runtime = lambda wildcards, input: get_sambamba_markdup_runtime(wildcards, input)
     shell:
         """
-        {input.sambamba} markdup -r -t {threads} {input.bam} {output.bam}
+        set -euo pipefail
+        
+        # Use TMPDIR if set, otherwise use /tmp
+        LOCALDIR=${{TMPDIR:-/tmp}}/sambamba_$$_{wildcards.libtype}_{wildcards.chrom}
+        mkdir -p $LOCALDIR
+        
+        # Copy input to local disk
+        echo "Copying input BAM to local disk: $LOCALDIR"
+        LOCAL_INPUT=$LOCALDIR/input.bam
+        cp {input.bam} $LOCAL_INPUT
+        
+        # Process on local disk
+        echo "Running sambamba markdup on local disk"
+        LOCAL_OUTPUT=$LOCALDIR/output.bam
+        {input.sambamba} markdup -r -t {threads} $LOCAL_INPUT $LOCAL_OUTPUT
+        
+        # Copy result back to network storage
+        echo "Copying output BAM back to network storage"
+        cp $LOCAL_OUTPUT {output.bam}
+        
+        # Clean up local temp files
+        rm -rf $LOCALDIR
         """
 
 rule index_rmdup_bams:
