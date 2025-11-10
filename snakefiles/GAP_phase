@@ -307,6 +307,39 @@ def get_hapcut2_memory(wildcards, input):
         print(f"Warning: Could not calculate HapCUT2 memory for {wildcards}: {e}")
         return 12000  # Safe default: 12 GB
 
+def get_sambamba_markdup_runtime(wildcards, input):
+    """
+    Calculate runtime for sambamba markdup based on input BAM size.
+    
+    sambamba markdup with -r flag (remove duplicates) needs to:
+    - Read entire BAM file
+    - Sort by coordinates and identify duplicates
+    - Write cleaned BAM file
+    
+    With 4 threads, sambamba is quite fast.
+    Estimate: ~500 MB/min throughput with 4 threads
+    Add 20% safety buffer for complex files with many duplicates
+    
+    Target: ~180 minutes for 86 GB file
+    Minimum: 30 minutes
+    Maximum: 1440 minutes (24 hours for very large files)
+    """
+    try:
+        bam_size_bytes = os.path.getsize(input.bam)
+        bam_size_gb = bam_size_bytes / (1024**3)
+        
+        # ~500 MB/min with 4 threads
+        estimated_minutes = (bam_size_gb * 1024) / 500
+        
+        # Add 20% safety buffer
+        runtime = int(estimated_minutes * 1.2)
+        
+        # Minimum 30 minutes, maximum 1440 minutes (24 hours)
+        return max(30, min(runtime, 1440))
+    except Exception as e:
+        print(f"Warning: Could not calculate sambamba markdup runtime for {wildcards}: {e}")
+        return 120  # Safe default: 2 hours
+
 def get_bam_index_runtime(wildcards):
     """
     Calculate runtime for BAM indexing based on file size.
@@ -895,7 +928,7 @@ rule rm_duplicates_in_split_bams:
     threads: 4
     resources:
         mem_mb  = 8000,
-        runtime = 60  # minutes - sambamba is faster than Picard
+        runtime = lambda wildcards, input: get_sambamba_markdup_runtime(wildcards, input)
     shell:
         """
         {input.sambamba} markdup -r -t {threads} {input.bam} {output.bam}
