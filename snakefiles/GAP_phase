@@ -279,6 +279,34 @@ def get_split_bam_index_runtime(wildcards, input):
         print(f"Warning: Could not calculate split BAM index runtime for {wildcards}: {e}")
         return 90  # Safe default: 1.5 hours
 
+def get_hapcut2_memory(wildcards, input):
+    """
+    Calculate memory for HapCUT2 based on fragment file size.
+    
+    HapCUT2 memory usage scales with:
+    - Number of fragments (read depth × chromosome size)
+    - Complexity of Hi-C contact graph
+    
+    Empirical observation: Fragment files can be large with deep coverage.
+    Conservative estimate: ~2 GB baseline + ~3 GB per GB of fragment file
+    
+    Minimum: 8 GB (for small chromosomes with low coverage)
+    Maximum: 64 GB (for large chromosomes with deep Hi-C coverage)
+    """
+    try:
+        frag_size_bytes = os.path.getsize(input.frag)
+        frag_size_gb = frag_size_bytes / (1024**3)
+        
+        # Base memory + scaling factor
+        # 2 GB baseline + 3 GB per GB of fragment file
+        memory_mb = int(2000 + (frag_size_gb * 3000))
+        
+        # Minimum 8 GB, maximum 64 GB
+        return max(8000, min(memory_mb, 64000))
+    except Exception as e:
+        print(f"Warning: Could not calculate HapCUT2 memory for {wildcards}: {e}")
+        return 12000  # Safe default: 12 GB
+
 def get_bam_index_runtime(wildcards):
     """
     Calculate runtime for BAM indexing based on file size.
@@ -959,7 +987,7 @@ rule run_hapcut2_hic_longread:
         model = config["tool"] + "/output/hapcut2_results/{chrom}.htrans_model"
     threads: 1
     resources:
-        mem_mb  = 4000,
+        mem_mb  = lambda wildcards, input: get_hapcut2_memory(wildcards, input),
         runtime = 120
     shell:
         """
