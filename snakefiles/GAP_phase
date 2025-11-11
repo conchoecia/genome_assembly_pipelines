@@ -1071,18 +1071,23 @@ rule cat_haps:
                      chrom=config["CHROMS"])
     output:
         hap = temp(config["tool"] + "/output/final_output/complete_assembly.hap")
+    params:
+        outdir = config["tool"] + "/output/final_output"
     threads: 1
     resources:
         mem_mb=1000, runtime=10
     shell:
         r"""
-        mkdir -p {config[tool]}/output/final_output
+        mkdir -p {params.outdir}
         cat {input.hap} > {output.hap}
         """
 
 rule merge_vcfs:
     """
-    202508 - This file isn't used for anything
+    Merge HapCUT2 phased VCF files.
+
+    HapCUT2 outputs may lack proper VCF headers, so we add the header
+    from the original VCF to each per-chromosome file before concatenating.
     """
     input:
         origvcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf",
@@ -1090,21 +1095,40 @@ rule merge_vcfs:
                          chrom=config["CHROMS"])
     output:
         merged = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.unsorted.vcf")
+    params:
+        outdir = config["tool"] + "/output/final_output"
     threads: 2
     resources:
         mem_mb=4000, runtime=30
     shell:
         r"""
         set -euo pipefail
-        mkdir -p {config[tool]}/output/final_output
+        mkdir -p {params.outdir}
 
-        # Merge all per-chrom VCFs into one (keep all sites, even if contigs differ)
-        bcftools concat -a -D -O v -o {output.merged} {input.vcfs}
+        # Extract header from original VCF
+        HEADER=$(mktemp)
+        grep '^#' {input.origvcf} > $HEADER
 
-        # If you need to ensure the header carries over metadata from origvcf,
-        # you can reheader (optional). Usually concat keeps a sane header:
-        # bcftools annotate --header-lines {input.origvcf} -O v -o {output.merged}.tmp {output.merged}
-        # mv {output.merged}.tmp {output.merged}
+        # Add header to each HapCUT2 VCF file if missing
+        FIXED_VCFS=""
+        for vcf in {input.vcfs}; do
+            if ! grep -q '^#' "$vcf"; then
+                # No header found, add it
+                FIXED=$(mktemp)
+                cat $HEADER > $FIXED
+                cat "$vcf" >> $FIXED
+                FIXED_VCFS="$FIXED_VCFS $FIXED"
+            else
+                # Header exists, use as-is
+                FIXED_VCFS="$FIXED_VCFS $vcf"
+            fi
+        done
+
+        # Merge all VCFs with bcftools concat
+        bcftools concat -a -D -O v -o {output.merged} $FIXED_VCFS
+
+        # Clean up temp files
+        rm -f $HEADER $FIXED_VCFS
         """
 
 rule sort_merged_vcf:
