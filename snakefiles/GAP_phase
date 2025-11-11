@@ -1105,9 +1105,23 @@ rule merge_vcfs:
         set -euo pipefail
         mkdir -p {params.outdir}
 
-        # Extract header from original VCF
+        # Extract header from original VCF and add HapCUT2 FORMAT fields
         HEADER=$(mktemp)
-        grep '^#' {input.origvcf} > $HEADER
+        grep '^#' {input.origvcf} | grep -v '^##FORMAT=' > $HEADER.tmp
+        
+        # Add HapCUT2-specific FORMAT definitions before the #CHROM line
+        grep '^##FORMAT=' {input.origvcf} > $HEADER.formats || true
+        cat >> $HEADER.formats << 'EOF'
+##FORMAT=<ID=PQ,Number=1,Type=Integer,Description="Phasing quality score assigned by HapCUT2">
+##FORMAT=<ID=PD,Number=1,Type=String,Description="Phase block and haplotype assignment assigned by HapCUT2">
+EOF
+        
+        # Combine: original headers (except FORMAT) + all FORMAT lines + #CHROM line
+        grep -v '^#CHROM' $HEADER.tmp > $HEADER
+        cat $HEADER.formats >> $HEADER
+        grep '^#CHROM' {input.origvcf} >> $HEADER
+        
+        rm -f $HEADER.tmp $HEADER.formats
 
         # Add header to each HapCUT2 VCF file if missing, bgzip and index them
         TMPDIR=$(mktemp -d)
