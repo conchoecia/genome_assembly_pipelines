@@ -1109,26 +1109,33 @@ rule merge_vcfs:
         HEADER=$(mktemp)
         grep '^#' {input.origvcf} > $HEADER
 
-        # Add header to each HapCUT2 VCF file if missing
+        # Add header to each HapCUT2 VCF file if missing, bgzip and index them
+        TMPDIR=$(mktemp -d)
         FIXED_VCFS=""
         for vcf in {input.vcfs}; do
+            BASENAME=$(basename "$vcf" .VCF)
+            FIXED="$TMPDIR/$BASENAME.vcf.gz"
+
             if ! grep -q '^#' "$vcf"; then
-                # No header found, add it
-                FIXED=$(mktemp)
-                cat $HEADER > $FIXED
-                cat "$vcf" >> $FIXED
-                FIXED_VCFS="$FIXED_VCFS $FIXED"
+                # No header found, add it, then bgzip
+                cat $HEADER "$vcf" | bgzip -c > "$FIXED"
             else
-                # Header exists, use as-is
-                FIXED_VCFS="$FIXED_VCFS $vcf"
+                # Header exists, just bgzip
+                bgzip -c "$vcf" > "$FIXED"
             fi
+
+            # Index the bgzipped file
+            tabix -p vcf "$FIXED"
+
+            FIXED_VCFS="$FIXED_VCFS $FIXED"
         done
 
         # Merge all VCFs with bcftools concat
         bcftools concat -a -D -O v -o {output.merged} $FIXED_VCFS
 
         # Clean up temp files
-        rm -f $HEADER $FIXED_VCFS
+        rm -f $HEADER
+        rm -rf $TMPDIR
         """
 
 rule sort_merged_vcf:
