@@ -166,10 +166,10 @@ NUM_CHUNKS = 100
 rule all:
     input:
         # Generate all expected split files for all libraries
-        expand(config["tool"] + "/output/samgz_split/{libtype}.{libname}.part{part:04d}.sam.gz",
-               libtype=config["ACTIVE_LIBTYPES"],
-               libname=lambda wildcards: config["LIB_NAMES"][wildcards.libtype],
-               part=range(NUM_CHUNKS))
+        [config["tool"] + f"/output/samgz_split/{libtype}.{libname}.part{part:04d}.sam.gz"
+         for libtype in config["ACTIVE_LIBTYPES"]
+         for libname in config["LIB_NAMES"][libtype]
+         for part in range(NUM_CHUNKS)]
 
 ######################################################################
 # Step 1: Find split points in the sam.gz file
