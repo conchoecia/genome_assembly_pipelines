@@ -160,11 +160,6 @@ wildcard_constraints:
     datatype="[A-Za-z]+",
     part="[0-9]+"
 
-rule all:
-    input:
-        # This will trigger the aggregation function that depends on the checkpoint
-        get_all_split_outputs
-
 ######################################################################
 # Helper functions for checkpoint aggregation
 ######################################################################
@@ -196,6 +191,11 @@ def get_all_split_outputs(wildcards):
                 )
     
     return all_outputs
+
+rule all:
+    input:
+        # This will trigger the aggregation function that depends on the checkpoint
+        get_all_split_outputs
 
 ######################################################################
 # Checkpoint: Split sam.gz files by unique read IDs
