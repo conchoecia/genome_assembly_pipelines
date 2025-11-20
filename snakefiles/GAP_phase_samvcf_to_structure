@@ -283,6 +283,8 @@ checkpoint split_samgz_by_readid:
                 # Calculate approximate position
                 approx_pos = header_end_pos + (i * chunk_size)
                 
+                print(f"  Finding split {i}/{num_chunks-1} near {approx_pos / (1024**3):.2f} GB ({int(approx_pos/file_size*100)}%)...", end='', flush=True)
+                
                 # Seek to approximate position
                 infile.seek(approx_pos)
                 
@@ -316,10 +318,14 @@ checkpoint split_samgz_by_readid:
                     # Found a read ID change - this is a safe split point
                     if prev_readid is not None and current_readid != prev_readid:
                         split_points.append(pos_before)
-                        print(f"  Split {i}/{num_chunks-1} at {pos_before / (1024**3):.2f} GB ({int(pos_before/file_size*100)}%)")
+                        print(f" found at {pos_before / (1024**3):.2f} GB (scanned {scan_count} lines)")
                         break
                     
                     prev_readid = current_readid
+                
+                # If we didn't find a split point, warn the user
+                if scan_count >= max_scan:
+                    print(f" WARNING: couldn't find split point after {max_scan} lines, using approximate position")
         
         print(f"\nFound {len(split_points)} split points, will create {len(split_points)} output files")
         
