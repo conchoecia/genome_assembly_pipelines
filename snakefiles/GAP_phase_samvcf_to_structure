@@ -55,6 +55,12 @@ filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 softlinks_rule_path=os.path.join(filepath, "snakemake_includes/assembly_softlinks")
 include: softlinks_rule_path
 
+# Paths to hickit tools
+K8 = os.path.join(filepath, "../bin/k8")
+HICKIT_DIR = os.path.join(filepath, "../dependencies/hickit")
+HICKIT_JS = os.path.join(HICKIT_DIR, "hickit.js")
+HICKIT_BIN = os.path.join(HICKIT_DIR, "hickit")
+
 ###############################################################################
 # Parse library configuration - supports both old and new config formats
 # ALL LIBRARIES NOW USE BAM FILES (not FASTQ)
@@ -333,7 +339,7 @@ rule split_samgz_by_readid:
         prefix = lambda wildcards: f"{wildcards.libtype}.{wildcards.libname}"
     threads: 2
     resources:
-        mem_mb  = 4000,
+        mem_mb  = 30000,  # 30 GB to allow loading large chunks into memory
         runtime = 600  # 10 hours for very large files
     run:
         import gzip
@@ -343,29 +349,31 @@ rule split_samgz_by_readid:
         # Create output directory
         Path(params.outdir).mkdir(parents=True, exist_ok=True)
         
-        print(f"Splitting {input.samgz}")
-        print(f"Writing parts to {params.outdir} with prefix {params.prefix}")
+        import sys
+        
+        print(f"Splitting {input.samgz}", flush=True)
+        print(f"Writing parts to {params.outdir} with prefix {params.prefix}", flush=True)
         
         # Load headers
-        print("Loading headers...")
+        print("Loading headers...", flush=True)
         headers = []
         with open(input.headers, 'r') as f:
             headers = f.readlines()
-        print(f"Loaded {len(headers)} header lines")
+        print(f"Loaded {len(headers)} header lines", flush=True)
         
         # Load split points (first column is byte position)
-        print("Loading split points...")
+        print("Loading split points...", flush=True)
         split_points = []
         with open(input.split_points, 'r') as f:
             for line in f:
                 fields = line.strip().split('\t')
                 split_points.append(int(fields[0]))
         
-        print(f"Loaded {len(split_points)} split points")
-        print(f"Will create {len(split_points)} output files")
+        print(f"Loaded {len(split_points)} split points", flush=True)
+        print(f"Will create {len(split_points)} output files", flush=True)
         
         # Write split files
-        print("\nWriting split files...")
+        print("\nWriting split files...", flush=True)
         
         with gzip.open(input.samgz, 'rb') as infile:
             for part_num in range(len(split_points)):
@@ -374,7 +382,7 @@ rule split_samgz_by_readid:
                 start_pos = split_points[part_num]
                 end_pos = split_points[part_num + 1] if part_num + 1 < len(split_points) else None
                 
-                print(f"  Writing part {part_num:04d}/{len(split_points)-1:04d}...")
+                print(f"  Writing part {part_num:04d}/{len(split_points)-1:04d}...", flush=True)
                 
                 with gzip.open(outfile_path, 'wt') as outfile:
                     # Write headers
@@ -385,15 +393,15 @@ rule split_samgz_by_readid:
                     infile.seek(start_pos)
                     
                     if end_pos is not None:
-                        # Read exact byte range
+                        # Read entire chunk at once for maximum speed (requires sufficient RAM)
                         bytes_to_read = end_pos - start_pos
                         chunk_data = infile.read(bytes_to_read)
                         outfile.write(chunk_data.decode('utf-8'))
                     else:
-                        # Read to end of file
-                        for line in infile:
-                            outfile.write(line.decode('utf-8'))
+                        # Last chunk - read to end
+                        remaining_data = infile.read()
+                        outfile.write(remaining_data.decode('utf-8'))
         
-        print(f"\nSplitting complete! Created {len(split_points)} files")
+        print(f"\nSplitting complete! Created {len(split_points)} files", flush=True)
 
 
