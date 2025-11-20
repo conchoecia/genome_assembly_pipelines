@@ -61,11 +61,35 @@ include: softlinks_rule_path
 ###############################################################################
 
 # For each Hi-C library, require that a .sam.gz file is provided in the config. This won't work otherwise
+# Only Hi-C and Chicago libraries need sam.gz files for this workflow
 
 # Validate sam.gz file paths - check for leading/trailing whitespace
 for libtype in config["libraries"]:
+    # Only check for samgz in Hi-C and Chicago libraries
+    if libtype not in ["hic", "chi"]:
+        continue
+    
     for libname in config["libraries"][libtype]:
+        # Check if samgz key exists
+        if "samgz" not in config["libraries"][libtype][libname]:
+            raise ValueError(
+                f"\n\nERROR: samgz file path is required for {libtype} libraries!\n"
+                f"Library type: {libtype}\n"
+                f"Library name: {libname}\n\n"
+                f"Please add 'samgz: /path/to/file.sam.gz' to your config file."
+            )
+        
         samgz_path = config["libraries"][libtype][libname]["samgz"]
+        
+        # Skip if samgz is None or empty string
+        if samgz_path is None or samgz_path == "":
+            raise ValueError(
+                f"\n\nERROR: samgz file path cannot be None or empty for {libtype} libraries!\n"
+                f"Library type: {libtype}\n"
+                f"Library name: {libname}\n\n"
+                f"Please provide a valid path or remove this library from the config."
+            )
+        
         if samgz_path != samgz_path.strip():
             raise ValueError(
                 f"\n\nERROR: samgz file path has leading or trailing whitespace!\n"
@@ -107,15 +131,23 @@ for vcf_key in config["PHASED_VCFs"]:
 
 # The phased VCF and the sam.gz files are now validated and can be used in the workflow.
 
+# Build library lists for Hi-C and Chicago only (these are the ones we process in this workflow)
+config["LIB_NAMES"] = {}
+for libtype in ["hic", "chi"]:
+    if libtype in config["libraries"]:
+        config["LIB_NAMES"][libtype] = list(config["libraries"][libtype].keys())
+    else:
+        config["LIB_NAMES"][libtype] = []
 
 # Remove empty library types from the workflow
 # No need to process library types with no data
-for libtype in ["hic", "chi", "ill", "longreads"]:
-    if libtype in config["LIB_NAMES"] and len(config["LIB_NAMES"][libtype]) == 0:
-        del config["libraries"][libtype]
+for libtype in ["hic", "chi"]:
+    if len(config["LIB_NAMES"][libtype]) == 0:
+        if libtype in config["libraries"]:
+            del config["libraries"][libtype]
         del config["LIB_NAMES"][libtype]
 
-# Get list of active library types (those with actual data)
+# Get list of active library types (those with actual data and sam.gz files)
 config["ACTIVE_LIBTYPES"] = list(config["LIB_NAMES"].keys())
 
 # make sure everything in the config["CHROMS"] is a string
