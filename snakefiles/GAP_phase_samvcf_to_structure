@@ -220,7 +220,7 @@ checkpoint split_samgz_by_readid:
     params:
         outdir = config["tool"] + "/output/samgz_split",
         prefix = lambda wildcards: f"{wildcards.libtype}.{wildcards.libname}",
-        reads_per_file = 10000000  # 10 million unique read IDs per file
+        num_chunks = 100  # Number of output files to create
     threads: 2
     resources:
         mem_mb  = 8000,
@@ -235,20 +235,19 @@ checkpoint split_samgz_by_readid:
         
         print(f"Processing {input.samgz}")
         print(f"Writing parts to {params.outdir} with prefix {params.prefix}")
-        print(f"Target: {params.reads_per_file} unique read IDs per file")
         
-        # Get file size for progress tracking
+        # Get file size for split calculation
         file_size = os.path.getsize(input.samgz)
         print(f"Input file size: {file_size / (1024**3):.2f} GB")
         
-        # First pass: Scan file to find split points (byte positions)
-        print("\nPass 1: Scanning file to identify split points...")
+        # Use the specified number of chunks
+        num_chunks = params.num_chunks
+        print(f"Target: {num_chunks} chunks (~{file_size/num_chunks/(1024**2):.1f} MB each)")
+        
+        # Step 1: Read headers and calculate approximate split positions
+        print("\nStep 1: Reading headers and calculating split positions...")
         headers = []
-        split_points = []  # List of (byte_position, read_count) tuples
-        current_readids = set()
-        last_readid = None
         header_end_pos = 0
-        last_progress = -1
         
         with gzip.open(input.samgz, 'rb') as infile:
             # Read headers
@@ -258,87 +257,95 @@ checkpoint split_samgz_by_readid:
                 if not line:
                     break
                 if not line.startswith(b'@'):
-                    # This is the first alignment line - save position before it
                     header_end_pos = pos_before
-                    # Decode and process this first alignment line
-                    line_str = line.decode('utf-8')
-                    fields = line_str.split('\t', 1)
-                    if len(fields) >= 1:
-                        readid = fields[0]
-                        current_readids.add(readid)
-                        last_readid = readid
                     break
                 else:
                     headers.append(line.decode('utf-8'))
             
             print(f"Found {len(headers)} header lines")
-            print(f"Scanning alignments to find split points...")
             
-            # Continue reading alignment lines
-            line_count = 1
-            for line in infile:
-                line_count += 1
+            # Get the file size after headers
+            infile.seek(0, 2)  # Seek to end
+            file_end_pos = infile.tell()
+        
+        alignment_section_size = file_end_pos - header_end_pos
+        chunk_size = alignment_section_size // num_chunks
+        
+        print(f"Alignment section: {alignment_section_size / (1024**3):.2f} GB")
+        print(f"Approximate chunk size: {chunk_size / (1024**2):.1f} MB")
+        
+        # Step 2: Find exact split points near the approximate positions
+        print("\nStep 2: Finding safe split points (where read ID changes)...")
+        split_points = [header_end_pos]  # Start with the first alignment
+        
+        with gzip.open(input.samgz, 'rb') as infile:
+            for i in range(1, num_chunks):
+                # Calculate approximate position
+                approx_pos = header_end_pos + (i * chunk_size)
                 
-                # Show progress every 5%
-                current_pos = infile.tell()
-                progress = int((current_pos / file_size) * 100)
-                if progress >= last_progress + 5:
-                    last_progress = progress
-                    print(f"  Progress: {progress}% - {line_count:,} lines, {len(current_readids):,} unique reads, {len(split_points)} splits")
+                # Seek to approximate position
+                infile.seek(approx_pos)
                 
-                line_str = line.decode('utf-8')
-                fields = line_str.split('\t', 1)
-                if len(fields) < 1:
-                    continue
+                # Read forward to find the next newline
+                infile.readline()  # Skip partial line
                 
-                readid = fields[0]
+                # Now find where the read ID changes
+                prev_readid = None
+                scan_count = 0
+                max_scan = 100000  # Don't scan more than 100k lines
                 
-                # Check if this is a new unique read ID
-                if readid != last_readid and readid not in current_readids:
-                    current_readids.add(readid)
+                while scan_count < max_scan:
+                    pos_before = infile.tell()
+                    line = infile.readline()
+                    if not line:
+                        break
                     
-                    # Check if we've hit the limit for this chunk
-                    if len(current_readids) >= params.reads_per_file:
-                        # Record the byte position BEFORE this line as a split point
-                        # We want to ensure all reads with the same ID stay together
-                        split_points.append((infile.tell() - len(line), len(current_readids)))
-                        current_readids = set([readid])  # Start new chunk with this read
-                
-                last_readid = readid
+                    scan_count += 1
+                    line_str = line.decode('utf-8')
+                    
+                    # Skip non-alignment lines
+                    if line_str.startswith('@'):
+                        continue
+                    
+                    fields = line_str.split('\t', 1)
+                    if len(fields) < 1:
+                        continue
+                    
+                    current_readid = fields[0]
+                    
+                    # Found a read ID change - this is a safe split point
+                    if prev_readid is not None and current_readid != prev_readid:
+                        split_points.append(pos_before)
+                        print(f"  Split {i}/{num_chunks-1} at {pos_before / (1024**3):.2f} GB ({int(pos_before/file_size*100)}%)")
+                        break
+                    
+                    prev_readid = current_readid
         
-        print(f"\nScan complete:")
-        print(f"  Total lines: {line_count:,}")
-        print(f"  Split points identified: {len(split_points)}")
-        print(f"  Will create {len(split_points) + 1} output files")
+        print(f"\nFound {len(split_points)} split points, will create {len(split_points)} output files")
         
-        # Second pass: Write split files based on identified byte positions
-        print("\nPass 2: Writing split files...")
-        
-        split_points = [header_end_pos] + [sp[0] for sp in split_points]
-        total_parts = len(split_points)
+        # Step 3: Write split files
+        print("\nStep 3: Writing split files...")
         
         with gzip.open(input.samgz, 'rb') as infile:
             for part_num in range(len(split_points)):
                 outfile_path = os.path.join(params.outdir, f"{params.prefix}.part{part_num:04d}.sam.gz")
                 
-                # Determine byte range for this part
                 start_pos = split_points[part_num]
                 end_pos = split_points[part_num + 1] if part_num + 1 < len(split_points) else None
                 
-                progress_pct = int((part_num / total_parts) * 100)
-                print(f"  Writing part {part_num:04d}/{total_parts-1:04d} ({progress_pct}%)...")
+                print(f"  Writing part {part_num:04d}/{len(split_points)-1:04d}...")
                 
                 with gzip.open(outfile_path, 'wt') as outfile:
                     # Write headers
                     for header in headers:
                         outfile.write(header)
                     
-                    # Seek to start position and write until end position
+                    # Seek to start position
                     infile.seek(start_pos)
-                    bytes_to_read = (end_pos - start_pos) if end_pos is not None else None
                     
-                    if bytes_to_read is not None:
+                    if end_pos is not None:
                         # Read exact byte range
+                        bytes_to_read = end_pos - start_pos
                         chunk_data = infile.read(bytes_to_read)
                         outfile.write(chunk_data.decode('utf-8'))
                     else:
@@ -346,13 +353,10 @@ checkpoint split_samgz_by_readid:
                         for line in infile:
                             outfile.write(line.decode('utf-8'))
         
-        total_parts = len(split_points)
-        
-        print(f"\nSplitting complete:")
-        print(f"  Total parts created: {total_parts}")
+        print(f"\nSplitting complete! Created {len(split_points)} files")
         
         # Write the part count to the output file
         with open(output.part_count, 'w') as f:
-            f.write(str(total_parts))
+            f.write(str(len(split_points)))
 
 
