@@ -62,10 +62,14 @@ bin/sambamba:
 bin/k8:
 	@echo "Installing k8 JavaScript shell..."
 	@mkdir -p bin
-	@K8_URL=$$(curl -s https://api.github.com/repos/attractivechaos/k8/releases/latest | grep "browser_download_url.*k8-Linux" | cut -d '"' -f 4); \
+	@echo "Fetching latest k8 release..."
+	@K8_VERSION=$$(curl -s https://api.github.com/repos/attractivechaos/k8/releases/latest | grep '"tag_name"' | cut -d '"' -f 4); \
+	K8_URL="https://github.com/attractivechaos/k8/releases/download/$$K8_VERSION/k8-$$K8_VERSION.x86_64-linux.tar.bz2"; \
 	echo "Downloading from: $$K8_URL"; \
-	wget -O bin/k8.bz2 "$$K8_URL"; \
-	bunzip2 -f bin/k8.bz2; \
+	wget -O bin/k8.tar.bz2 "$$K8_URL"; \
+	tar -C bin/ -jxvf bin/k8.tar.bz2; \
+	mv bin/k8-$$K8_VERSION.x86_64-linux/k8 bin/k8; \
+	rm -rf bin/k8-$$K8_VERSION.x86_64-linux bin/k8.tar.bz2; \
 	chmod +x bin/k8
 	@echo "k8 installed successfully to bin/k8"
 
