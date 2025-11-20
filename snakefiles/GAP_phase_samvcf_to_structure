@@ -160,81 +160,45 @@ wildcard_constraints:
     datatype="[A-Za-z]+",
     part="[0-9]+"
 
-######################################################################
-# Helper functions for checkpoint aggregation
-######################################################################
-
-def get_all_split_outputs(wildcards):
-    """
-    Aggregation function that depends on the checkpoint.
-    This will be called after the checkpoint completes and will determine
-    how many parts were created for each library.
-    """
-    all_outputs = []
-    
-    for libtype in config["ACTIVE_LIBTYPES"]:
-        for libname in config["LIB_NAMES"][libtype]:
-            # Access the checkpoint output to get the part_count file
-            checkpoint_output = checkpoints.split_samgz_by_readid.get(
-                libtype=libtype, libname=libname
-            ).output[0]
-            
-            # Read the part count file to determine how many parts were created
-            part_count_file = config["tool"] + f"/output/samgz_split/{libtype}.{libname}.part_count.txt"
-            with open(part_count_file, 'r') as f:
-                num_parts = int(f.read().strip())
-            
-            # Generate output file paths for all parts
-            for part_num in range(num_parts):
-                all_outputs.append(
-                    config["tool"] + f"/output/samgz_split/{libtype}.{libname}.part{part_num:04d}.sam.gz"
-                )
-    
-    return all_outputs
+# Configuration: Number of chunks to split each sam.gz file into
+NUM_CHUNKS = 100
 
 rule all:
     input:
-        # This will trigger the aggregation function that depends on the checkpoint
-        get_all_split_outputs
+        # Generate all expected split files for all libraries
+        expand(config["tool"] + "/output/samgz_split/{libtype}.{libname}.part{part:04d}.sam.gz",
+               libtype=config["ACTIVE_LIBTYPES"],
+               libname=lambda wildcards: config["LIB_NAMES"][wildcards.libtype],
+               part=range(NUM_CHUNKS))
 
 ######################################################################
-# Checkpoint: Split sam.gz files by unique read IDs
+# Step 1: Find split points in the sam.gz file
 ######################################################################
 
-checkpoint split_samgz_by_readid:
+rule find_samgz_split_points:
     """
-    Split a sam.gz file into multiple smaller files, each containing 10 million unique read IDs.
-    Since paired-end reads have the same read ID, each file will have ~20 million SAM entries.
+    Scan the sam.gz file to find byte positions where we can safely split
+    (at boundaries where read IDs change). Save these positions to a file.
     
-    This is a checkpoint because we don't know ahead of time how many parts will be created.
-    The number of parts depends on the total number of unique read IDs in the input file.
-    
-    Output:
-    - Multiple .sam.gz files: {libtype}.{libname}.part0000.sam.gz, part0001.sam.gz, etc.
-    - A part_count.txt file indicating the total number of parts created
+    This is separate from the actual splitting so we can reuse the split
+    points without re-scanning the file every time.
     """
     input:
         samgz = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["samgz"]
     output:
-        part_count = config["tool"] + "/output/samgz_split/{libtype}.{libname}.part_count.txt"
+        split_points = config["tool"] + "/output/samgz_split/{libtype}.{libname}.split_points.txt",
+        headers = config["tool"] + "/output/samgz_split/{libtype}.{libname}.headers.txt"
     params:
-        outdir = config["tool"] + "/output/samgz_split",
-        prefix = lambda wildcards: f"{wildcards.libtype}.{wildcards.libname}",
-        num_chunks = 100  # Number of output files to create
+        num_chunks = NUM_CHUNKS
     threads: 2
     resources:
-        mem_mb  = 8000,
-        runtime = 600  # 10 hours for very large files
+        mem_mb  = 4000,
+        runtime = 120  # 2 hours should be enough to scan and find split points
     run:
         import gzip
         import os
-        from pathlib import Path
         
-        # Create output directory
-        Path(params.outdir).mkdir(parents=True, exist_ok=True)
-        
-        print(f"Processing {input.samgz}")
-        print(f"Writing parts to {params.outdir} with prefix {params.prefix}")
+        print(f"Scanning {input.samgz}")
         
         # Get file size for split calculation
         file_size = os.path.getsize(input.samgz)
@@ -244,8 +208,8 @@ checkpoint split_samgz_by_readid:
         num_chunks = params.num_chunks
         print(f"Target: {num_chunks} chunks (~{file_size/num_chunks/(1024**2):.1f} MB each)")
         
-        # Step 1: Read headers and calculate approximate split positions
-        print("\nStep 1: Reading headers and calculating split positions...")
+        # Read headers and find header end position
+        print("\nReading headers...")
         headers = []
         header_end_pos = 0
         
@@ -264,7 +228,12 @@ checkpoint split_samgz_by_readid:
             
             print(f"Found {len(headers)} header lines")
         
-        # Use file size to calculate alignment section (much faster than seeking to end of gzip)
+        # Save headers to file
+        with open(output.headers, 'w') as f:
+            for header in headers:
+                f.write(header)
+        
+        # Calculate approximate chunk positions
         alignment_section_size = file_size - header_end_pos
         chunk_size = alignment_section_size // num_chunks
         
@@ -272,8 +241,8 @@ checkpoint split_samgz_by_readid:
         print(f"Alignment section: ~{alignment_section_size / (1024**3):.2f} GB")
         print(f"Approximate chunk size: {chunk_size / (1024**2):.1f} MB")
         
-        # Step 2: Find exact split points near the approximate positions
-        print("\nStep 2: Finding safe split points (where read ID changes)...")
+        # Find exact split points near the approximate positions
+        print("\nFinding safe split points (where read ID changes)...")
         split_points = [header_end_pos]  # Start with the first alignment
         
         with gzip.open(input.samgz, 'rb') as infile:
@@ -315,7 +284,7 @@ checkpoint split_samgz_by_readid:
                     
                     # Found a read ID change - this is a safe split point
                     if prev_readid is not None and current_readid != prev_readid:
-                        split_points.append(pos_before)
+                        split_points.append((pos_before, prev_readid, current_readid))
                         print(f" found at {pos_before / (1024**3):.2f} GB (scanned {scan_count} lines)")
                         break
                     
@@ -325,10 +294,78 @@ checkpoint split_samgz_by_readid:
                 if scan_count >= max_scan:
                     print(f" WARNING: couldn't find split point after {max_scan} lines, using approximate position")
         
-        print(f"\nFound {len(split_points)} split points, will create {len(split_points)} output files")
+        print(f"\nFound {len(split_points)} split points")
         
-        # Step 3: Write split files
-        print("\nStep 3: Writing split files...")
+        # Save split points to file with read IDs
+        with open(output.split_points, 'w') as f:
+            # First split point is just the header end position (no read IDs yet)
+            if len(split_points) > 0:
+                if isinstance(split_points[0], tuple):
+                    # All entries have read IDs
+                    for pos, prev_id, next_id in split_points:
+                        f.write(f"{pos}\t{prev_id}\t{next_id}\n")
+                else:
+                    # First entry is just header_end_pos
+                    f.write(f"{split_points[0]}\tN/A\tN/A\n")
+                    for pos, prev_id, next_id in split_points[1:]:
+                        f.write(f"{pos}\t{prev_id}\t{next_id}\n")
+        
+        print(f"Split points saved to {output.split_points}")
+
+######################################################################
+# Step 2: Split sam.gz file using pre-computed split points
+######################################################################
+
+rule split_samgz_by_readid:
+    """
+    Split a sam.gz file into multiple chunks using pre-computed split points.
+    Creates exactly NUM_CHUNKS output files.
+    """
+    input:
+        samgz = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["samgz"],
+        split_points = config["tool"] + "/output/samgz_split/{libtype}.{libname}.split_points.txt",
+        headers = config["tool"] + "/output/samgz_split/{libtype}.{libname}.headers.txt"
+    output:
+        sam_parts = expand(config["tool"] + "/output/samgz_split/{{libtype}}.{{libname}}.part{part:04d}.sam.gz",
+                          part=range(NUM_CHUNKS))
+    params:
+        outdir = config["tool"] + "/output/samgz_split",
+        prefix = lambda wildcards: f"{wildcards.libtype}.{wildcards.libname}"
+    threads: 2
+    resources:
+        mem_mb  = 4000,
+        runtime = 600  # 10 hours for very large files
+    run:
+        import gzip
+        import os
+        from pathlib import Path
+        
+        # Create output directory
+        Path(params.outdir).mkdir(parents=True, exist_ok=True)
+        
+        print(f"Splitting {input.samgz}")
+        print(f"Writing parts to {params.outdir} with prefix {params.prefix}")
+        
+        # Load headers
+        print("Loading headers...")
+        headers = []
+        with open(input.headers, 'r') as f:
+            headers = f.readlines()
+        print(f"Loaded {len(headers)} header lines")
+        
+        # Load split points (first column is byte position)
+        print("Loading split points...")
+        split_points = []
+        with open(input.split_points, 'r') as f:
+            for line in f:
+                fields = line.strip().split('\t')
+                split_points.append(int(fields[0]))
+        
+        print(f"Loaded {len(split_points)} split points")
+        print(f"Will create {len(split_points)} output files")
+        
+        # Write split files
+        print("\nWriting split files...")
         
         with gzip.open(input.samgz, 'rb') as infile:
             for part_num in range(len(split_points)):
@@ -358,9 +395,5 @@ checkpoint split_samgz_by_readid:
                             outfile.write(line.decode('utf-8'))
         
         print(f"\nSplitting complete! Created {len(split_points)} files")
-        
-        # Write the part count to the output file
-        with open(output.part_count, 'w') as f:
-            f.write(str(len(split_points)))
 
 
