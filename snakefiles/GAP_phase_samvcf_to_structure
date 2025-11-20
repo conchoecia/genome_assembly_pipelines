@@ -237,84 +237,119 @@ checkpoint split_samgz_by_readid:
         print(f"Writing parts to {params.outdir} with prefix {params.prefix}")
         print(f"Target: {params.reads_per_file} unique read IDs per file")
         
-        # First pass: Read and collect all header lines
-        print("Reading SAM headers...")
+        # Get file size for progress tracking
+        file_size = os.path.getsize(input.samgz)
+        print(f"Input file size: {file_size / (1024**3):.2f} GB")
+        
+        # First pass: Scan file to find split points (byte positions)
+        print("\nPass 1: Scanning file to identify split points...")
         headers = []
-        with gzip.open(input.samgz, 'rt') as infile:
-            for line in infile:
-                if line.startswith('@'):
-                    headers.append(line)
-                else:
-                    # Stop when we hit the first non-header line
-                    break
-        
-        print(f"Found {len(headers)} header lines")
-        
-        # Initialize counters and file handles
+        split_points = []  # List of (byte_position, read_count) tuples
         current_readids = set()
-        part_num = 0
-        total_unique_reads = 0
+        last_readid = None
+        header_end_pos = 0
+        last_progress = -1
         
-        # Open first output file and write headers
-        outfile_path = os.path.join(params.outdir, f"{params.prefix}.part{part_num:04d}.sam.gz")
-        outfile = gzip.open(outfile_path, 'wt')
-        for header in headers:
-            outfile.write(header)
-        
-        # Second pass: Process alignment lines and split by read IDs
-        print("Processing alignment lines...")
-        with gzip.open(input.samgz, 'rt') as infile:
+        with gzip.open(input.samgz, 'rb') as infile:
+            # Read headers
+            while True:
+                pos_before = infile.tell()
+                line = infile.readline()
+                if not line:
+                    break
+                if not line.startswith(b'@'):
+                    # This is the first alignment line - save position before it
+                    header_end_pos = pos_before
+                    # Decode and process this first alignment line
+                    line_str = line.decode('utf-8')
+                    fields = line_str.split('\t', 1)
+                    if len(fields) >= 1:
+                        readid = fields[0]
+                        current_readids.add(readid)
+                        last_readid = readid
+                    break
+                else:
+                    headers.append(line.decode('utf-8'))
+            
+            print(f"Found {len(headers)} header lines")
+            print(f"Scanning alignments to find split points...")
+            
+            # Continue reading alignment lines
+            line_count = 1
             for line in infile:
-                # Skip header lines
-                if line.startswith('@'):
-                    continue
+                line_count += 1
                 
-                # Parse SAM line to get read ID (first field)
-                fields = line.split('\t', 1)
+                # Show progress every 5%
+                current_pos = infile.tell()
+                progress = int((current_pos / file_size) * 100)
+                if progress >= last_progress + 5:
+                    last_progress = progress
+                    print(f"  Progress: {progress}% - {line_count:,} lines, {len(current_readids):,} unique reads, {len(split_points)} splits")
+                
+                line_str = line.decode('utf-8')
+                fields = line_str.split('\t', 1)
                 if len(fields) < 1:
                     continue
                 
                 readid = fields[0]
                 
                 # Check if this is a new unique read ID
-                if readid not in current_readids:
+                if readid != last_readid and readid not in current_readids:
                     current_readids.add(readid)
-                    total_unique_reads += 1
                     
-                    # Check if we've hit the limit for this file
+                    # Check if we've hit the limit for this chunk
                     if len(current_readids) >= params.reads_per_file:
-                        # Write current line to current file
-                        outfile.write(line)
-                        
-                        # Close current file and start a new one
-                        outfile.close()
-                        part_num += 1
-                        
-                        print(f"  Completed part {part_num-1}: {len(current_readids)} unique read IDs")
-                        
-                        # Open next file and write headers
-                        outfile_path = os.path.join(params.outdir, f"{params.prefix}.part{part_num:04d}.sam.gz")
-                        outfile = gzip.open(outfile_path, 'wt')
-                        for header in headers:
-                            outfile.write(header)
-                        
-                        # Reset the set for the new file
-                        current_readids = set()
-                        continue
+                        # Record the byte position BEFORE this line as a split point
+                        # We want to ensure all reads with the same ID stay together
+                        split_points.append((infile.tell() - len(line), len(current_readids)))
+                        current_readids = set([readid])  # Start new chunk with this read
                 
-                # Write line to current file
-                outfile.write(line)
+                last_readid = readid
         
-        # Close the last file
-        outfile.close()
+        print(f"\nScan complete:")
+        print(f"  Total lines: {line_count:,}")
+        print(f"  Split points identified: {len(split_points)}")
+        print(f"  Will create {len(split_points) + 1} output files")
         
-        # Calculate total number of parts (part_num is 0-indexed, so add 1)
-        total_parts = part_num + 1
+        # Second pass: Write split files based on identified byte positions
+        print("\nPass 2: Writing split files...")
+        
+        split_points = [header_end_pos] + [sp[0] for sp in split_points]
+        total_parts = len(split_points)
+        
+        with gzip.open(input.samgz, 'rb') as infile:
+            for part_num in range(len(split_points)):
+                outfile_path = os.path.join(params.outdir, f"{params.prefix}.part{part_num:04d}.sam.gz")
+                
+                # Determine byte range for this part
+                start_pos = split_points[part_num]
+                end_pos = split_points[part_num + 1] if part_num + 1 < len(split_points) else None
+                
+                progress_pct = int((part_num / total_parts) * 100)
+                print(f"  Writing part {part_num:04d}/{total_parts-1:04d} ({progress_pct}%)...")
+                
+                with gzip.open(outfile_path, 'wt') as outfile:
+                    # Write headers
+                    for header in headers:
+                        outfile.write(header)
+                    
+                    # Seek to start position and write until end position
+                    infile.seek(start_pos)
+                    bytes_to_read = (end_pos - start_pos) if end_pos is not None else None
+                    
+                    if bytes_to_read is not None:
+                        # Read exact byte range
+                        chunk_data = infile.read(bytes_to_read)
+                        outfile.write(chunk_data.decode('utf-8'))
+                    else:
+                        # Read to end of file
+                        for line in infile:
+                            outfile.write(line.decode('utf-8'))
+        
+        total_parts = len(split_points)
         
         print(f"\nSplitting complete:")
-        print(f"  Total unique read IDs processed: {total_unique_reads}")
         print(f"  Total parts created: {total_parts}")
-        print(f"  Last part has {len(current_readids)} unique read IDs")
         
         # Write the part count to the output file
         with open(output.part_count, 'w') as f:
