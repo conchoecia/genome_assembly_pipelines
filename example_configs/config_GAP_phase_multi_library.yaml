@@ -1,0 +1,110 @@
+# Example configuration for GAP_phase with multiple libraries
+# ALL LIBRARIES NOW USE BAM FILES - No more FASTQ mapping
+
+# Reference genome assembly
+REFERENCE: "/path/to/your/assembly.fasta"
+
+# VCF file with variants to phase
+VCFs:
+  unfiltered:
+    path: "/path/to/vcf/file/to/phase/output.vcf.gz"
+    note: "These are the unfiltered variants directly from HapCUT2."
+
+PHASED_VCFs: # This is only used in the GAP_phase_samvcf_to_structure module. Won't do anything in GAP_phase module.
+  unfilteredPhased:
+    path: "/path/to/vcf/file/to/phase/phased_output.vcf.gz"
+    note: "These are the unfiltered variants that have already been phased somehow. This will be used with the hickit/dip-c pipeline to generate the final files."
+
+# Chromosomes/scaffolds to phase
+CHROMS: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+# Picard JAR file location
+PICARD: "/path/to/picard.jar"
+
+# Optional: Sample name for read groups (default: sample1)
+SAMPLE_NAME: "my_sample"
+
+###############################################################################
+# LIBRARY FORMAT - All libraries use BAM files
+#                - We additionally can provide the sam.gz file
+#                  and the fastq.gz files for other analyses.
+###############################################################################
+# IMPORTANT: All Hi-C BAM files should be aligned with BWA using -5, -S, -P flags
+#            Reference: https://github.com/vibansal/HapCUT2/issues/122
+#
+# Library Tracking: Each read will be tagged with its library name in the LB tag
+#                   This allows you to track which reads came from which library
+
+libraries:
+  # Hi-C libraries - Provide pre-aligned BAM files
+  hic:
+    DpnII:
+      bam: "/path/to/HiC_DpnII_aligned.bam" # Required: path to the aligned BAM file
+      samgz: None # an optional file to provide a sam.gz that has not been sorted, s.t. the reads with the same ids are neighboring. Used for GAP_phase_samvcf_to_structure module.
+      R1: "/path/to/HiC_DpnII_R1.fastq.gz"  # optional: original fastq files. Not used by anything at the moment.
+      R2: "/path/to/HiC_DpnII_R2.fastq.gz"  # optional: original fastq files. Not used by anything at the moment.
+    MboINlaII:
+      bam: "/path/to/HiC_MboINlaII_aligned.bam"
+      samgz: None # an optional file to provide a sam.gz that has not been sorted, s.t. the reads with the same ids are neighboring. Used for GAP_phase_samvcf_to_structure module.
+      R1: "/path/to/HiC_MboINlaII_R1.fastq.gz"  # optional: original fastq files. Not used by anything at the moment.
+      R2: "/path/to/HiC_MboINlaII_R2.fastq.gz"  # optional: original fastq files. Not used by anything at the moment.
+    Arima:
+      bam: "/path/to/HiC_Arima_aligned.bam"
+      samgz: None # an optional file to provide a sam.gz that has not been sorted, s.t. the reads with the same ids are neighboring. Used for GAP_phase_samvcf_to_structure module.
+      R1: "/path/to/HiC_Arima_R1.fastq.gz"
+      R2: "/path/to/HiC_Arima_R2.fastq.gz"
+
+  # Long read libraries - Multiple PacBio or ONT runs
+  longreads:
+    PacBio_run1:
+      bam: "/path/to/pacbio/reads/mapped/to/genome.sorted.bam"
+
+    PacBio_run2:
+      bam: "/path/to/pacbio_run2.sorted.bam"
+
+    # For Oxford Nanopore:
+    # ONT_run1:
+    #   bam: "/path/to/ont_run1.sorted.bam"
+
+  # Chicago libraries (optional) - Dovetail Chicago reads
+  chi:
+    Chicago_lib1:
+      bam: "/path/to/chicago_aligned.bam"
+
+  # Illumina short read libraries (optional)
+  ill:
+    Illumina_PE150:
+      bam: "/path/to/illumina_aligned.bam"
+
+###############################################################################
+# How to align your reads before using this pipeline:
+###############################################################################
+#
+# Hi-C reads (REQUIRED FLAGS: -5, -S, -P for HapCUT2):
+#   bwa mem -t 16 -5SPM reference.fasta hic_R1.fq.gz hic_R2.fq.gz | \
+#     samtools view -hb | samtools sort > hic_aligned.bam
+#
+# Chicago reads (similar to Hi-C):
+#   bwa mem -t 16 -5SPM reference.fasta chi_R1.fq.gz chi_R2.fq.gz | \
+#     samtools view -hb | samtools sort > chi_aligned.bam
+#
+# Illumina reads (standard alignment):
+#   bwa mem -t 16 reference.fasta ill_R1.fq.gz ill_R2.fq.gz | \
+#     samtools view -hb | samtools sort > ill_aligned.bam
+#
+# Long reads (PacBio/ONT):
+#   minimap2 -t 16 -ax map-pb reference.fasta pacbio.fq.gz | \
+#     samtools view -hb | samtools sort > pacbio_aligned.bam
+#   # Or use: -ax map-ont for Oxford Nanopore
+#
+###############################################################################
+
+###############################################################################
+# Notes:
+# - If you don't have data for a particular type (chi, ill, etc.), just omit
+#   that entire section or leave it empty
+# - Each library needs a unique name within its type (DpnII, MboINlaII, etc.)
+# - All libraries must provide a 'bam' file path
+# - Multiple libraries of the same type will be merged after symlinking
+# - BAMs should be coordinate-sorted and aligned to the same reference
+###############################################################################
