@@ -6,7 +6,8 @@ all: bin/fasta_stats dependencies/SALSA/run_pipeline.py \
      bin/bbmap/reformat.sh \
      bin/pilon-1.23.jar dependencies/pairix/bin/pairix \
      bin/fqjt bin/minlen_pair \
-     dependencies/miniprot bin/sambamba
+     dependencies/miniprot bin/sambamba \
+     bin/k8 dependencies/hickit/hickit.js
 
 bin/fqjt: src/fq-jt.c
 	mkdir -p bin
@@ -14,6 +15,7 @@ bin/fqjt: src/fq-jt.c
 
 bin/bbmap/reformat.sh: dependencies/bbtools/BBMap_38.90.tar.gz
 	tar -C bin/ -zxvf dependencies/bbtools/BBMap_38.90.tar.gz
+	touch bin/bbmap/reformat.sh
 
 bin/minlen_pair: src/minlen_pair.c src/kseq.h
 	mkdir -p bin
@@ -56,4 +58,21 @@ bin/sambamba:
 	gunzip -f bin/sambamba.gz; \
 	chmod +x bin/sambamba
 	@echo "sambamba installed successfully to bin/sambamba"
+
+bin/k8:
+	@echo "Installing k8 JavaScript shell..."
+	@mkdir -p bin
+	@K8_URL=$$(curl -s https://api.github.com/repos/attractivechaos/k8/releases/latest | grep "browser_download_url.*k8-Linux" | cut -d '"' -f 4); \
+	echo "Downloading from: $$K8_URL"; \
+	wget -O bin/k8.bz2 "$$K8_URL"; \
+	bunzip2 -f bin/k8.bz2; \
+	chmod +x bin/k8
+	@echo "k8 installed successfully to bin/k8"
+
+dependencies/hickit/hickit.js: bin/k8
+	@echo "Installing hickit (requires k8)..."
+	@mkdir -p dependencies
+	cd dependencies; git clone https://github.com/lh3/hickit.git
+	cd dependencies/hickit; make
+	@echo "hickit installed successfully to dependencies/hickit/"
 
