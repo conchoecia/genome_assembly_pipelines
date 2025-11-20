@@ -263,15 +263,13 @@ checkpoint split_samgz_by_readid:
                     headers.append(line.decode('utf-8'))
             
             print(f"Found {len(headers)} header lines")
-            
-            # Get the file size after headers
-            infile.seek(0, 2)  # Seek to end
-            file_end_pos = infile.tell()
         
-        alignment_section_size = file_end_pos - header_end_pos
+        # Use file size to calculate alignment section (much faster than seeking to end of gzip)
+        alignment_section_size = file_size - header_end_pos
         chunk_size = alignment_section_size // num_chunks
         
-        print(f"Alignment section: {alignment_section_size / (1024**3):.2f} GB")
+        print(f"Header end position: {header_end_pos / (1024**2):.2f} MB")
+        print(f"Alignment section: ~{alignment_section_size / (1024**3):.2f} GB")
         print(f"Approximate chunk size: {chunk_size / (1024**2):.1f} MB")
         
         # Step 2: Find exact split points near the approximate positions
