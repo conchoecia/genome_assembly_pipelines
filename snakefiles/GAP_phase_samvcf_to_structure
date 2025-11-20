@@ -339,7 +339,7 @@ rule split_samgz_by_readid:
         prefix = lambda wildcards: f"{wildcards.libtype}.{wildcards.libname}"
     threads: 2
     resources:
-        mem_mb  = 30000,  # 30 GB to allow loading large chunks into memory
+        mem_mb  = 8000,  # Streaming line-by-line uses minimal memory
         runtime = 600  # 10 hours for very large files
     run:
         import gzip
@@ -361,46 +361,67 @@ rule split_samgz_by_readid:
             headers = f.readlines()
         print(f"Loaded {len(headers)} header lines", flush=True)
         
-        # Load split points (first column is byte position)
+        # Load split points - get the read IDs where splits occur (column 3)
         print("Loading split points...", flush=True)
-        split_points = []
+        split_readids = []
         with open(input.split_points, 'r') as f:
             for line in f:
                 fields = line.strip().split('\t')
-                split_points.append(int(fields[0]))
+                if len(fields) >= 3:
+                    split_readids.append(fields[2])  # Read ID that starts new chunk
+                else:
+                    split_readids.append(None)  # First chunk (no previous read ID)
         
-        print(f"Loaded {len(split_points)} split points", flush=True)
-        print(f"Will create {len(split_points)} output files", flush=True)
+        print(f"Loaded {len(split_readids)} split points", flush=True)
+        print(f"Will create {len(split_readids)} output files", flush=True)
         
-        # Write split files
-        print("\nWriting split files...", flush=True)
+        # Write split files by reading through once and splitting on read ID changes
+        print("\nWriting split files (single pass through input)...", flush=True)
         
-        with gzip.open(input.samgz, 'rb') as infile:
-            for part_num in range(len(split_points)):
-                outfile_path = os.path.join(params.outdir, f"{params.prefix}.part{part_num:04d}.sam.gz")
+        part_num = 0
+        current_split_readid = split_readids[part_num] if part_num < len(split_readids) else None
+        
+        outfile_path = os.path.join(params.outdir, f"{params.prefix}.part{part_num:04d}.sam.gz")
+        print(f"  Writing part {part_num:04d}/{len(split_readids)-1:04d}...", flush=True)
+        outfile = gzip.open(outfile_path, 'wt', compresslevel=1)
+        
+        # Write headers to first file
+        for header in headers:
+            outfile.write(header)
+        
+        with gzip.open(input.samgz, 'rt') as infile:
+            for line in infile:
+                # Skip header lines
+                if line.startswith('@'):
+                    continue
                 
-                start_pos = split_points[part_num]
-                end_pos = split_points[part_num + 1] if part_num + 1 < len(split_points) else None
+                # Get read ID from this line
+                fields = line.split('\t', 1)
+                if len(fields) < 1:
+                    outfile.write(line)
+                    continue
                 
-                print(f"  Writing part {part_num:04d}/{len(split_points)-1:04d}...", flush=True)
+                current_readid = fields[0]
                 
-                with gzip.open(outfile_path, 'wt') as outfile:
-                    # Write headers
+                # Check if we need to start a new output file
+                if part_num + 1 < len(split_readids) and current_readid == split_readids[part_num + 1]:
+                    # Close current file and open next
+                    outfile.close()
+                    part_num += 1
+                    
+                    outfile_path = os.path.join(params.outdir, f"{params.prefix}.part{part_num:04d}.sam.gz")
+                    print(f"  Writing part {part_num:04d}/{len(split_readids)-1:04d}...", flush=True)
+                    outfile = gzip.open(outfile_path, 'wt', compresslevel=1)
+                    
+                    # Write headers to new file
                     for header in headers:
                         outfile.write(header)
-                    
-                    # Seek to start position
-                    infile.seek(start_pos)
-                    
-                    if end_pos is not None:
-                        # Read entire chunk at once for maximum speed (requires sufficient RAM)
-                        bytes_to_read = end_pos - start_pos
-                        chunk_data = infile.read(bytes_to_read)
-                        outfile.write(chunk_data.decode('utf-8'))
-                    else:
-                        # Last chunk - read to end
-                        remaining_data = infile.read()
-                        outfile.write(remaining_data.decode('utf-8'))
+                
+                # Write line to current file
+                outfile.write(line)
+        
+        # Close the last file
+        outfile.close()
         
         print(f"\nSplitting complete! Created {len(split_points)} files", flush=True)
 
