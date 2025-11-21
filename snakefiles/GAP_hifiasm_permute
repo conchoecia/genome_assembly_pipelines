@@ -154,7 +154,7 @@ if "perform_merqury" in config:
         merqury_out_files.append(this_result)
         this_result  = "step3_merqury/runs/{all_analyses}/{all_analyses}.qv".format(all_analyses = this_analysis)
         merqury_out_files.append(this_result)
- 
+
 rule all:
     input:
         expand("step2_assemblies/" + config["prefix"] +  ".{all_analyses}.hap{hap}.p_ctg.fasta", all_analyses = config["all_analyses"],  hap = [1,2]),
@@ -352,7 +352,7 @@ rule collate_assemblies:
         mem_mb = 2000,
         runtime = 30
     shell:
-        """
+        r"""
         for assembly in {input.base} {input.ul_analysis} {input.hic_analysis}; do
           # only copy if the file does not yet exist in the new location
             if [ ! -f $(echo $assembly | sed 's/base\///g' | sed 's/ul_analyses\///g' | sed 's/hic_analyses\///g') ]; then
@@ -366,7 +366,7 @@ rule get_kmer_size:
     output:
         kmer_estimate = "step3_merqury/" + config["prefix"] + ".k_estimate.txt"
     params:
-        genome_size = config["est_genome_size"] * 2
+        genome_size = config.get("genome_size", 1000000000) * 2
     threads: 1
     resources:
         mem_mb = 2000,

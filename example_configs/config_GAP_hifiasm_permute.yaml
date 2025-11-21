@@ -1,3 +1,47 @@
+################################################################################
+# EXAMPLE SLURM SUBMISSION SCRIPT - Copy this to a separate .sh file to use
+################################################################################
+# To use: Copy lines between the markers to a file like "submit_hifiasm.sh"
+# then edit the placeholders and run: sbatch submit_hifiasm.sh
+#
+# #!/bin/bash
+# #SBATCH --job-name=hifiasm_permute
+# #SBATCH --output=hifiasm_permute_%j.out
+# #SBATCH --error=hifiasm_permute_%j.err
+# #SBATCH --partition=<your_partition>
+# #SBATCH --cpus-per-task=1
+# #SBATCH --mem=4G
+# #SBATCH --time=72:00:00
+# 
+# set -euxo pipefail
+# 
+# # Load required modules (adjust for your cluster)
+# # module load biology
+# # module load samtools
+# # module load hifiasm
+# 
+# # Activate conda environment with snakemake
+# source "$HOME/miniforge3/etc/profile.d/conda.sh"
+# conda activate snakemake
+# 
+# # (optional sanity logs)
+# conda info --envs
+# which python
+# python -V
+# 
+# SNAKEFILE=/path/to/genome_assembly_pipelines/snakefiles/GAP_hifiasm_permute
+# snakemake \
+#   --snakefile ${SNAKEFILE} \
+#   --executor slurm \
+#   --jobs 100 \
+#   --default-resources runtime=10 mem_mb=2000 threads=1 slurm_partition=<your_partition> \
+#   --rerun-incomplete \
+#   -p
+#
+################################################################################
+# END SLURM SUBMISSION SCRIPT
+################################################################################
+
 # Example configuration for GAP_hifiasm_permute
 # This workflow permutes hifiasm assembly parameters and data types to find optimal settings
 
