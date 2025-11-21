@@ -430,8 +430,6 @@ rule meryl_count_reads:
     output:
         meryl_db = "step3_merqury/" + config["prefix"] + ".meryl/merylIndex"
     params:
-        # one-liner to read in the number in the file as an int
-        kmer_size = int(open("step3_merqury/" + config["prefix"] + ".k_estimate.final.txt", "r").readline()),
         reads_string = " ".join(config["merqury_reads"])
     threads: 64 if workflow.cores > 64 else workflow.cores
     resources:
@@ -439,7 +437,8 @@ rule meryl_count_reads:
         runtime = 1440
     shell:
         """
-        meryl k={params.kmer_size} threads={threads} count {params.reads_string} output {output.meryl_db}
+        KMER_SIZE=$(cat {input.kmer_size})
+        meryl k=$KMER_SIZE threads={threads} count {params.reads_string} output {output.meryl_db}
         """
 
 rule merqury_basic:
