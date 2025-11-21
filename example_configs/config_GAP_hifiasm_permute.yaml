@@ -1,0 +1,149 @@
+# Example configuration for GAP_hifiasm_permute
+# This workflow permutes hifiasm assembly parameters and data types to find optimal settings
+
+# Output prefix for all assembly files
+prefix: "my_genome"
+
+###############################################################################
+# REQUIRED: HiFi reads (PacBio HiFi or similar high-accuracy long reads)
+###############################################################################
+# You can provide FASTQ.GZ files, FQ.GZ files, or BAM files
+# BAM files will be automatically converted to FASTQ.GZ before assembly
+hifi:
+  - "/path/to/hifi_reads1.fastq.gz"
+  - "/path/to/hifi_reads2.fastq.gz"
+  - "/path/to/hifi_reads3.bam"  # BAM files are supported!
+  # Add more HiFi read files as needed
+  # Mix and match .fastq.gz and .bam files freely
+
+###############################################################################
+# OPTIONAL: Hi-C reads for scaffolding and haplotype phasing
+###############################################################################
+# Hi-C data helps with:
+# - Better haplotype phasing
+# - Scaffolding contigs into chromosome-scale assemblies
+# - Resolving repeats and structural variations
+
+hic:
+  # You can have multiple Hi-C libraries (different enzymes, protocols, etc.)
+  DpnII_lib:
+    R1:
+      - "/path/to/hic_R1_part1.fastq.gz"
+      - "/path/to/hic_R1_part2.fastq.gz"
+    R2:
+      - "/path/to/hic_R2_part1.fastq.gz"
+      - "/path/to/hic_R2_part2.fastq.gz"
+  
+  # Example of another Hi-C library (optional)
+  # Arima_lib:
+  #   R1:
+  #     - "/path/to/arima_R1.fastq.gz"
+  #   R2:
+  #     - "/path/to/arima_R2.fastq.gz"
+
+###############################################################################
+# OPTIONAL: Ultra-long reads (ONT ultra-long, etc.)
+###############################################################################
+# Ultra-long reads help with:
+# - Spanning large repeats
+# - Resolving complex genomic regions
+# - Improving contiguity
+#
+# You can define multiple "treatments" or batches of ultra-long reads
+# Each treatment will be tested separately in the permutations
+
+ul:
+  # Treatment 1: For example, ultra-long ONT reads
+  treatment1:
+    - "/path/to/ultralong_reads1.fastq.gz"
+    - "/path/to/ultralong_reads2.fastq.gz"
+  
+  # Treatment 2: Example of another batch (optional)
+  # treatment2:
+  #   - "/path/to/ultralong_batch2.fastq.gz"
+
+###############################################################################
+# OPTIONAL: Hifiasm parameter permutations
+###############################################################################
+# Define different parameter sets to test
+# Each parameter set will be combined with each data type combination
+# The workflow will test all permutations
+#
+# If you don't want to test different parameters, you can:
+# - Omit this section entirely, OR
+# - Comment out all parameters below
+#
+# Without this section, the workflow will only test data type combinations
+# (HiFi-only, HiFi+UL, HiFi+Hi-C, HiFi+UL+Hi-C)
+
+# hifiasm_params:
+#   # Example: Test different homozygous coverage thresholds
+#   l0: "-l0"  # Purge level 0 (no purging)
+#   l1: "-l1"  # Purge level 1 (light purging)
+#   l2: "-l2"  # Purge level 2 (moderate purging)
+#   
+#   # Example: Similarity threshold for duplicate haplotigs
+#   s035: "-s 0.35"
+#   s040: "-s 0.40"
+#   s045: "-s 0.45"
+#   
+#   # Example: Homozygous coverage
+#   # hom30: "--hom-cov 30"
+#   # hom40: "--hom-cov 40"
+#   # hom50: "--hom-cov 50"
+#   
+#   # Add any other hifiasm parameters you want to test
+#   # See hifiasm documentation for available options
+
+###############################################################################
+# OPTIONAL: Merqury quality assessment
+###############################################################################
+# Merqury evaluates assembly quality using k-mer completeness and QV scores
+# Requires genome size estimate and k-mer database from reads
+
+perform_merqury: true
+
+# Which read types to use for Merqury k-mer database
+merqury_on_hifi: true
+merqury_on_illumina: false
+
+# Optional: Illumina reads for Merqury (if merqury_on_illumina: true)
+# illumina:
+#   lib1:
+#     R1:
+#       - "/path/to/illumina_R1.fastq.gz"
+#     R2:
+#       - "/path/to/illumina_R2.fastq.gz"
+
+# Estimated genome size (required for Merqury)
+# Use notation like: 2.3g, 450m, etc.
+genome_size: "2.5g"
+
+###############################################################################
+# NOTES ON PERMUTATIONS
+###############################################################################
+# The workflow will create assemblies for all combinations of:
+# 1. Parameter sets (from hifiasm_params)
+# 2. UL read treatments (None, treatment1, treatment2, etc.)
+# 3. Hi-C data (None or HiC)
+#
+# Example outputs:
+#   - None-None_None: Just HiFi reads, no extra parameters
+#   - l0-None_None: HiFi with -l0 parameter
+#   - l0-None_HiC: HiFi + Hi-C with -l0 parameter
+#   - l0_s035-None_HiC: HiFi + Hi-C with -l0 and -s 0.35 parameters
+#   - l0-ULtreatment1_None: HiFi + UL treatment1 with -l0
+#   - l0-ULtreatment1_HiC: HiFi + UL + Hi-C with -l0
+#   - l0_s035-ULtreatment1_HiC: All data types with multiple parameters
+#
+# The final results table will help you identify the best parameter combination
+# based on assembly statistics and Merqury quality scores
+
+###############################################################################
+# RESOURCE MANAGEMENT
+###############################################################################
+# The workflow will use all available cores minus 1 for each assembly
+# Make sure you have sufficient:
+# - CPU cores (hifiasm is multi-threaded)
+# - RAM (typically 1-2x genome size for HiFi-only, more with Hi-C/UL)
+# - Disk space (each assembly generates ~2-5x genome size in temp files)

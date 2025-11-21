@@ -19,6 +19,28 @@ if "prefix" not in config:
 
 ### THIS SECTION SETS UP THE ASSEMBLIES TO RUN
 
+# Check HiFi files exist and determine which are BAM vs FASTQ
+config["hifi_bam"] = []
+config["hifi_fastq"] = []
+if "hifi" not in config:
+    raise Exception("You must specify HiFi reads in the config file")
+for hifi_file in config["hifi"]:
+    if not os.path.exists(hifi_file):
+        raise Exception(f"The following HiFi file does not exist: {hifi_file}")
+    if hifi_file.endswith(".bam"):
+        config["hifi_bam"].append(hifi_file)
+    elif hifi_file.endswith(".fastq.gz") or hifi_file.endswith(".fq.gz"):
+        config["hifi_fastq"].append(hifi_file)
+    else:
+        raise Exception(f"HiFi file must be .bam, .fastq.gz, or .fq.gz: {hifi_file}")
+
+# Create list of all HiFi fastq files (including those to be converted from BAM)
+config["hifi_fastq_final"] = config["hifi_fastq"][:]
+for bam_file in config["hifi_bam"]:
+    # Convert path to the output fastq.gz location
+    fastq_path = "step0_bam_to_fastq/" + os.path.basename(bam_file).replace(".bam", ".fastq.gz")
+    config["hifi_fastq_final"].append(fastq_path)
+
 # Set up the HiFi dictionary to ask later
 config["hic_dict"] = {"None": ""}
 # add a step to check that these files exist
@@ -140,21 +162,42 @@ rule all:
         merqury_out_files
         #expand("step3_stats/" + config["prefix"] +  ".{all_analyses}.hap{hap}.p_ctg.stats", all_analyses = set(config["base_analyses"] + config["ul_analyses"] + config["hic_analyses"]),  hap = [1,2]),
 
+rule bam_to_fastq:
+    """
+    Convert BAM files to FASTQ.GZ for use with hifiasm
+    """
+    input:
+        bam = lambda wildcards: [b for b in config["hifi_bam"] if os.path.basename(b).replace(".bam", "") == wildcards.bam_basename][0]
+    output:
+        fastq = "step0_bam_to_fastq/{bam_basename}.fastq.gz"
+    threads: 4
+    resources:
+        mem_mb = 8000,
+        runtime = 240
+    shell:
+        """
+        mkdir -p step0_bam_to_fastq
+        samtools fastq -@ {threads} {input.bam} | gzip -c > {output.fastq}
+        """
+
 rule base_assemble:
     input:
-        LR  = config["hifi"]
+        LR  = config["hifi_fastq_final"]
     output:
         ec_bin  = "step1_hifiasm/base/{base}/" + config["prefix"] + ".ec.bin",
         re_bin  = "step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.reverse.bin",
         so_bin  = "step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.source.bin",
         hap1gfa = "step1_hifiasm/base/{base}/" + config["prefix"] + ".bp.hap1.p_ctg.gfa",
         hap2gfa = "step1_hifiasm/base/{base}/" + config["prefix"] + ".bp.hap2.p_ctg.gfa",
-    threads: workflow.cores - 1
+    threads: 48
+    resources:
+        mem_mb = 150000,
+        runtime = 2880
     params:
         prefix = config["prefix"],
-        HiFi_string        = " ".join(config["hifi"]),
+        HiFi_string        = " ".join(config["hifi_fastq_final"]),
         analysis         = lambda wildcards: wildcards.base,
-        parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.base.split("-")[0].split("_")]),
+        parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.base.split("-")[0].split("_")])
     shell:
         """
         mkdir -p step1_hifiasm
@@ -171,7 +214,7 @@ rule base_assemble:
 
 rule UL_assemblies:
     input:
-        LR  = config["hifi"],
+        LR  = config["hifi_fastq_final"],
         ec_bin = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ec.bin", base = config["base_analyses"]),
         re_bin = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.reverse.bin", base = config["base_analyses"]),
         so_bin = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.source.bin", base = config["base_analyses"])
@@ -180,11 +223,14 @@ rule UL_assemblies:
         hap2gfa    = "step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".bp.hap2.p_ctg.gfa",
         uidx_bin   = "step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".uidx.bin",
         reuidx_bin = "step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".re.uidx.bin",
-    threads: workflow.cores - 1
+    threads: 48
+    resources:
+        mem_mb = 150000,
+        runtime = 2880
     params:
         input_direc      = lambda wildcards: "step1_hifiasm/base/" + wildcards.ul_analysis.split("-")[0] + "-None_None", 
         prefix           = config["prefix"],
-        HiFi_string        = " ".join(config["hifi"]),
+        HiFi_string        = " ".join(config["hifi_fastq_final"]),
         analysis         = lambda wildcards: wildcards.ul_analysis,
         parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.ul_analysis.split("-")[0].split("_")]),
         ul_string        = lambda wildcards: config["ul_dict"][ wildcards.ul_analysis.split("-")[1].split("_")[0]]
@@ -206,7 +252,7 @@ rule UL_assemblies:
 
 rule HiC_assemblies:
     input:
-        LR  = config["hifi"],
+        LR  = config["hifi_fastq_final"],
         ec_bin     = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ec.bin", base = config["base_analyses"]),
         re_bin     = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.reverse.bin", base = config["base_analyses"]),
         so_bin     = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.source.bin", base = config["base_analyses"]),
@@ -215,12 +261,15 @@ rule HiC_assemblies:
     output:
         hap1gfa    = "step1_hifiasm/hic_analyses/{hic_analysis}/" + config["prefix"] + ".hic.hap1.p_ctg.gfa",
         hap2gfa    = "step1_hifiasm/hic_analyses/{hic_analysis}/" + config["prefix"] + ".hic.hap2.p_ctg.gfa",
-    threads: workflow.cores - 1
+    threads: 48
+    resources:
+        mem_mb = 150000,
+        runtime = 2880
     params:
         input_direc      = lambda wildcards: "step1_hifiasm/base/" + wildcards.hic_analysis.split("-")[0] + "-" + wildcards.hic_analysis.split("-")[1].split("_")[0] + "_None", 
         input_direc2     = lambda wildcards: "step1_hifiasm/ul_analyses/" + wildcards.hic_analysis.split("-")[0] + "-" + wildcards.hic_analysis.split("-")[1].split("_")[0] + "_None", 
         prefix           = config["prefix"],
-        LR_string        = " ".join(config["hifi"]),
+        LR_string        = " ".join(config["hifi_fastq_final"]),
         analysis         = lambda wildcards: wildcards.hic_analysis,
         parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.hic_analysis.split("-")[0].split("_")]),
         ul_string        = lambda wildcards: config["ul_dict"][ wildcards.hic_analysis.split("-")[1].split("_")[0]],
@@ -249,6 +298,9 @@ rule base_gfa_to_fasta:
     output:
         gfa = temp("step2_assemblies/base/" + config["prefix"] +  ".{base}.hap{hap}.p_ctg.fasta")
     threads: 1
+    resources:
+        mem_mb = 4000,
+        runtime = 30
     shell:
         """
         cat {input.gfa} | \
@@ -262,6 +314,9 @@ rule ul_gfa_to_fasta:
     output:
         gfa = temp("step2_assemblies/ul_analyses/" + config["prefix"] +  ".{ul_analysis}.hap{hap}.p_ctg.fasta")
     threads: 1
+    resources:
+        mem_mb = 4000,
+        runtime = 30
     shell:
         """
         cat {input.gfa} | \
@@ -275,6 +330,9 @@ rule hic_gfa_to_fasta:
     output:
         gfa = temp("step2_assemblies/hic_analyses/" + config["prefix"] +  ".{hic_analysis}.hap{hap}.p_ctg.fasta")
     threads: 1
+    resources:
+        mem_mb = 4000,
+        runtime = 30
     shell:
         """
         cat {input.gfa} | \
@@ -290,6 +348,9 @@ rule collate_assemblies:
     output:
         assemblies = expand("step2_assemblies/" + config["prefix"] +  ".{all_analyses}.hap{hap}.p_ctg.fasta", all_analyses = config["all_analyses"],  hap = [1,2])
     threads: 1
+    resources:
+        mem_mb = 2000,
+        runtime = 30
     shell:
         """
         for assembly in {input.base} {input.ul_analysis} {input.hic_analysis}; do
@@ -307,6 +368,9 @@ rule get_kmer_size:
     params:
         genome_size = config["est_genome_size"] * 2
     threads: 1
+    resources:
+        mem_mb = 2000,
+        runtime = 10
     shell:
         """
         # get the kmer size from the merqury output
@@ -322,6 +386,9 @@ rule calculate_final_kmer_size:
     output:
         kmer_final    = "step3_merqury/" + config["prefix"] + ".k_estimate.final.txt"
     threads: 1
+    resources:
+        mem_mb = 2000,
+        runtime = 5
     run:
         # open the input file and get the last line as an int
         kmer_size = 0
@@ -343,6 +410,9 @@ rule fofn_reads:
     output:
         fofn = "step3_merqury/" + config["prefix"] + ".reads.fofn"
     threads: 1
+    resources:
+        mem_mb = 1000,
+        runtime = 5
     run:
         # print each read file to its own line
         with open(output.fofn, "w") as f:
@@ -364,10 +434,13 @@ rule meryl_count_reads:
         kmer_size = int(open("step3_merqury/" + config["prefix"] + ".k_estimate.final.txt", "r").readline()),
         reads_string = " ".join(config["merqury_reads"])
     threads: 64 if workflow.cores > 64 else workflow.cores
+    resources:
+        mem_mb = 64000,
+        runtime = 1440
     shell:
         """
         meryl k={params.kmer_size} threads={threads} count {params.reads_string} output {output.meryl_db}
-        """ 
+        """
 
 rule merqury_basic:
     """
@@ -385,6 +458,9 @@ rule merqury_basic:
         abs_hap1  = os.path.abspath("step2_assemblies/" + config["prefix"] + ".{all_analyses}.hap1.p_ctg.fasta"),
         abs_hap2  = os.path.abspath("step2_assemblies/" + config["prefix"] + ".{all_analyses}.hap2.p_ctg.fasta")
     threads: workflow.cores
+    resources:
+        mem_mb = 32000,
+        runtime = 240
     shell:
         """
         mkdir -p step3_merqury/
@@ -442,6 +518,10 @@ rule make_genome_stats_table:
         qv           = expand("step3_merqury/runs/{all_analyses}/{all_analyses}.qv", all_analyses = config["all_analyses"])
     output:
         results_table = "stepFINAL/final_results.tsv"
+    threads: 1
+    resources:
+        mem_mb = 8000,
+        runtime = 60
     run:
         all_samples = []
         for nom in config["all_analyses"]:
