@@ -431,7 +431,7 @@ rule meryl_count_reads:
         meryl_db = "step3_merqury/" + config["prefix"] + ".meryl/merylIndex"
     params:
         reads_string = " ".join(config["merqury_reads"])
-    threads: 64 if workflow.cores > 64 else workflow.cores
+    threads: 32
     resources:
         mem_mb = 64000,
         runtime = 1440
@@ -456,7 +456,7 @@ rule merqury_basic:
         abs_meryl = os.path.abspath("step3_merqury/" + config["prefix"] + ".meryl/"),
         abs_hap1  = os.path.abspath("step2_assemblies/" + config["prefix"] + ".{all_analyses}.hap1.p_ctg.fasta"),
         abs_hap2  = os.path.abspath("step2_assemblies/" + config["prefix"] + ".{all_analyses}.hap2.p_ctg.fasta")
-    threads: workflow.cores
+    threads: 16
     resources:
         mem_mb = 32000,
         runtime = 240
