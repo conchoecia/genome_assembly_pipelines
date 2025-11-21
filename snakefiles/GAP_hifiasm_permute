@@ -513,8 +513,8 @@ rule make_genome_stats_table:
     """
     input:
         assembly     = expand("step2_assemblies/" + config["prefix"] +  ".{all_analyses}.hap{hap}.p_ctg.fasta", all_analyses = config["all_analyses"],  hap = [1,2]),
-        completeness = expand("step3_merqury/runs/{all_analyses}/{all_analyses}.completeness.stats", all_analyses = config["all_analyses"]),
-        qv           = expand("step3_merqury/runs/{all_analyses}/{all_analyses}.qv", all_analyses = config["all_analyses"])
+        completeness = expand("step3_merqury/runs/{all_analyses}/{all_analyses}.completeness.stats", all_analyses = config["all_analyses"]) if config.get("perform_merqury", False) else [],
+        qv           = expand("step3_merqury/runs/{all_analyses}/{all_analyses}.qv", all_analyses = config["all_analyses"]) if config.get("perform_merqury", False) else []
     output:
         results_table = "stepFINAL/final_results.tsv"
     threads: 1
@@ -539,12 +539,13 @@ rule make_genome_stats_table:
                 this_dict = {**this_dict, **temp_dict}
                 time.sleep(0.1)
             
-            # read in the kmer-completeness info
-            this_completeness = "step3_merqury/runs/{}/{}.completeness.stats".format(nom, nom)
-            this_dict = {**this_dict, **parse_completeness(this_completeness)}
-            # read in the qv info
-            this_qv = "step3_merqury/runs/{}/{}.qv".format(nom, nom)
-            this_dict = {**this_dict, **parse_QV(this_qv)}
+            # read in the kmer-completeness info only if perform_merqury is True
+            if config.get("perform_merqury", False):
+                this_completeness = "step3_merqury/runs/{}/{}.completeness.stats".format(nom, nom)
+                this_dict = {**this_dict, **parse_completeness(this_completeness)}
+                # read in the qv info
+                this_qv = "step3_merqury/runs/{}/{}.qv".format(nom, nom)
+                this_dict = {**this_dict, **parse_QV(this_qv)}
 
             all_samples.append(this_dict)
         # now make a df with all the results
