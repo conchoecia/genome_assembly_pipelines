@@ -144,6 +144,7 @@ ul:
 ###############################################################################
 # Merqury evaluates assembly quality using k-mer completeness and QV scores
 # Requires genome size estimate and k-mer database from reads
+# "true false" must be lowercase values in this file to prevent the possibility that it is parsed as a string.
 
 perform_merqury: true
 
@@ -160,8 +161,9 @@ merqury_on_illumina: false
 #       - "/path/to/illumina_R2.fastq.gz"
 
 # Estimated genome size (required for Merqury)
-# Use notation like: 2.3g, 450m, etc.
-genome_size: "2.5g"
+# Provide as an integer (number of bases), e.g., 2500000000 for 2.5 Gb
+# If not specified and perform_merqury is false, defaults to 1000000000 (1 Gb)
+genome_size: 2500000000
 
 ###############################################################################
 # NOTES ON PERMUTATIONS

@@ -147,13 +147,13 @@ if "perform_merqury" in config:
                             config["merqury_reads"].append(readfile)
             # condense the meryl_source to a string joined by _
             config["meryl_source"] = "_".join(config["meryl_source"])
-    # now we must define the output files that snakemake will look for
-    meryl_db = "step3_merqury/" + config["prefix"] + ".meryl/merylIndex"
-    for this_analysis in config["all_analyses"]:
-        this_result  = "step3_merqury/runs/{all_analyses}/{all_analyses}.completeness.stats".format(all_analyses = this_analysis)
-        merqury_out_files.append(this_result)
-        this_result  = "step3_merqury/runs/{all_analyses}/{all_analyses}.qv".format(all_analyses = this_analysis)
-        merqury_out_files.append(this_result)
+        # now we must define the output files that snakemake will look for
+        meryl_db = "step3_merqury/" + config["prefix"] + ".meryl/merylIndex"
+        for this_analysis in config["all_analyses"]:
+            this_result  = "step3_merqury/runs/{all_analyses}/{all_analyses}.completeness.stats".format(all_analyses = this_analysis)
+            merqury_out_files.append(this_result)
+            this_result  = "step3_merqury/runs/{all_analyses}/{all_analyses}.qv".format(all_analyses = this_analysis)
+            merqury_out_files.append(this_result)
 
 rule all:
     input:
