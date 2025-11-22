@@ -340,7 +340,7 @@ rule split_samgz_by_readid:
     threads: 2
     resources:
         mem_mb  = 8000,  # Streaming line-by-line uses minimal memory
-        runtime = 600  # 10 hours for very large files
+        runtime = 1800  # 30 hours for very large files
     run:
         import gzip
         import os
