@@ -166,263 +166,236 @@ wildcard_constraints:
     datatype="[A-Za-z]+",
     part="[0-9]+"
 
-# Configuration: Number of chunks to split each sam.gz file into
-NUM_CHUNKS = 100
+# Configuration: reads per chunk
+READS_PER_CHUNK = 10_000_000  # 10 million unique read IDs per chunk
+
+# Helper function to get split file outputs from checkpoint
+def get_all_split_outputs(wildcards):
+    """
+    Read the part_count.txt file created by the checkpoint to determine
+    how many parts were created, then return all the expected output files.
+    """
+    checkpoint_output = checkpoints.split_samgz_by_readid.get(
+        libtype=wildcards.libtype, 
+        libname=wildcards.libname
+    ).output.part_count
+    
+    # Read the part count file
+    with open(checkpoint_output, 'r') as f:
+        num_parts = int(f.read().strip())
+    
+    # Return list of all expected split files
+    return [
+        config["tool"] + f"/output/samgz_split/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.sam.gz"
+        for part in range(num_parts)
+    ]
 
 rule all:
     input:
-        # Generate all expected split files for all libraries
-        [config["tool"] + f"/output/samgz_split/{libtype}.{libname}.part{part:04d}.sam.gz"
+        # Aggregate all split files for all libraries
+        [config["tool"] + f"/output/samgz_split/{libtype}.{libname}/complete.txt"
          for libtype in config["ACTIVE_LIBTYPES"]
-         for libname in config["LIB_NAMES"][libtype]
-         for part in range(NUM_CHUNKS)]
+         for libname in config["LIB_NAMES"][libtype]]
 
 ######################################################################
-# Step 1: Find split points in the sam.gz file
+# Checkpoint: Split sam.gz file by counting unique read IDs
 ######################################################################
 
-rule find_samgz_split_points:
+checkpoint split_samgz_by_readid:
     """
-    Scan the sam.gz file to find byte positions where we can safely split
-    (at boundaries where read IDs change). Save these positions to a file.
+    Split a sam.gz file into chunks, each containing READS_PER_CHUNK unique read IDs.
     
-    This is separate from the actual splitting so we can reuse the split
-    points without re-scanning the file every time.
+    Strategy:
+    1. Copy sam.gz to $TMPDIR for faster I/O
+    2. Read through sequentially, tracking unique read IDs
+    3. When we hit READS_PER_CHUNK unique IDs, close current file and start new one
+    4. Move completed files from $TMPDIR to target directory
+    5. Clean up temporary files
+    
+    This is a checkpoint because we don't know ahead of time how many parts will be created.
     """
     input:
         samgz = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["samgz"]
     output:
-        split_points = config["tool"] + "/output/samgz_split/{libtype}.{libname}.split_points.txt",
-        headers = config["tool"] + "/output/samgz_split/{libtype}.{libname}.headers.txt"
-    params:
-        num_chunks = NUM_CHUNKS
-    threads: 2
-    resources:
-        mem_mb  = 4000,
-        runtime = 120  # 2 hours should be enough to scan and find split points
-    run:
-        import gzip
-        import os
-        
-        print(f"Scanning {input.samgz}")
-        
-        # Get file size for split calculation
-        file_size = os.path.getsize(input.samgz)
-        print(f"Input file size: {file_size / (1024**3):.2f} GB")
-        
-        # Use the specified number of chunks
-        num_chunks = params.num_chunks
-        print(f"Target: {num_chunks} chunks (~{file_size/num_chunks/(1024**2):.1f} MB each)")
-        
-        # Read headers and find header end position
-        print("\nReading headers...")
-        headers = []
-        header_end_pos = 0
-        
-        with gzip.open(input.samgz, 'rb') as infile:
-            # Read headers
-            while True:
-                pos_before = infile.tell()
-                line = infile.readline()
-                if not line:
-                    break
-                if not line.startswith(b'@'):
-                    header_end_pos = pos_before
-                    break
-                else:
-                    headers.append(line.decode('utf-8'))
-            
-            print(f"Found {len(headers)} header lines")
-        
-        # Save headers to file
-        with open(output.headers, 'w') as f:
-            for header in headers:
-                f.write(header)
-        
-        # Calculate approximate chunk positions
-        alignment_section_size = file_size - header_end_pos
-        chunk_size = alignment_section_size // num_chunks
-        
-        print(f"Header end position: {header_end_pos / (1024**2):.2f} MB")
-        print(f"Alignment section: ~{alignment_section_size / (1024**3):.2f} GB")
-        print(f"Approximate chunk size: {chunk_size / (1024**2):.1f} MB")
-        
-        # Find exact split points near the approximate positions
-        print("\nFinding safe split points (where read ID changes)...")
-        split_points = [header_end_pos]  # Start with the first alignment
-        
-        with gzip.open(input.samgz, 'rb') as infile:
-            for i in range(1, num_chunks):
-                # Calculate approximate position
-                approx_pos = header_end_pos + (i * chunk_size)
-                
-                print(f"  Finding split {i}/{num_chunks-1} near {approx_pos / (1024**3):.2f} GB ({int(approx_pos/file_size*100)}%)...", end='', flush=True)
-                
-                # Seek to approximate position
-                infile.seek(approx_pos)
-                
-                # Read forward to find the next newline
-                infile.readline()  # Skip partial line
-                
-                # Now find where the read ID changes
-                prev_readid = None
-                scan_count = 0
-                max_scan = 100000  # Don't scan more than 100k lines
-                
-                while scan_count < max_scan:
-                    pos_before = infile.tell()
-                    line = infile.readline()
-                    if not line:
-                        break
-                    
-                    scan_count += 1
-                    line_str = line.decode('utf-8')
-                    
-                    # Skip non-alignment lines
-                    if line_str.startswith('@'):
-                        continue
-                    
-                    fields = line_str.split('\t', 1)
-                    if len(fields) < 1:
-                        continue
-                    
-                    current_readid = fields[0]
-                    
-                    # Found a read ID change - this is a safe split point
-                    if prev_readid is not None and current_readid != prev_readid:
-                        split_points.append((pos_before, prev_readid, current_readid))
-                        print(f" found at {pos_before / (1024**3):.2f} GB (scanned {scan_count} lines)")
-                        break
-                    
-                    prev_readid = current_readid
-                
-                # If we didn't find a split point, warn the user
-                if scan_count >= max_scan:
-                    print(f" WARNING: couldn't find split point after {max_scan} lines, using approximate position")
-        
-        print(f"\nFound {len(split_points)} split points")
-        
-        # Save split points to file with read IDs
-        with open(output.split_points, 'w') as f:
-            # First split point is just the header end position (no read IDs yet)
-            if len(split_points) > 0:
-                if isinstance(split_points[0], tuple):
-                    # All entries have read IDs
-                    for pos, prev_id, next_id in split_points:
-                        f.write(f"{pos}\t{prev_id}\t{next_id}\n")
-                else:
-                    # First entry is just header_end_pos
-                    f.write(f"{split_points[0]}\tN/A\tN/A\n")
-                    for pos, prev_id, next_id in split_points[1:]:
-                        f.write(f"{pos}\t{prev_id}\t{next_id}\n")
-        
-        print(f"Split points saved to {output.split_points}")
-
-######################################################################
-# Step 2: Split sam.gz file using pre-computed split points
-######################################################################
-
-rule split_samgz_by_readid:
-    """
-    Split a sam.gz file into multiple chunks using pre-computed split points.
-    Creates exactly NUM_CHUNKS output files.
-    """
-    input:
-        samgz = lambda wildcards: config["libraries"][wildcards.libtype][wildcards.libname]["samgz"],
-        split_points = config["tool"] + "/output/samgz_split/{libtype}.{libname}.split_points.txt",
-        headers = config["tool"] + "/output/samgz_split/{libtype}.{libname}.headers.txt"
-    output:
-        sam_parts = expand(config["tool"] + "/output/samgz_split/{{libtype}}.{{libname}}.part{part:04d}.sam.gz",
-                          part=range(NUM_CHUNKS))
+        part_count = config["tool"] + "/output/samgz_split/{libtype}.{libname}/part_count.txt"
     params:
         outdir = config["tool"] + "/output/samgz_split",
-        prefix = lambda wildcards: f"{wildcards.libtype}.{wildcards.libname}"
+        reads_per_chunk = READS_PER_CHUNK
     threads: 2
     resources:
-        mem_mb  = 8000,  # Streaming line-by-line uses minimal memory
+        mem_mb = 8000,
         runtime = 1800  # 30 hours for very large files
     run:
         import gzip
         import os
+        import shutil
         from pathlib import Path
         
-        # Create output directory
+        # Create output directories
         Path(params.outdir).mkdir(parents=True, exist_ok=True)
+        Path(output.part_count).parent.mkdir(parents=True, exist_ok=True)
         
-        import sys
+        # Get library info for naming
+        libtype = wildcards.libtype
+        libname = wildcards.libname
+        prefix = f"{libtype}.{libname}"
         
-        print(f"Splitting {input.samgz}", flush=True)
-        print(f"Writing parts to {params.outdir} with prefix {params.prefix}", flush=True)
+        # Copy sam.gz to TMPDIR
+        tmpdir = os.environ.get('TMPDIR', '/tmp')
+        local_samgz = os.path.join(tmpdir, f"{prefix}.sam.gz")
         
-        # Load headers
-        print("Loading headers...", flush=True)
+        print(f"Copying {input.samgz} to {local_samgz}...", flush=True)
+        shutil.copy2(input.samgz, local_samgz)
+        print(f"Copy complete. Starting split...", flush=True)
+        
+        # Read headers first
         headers = []
-        with open(input.headers, 'r') as f:
-            headers = f.readlines()
-        print(f"Loaded {len(headers)} header lines", flush=True)
-        
-        # Load split points - get the read IDs where splits occur (column 3)
-        print("Loading split points...", flush=True)
-        split_readids = []
-        with open(input.split_points, 'r') as f:
-            for line in f:
-                fields = line.strip().split('\t')
-                if len(fields) >= 3:
-                    split_readids.append(fields[2])  # Read ID that starts new chunk
+        with gzip.open(local_samgz, 'rt') as infile:
+            for line in infile:
+                if line.startswith('@'):
+                    headers.append(line)
                 else:
-                    split_readids.append(None)  # First chunk (no previous read ID)
+                    break
         
-        print(f"Loaded {len(split_readids)} split points", flush=True)
-        print(f"Will create {len(split_readids)} output files", flush=True)
+        print(f"Found {len(headers)} header lines", flush=True)
         
-        # Write split files by reading through once and splitting on read ID changes
-        print("\nWriting split files (single pass through input)...", flush=True)
-        
+        # Now split by unique read IDs
         part_num = 0
-        current_split_readid = split_readids[part_num] if part_num < len(split_readids) else None
+        unique_readids = set()
+        current_readid = None
+        lines_buffer = []
         
-        outfile_path = os.path.join(params.outdir, f"{params.prefix}.part{part_num:04d}.sam.gz")
-        print(f"  Writing part {part_num:04d}/{len(split_readids)-1:04d}...", flush=True)
-        outfile = gzip.open(outfile_path, 'wt', compresslevel=1)
+        # Temporary output file in TMPDIR
+        tmp_outfile_path = os.path.join(tmpdir, f"{prefix}.part{part_num:04d}.sam.gz")
+        outfile = gzip.open(tmp_outfile_path, 'wt', compresslevel=1)
         
         # Write headers to first file
         for header in headers:
             outfile.write(header)
         
-        with gzip.open(input.samgz, 'rt') as infile:
+        print(f"\nProcessing reads (target: {params.reads_per_chunk:,} unique read IDs per part)...", flush=True)
+        print(f"Writing part {part_num:04d}...", flush=True)
+        
+        with gzip.open(local_samgz, 'rt') as infile:
             for line in infile:
-                # Skip header lines
+                # Skip headers
                 if line.startswith('@'):
                     continue
                 
-                # Get read ID from this line
+                # Get read ID
                 fields = line.split('\t', 1)
                 if len(fields) < 1:
                     outfile.write(line)
                     continue
                 
-                current_readid = fields[0]
+                readid = fields[0]
                 
-                # Check if we need to start a new output file
-                if part_num + 1 < len(split_readids) and current_readid == split_readids[part_num + 1]:
-                    # Close current file and open next
-                    outfile.close()
-                    part_num += 1
+                # Track unique read IDs
+                if readid not in unique_readids:
+                    unique_readids.add(readid)
                     
-                    outfile_path = os.path.join(params.outdir, f"{params.prefix}.part{part_num:04d}.sam.gz")
-                    print(f"  Writing part {part_num:04d}/{len(split_readids)-1:04d}...", flush=True)
-                    outfile = gzip.open(outfile_path, 'wt', compresslevel=1)
-                    
-                    # Write headers to new file
-                    for header in headers:
-                        outfile.write(header)
+                    # Check if we've hit the threshold
+                    if len(unique_readids) >= params.reads_per_chunk:
+                        # Close current file
+                        outfile.close()
+                        
+                        # Move to target directory
+                        final_path = os.path.join(params.outdir, f"{prefix}.part{part_num:04d}.sam.gz")
+                        shutil.move(tmp_outfile_path, final_path)
+                        print(f"Part {part_num:04d} complete: {len(unique_readids):,} unique reads", flush=True)
+                        
+                        # Start new file
+                        part_num += 1
+                        unique_readids = set()
+                        tmp_outfile_path = os.path.join(tmpdir, f"{prefix}.part{part_num:04d}.sam.gz")
+                        outfile = gzip.open(tmp_outfile_path, 'wt', compresslevel=1)
+                        
+                        # Write headers to new file
+                        for header in headers:
+                            outfile.write(header)
+                        
+                        print(f"Writing part {part_num:04d}...", flush=True)
                 
                 # Write line to current file
                 outfile.write(line)
         
-        # Close the last file
+        # Close and move the last file
         outfile.close()
+        if len(unique_readids) > 0:
+            final_path = os.path.join(params.outdir, f"{prefix}.part{part_num:04d}.sam.gz")
+            shutil.move(tmp_outfile_path, final_path)
+            print(f"Part {part_num:04d} complete: {len(unique_readids):,} unique reads", flush=True)
+            part_num += 1
         
-        print(f"\nSplitting complete! Created {len(split_points)} files", flush=True)
+        # Clean up local copy
+        print(f"\nRemoving local copy: {local_samgz}", flush=True)
+        os.remove(local_samgz)
+        
+        # Write part count to checkpoint file
+        total_parts = part_num
+        with open(output.part_count, 'w') as f:
+            f.write(str(total_parts))
+        
+        print(f"\nSplitting complete! Created {total_parts} parts", flush=True)
+
+######################################################################
+# Aggregate rule to mark completion
+######################################################################
+
+rule aggregate_split_files:
+    """
+    Dummy rule to aggregate all split files after checkpoint completes.
+    This allows the checkpoint to determine how many files were created.
+    """
+    input:
+        get_all_split_outputs
+    output:
+        done = config["tool"] + "/output/samgz_split/{libtype}.{libname}/complete.txt"
+    threads: 1
+    resources:
+        mem_mb = 1000,
+        runtime = 5
+    shell:
+        """
+        echo "All split files created for {wildcards.libtype}.{wildcards.libname}" > {output.done}
+        """
 
 
+##############################################################################
+# Step 2: make a rule to get the SNPs for dip-c/hickit's input requirements
+##############################################################################
+
+#rule softlinks_phased_vcf:
+#    input:
+#        # we make softlinks of the phased VCFs here in the input directory
+#        vcf = lambda wildcards: config["PHASED_VCFs"][wildcards.phasedvcf]["path"]
+#    output:
+#        vcf_link = config["tool"] + "/input/phased_vcfs/{phasedvcf}_phased.vcf.gz"
+#    params:
+#        outdir = config["tool"] + "/input/phased_vcfs"
+#    threads: 1
+#    resources:
+#        mem_mb  = 1000,
+#        runtime = 10
+#    shell:
+#        """
+#        mkdir -p {params.outdir}
+#        ln -sf {input.vcf} {output.vcf_link}
+#        """
+#
+#rule process_phased_vcf:
+#    """
+#    Does this step from the hickit pipeline
+#        ${BINDIR}/hickit.js vcf2tsv ${VCFGZ} > phased_SNP.tsv
+#    """
+#    input:
+#        vcf = config["tool"] + "/input/phased_vcfs/{phasedvcf}_phased.vcf.gz"
+#    output:
+#        tsv = config["tool"] + "/output/phased_vcfs/{phasedvcf}_phased_SNP.tsv"
+#    params:
+#        bindir = HICKIT_DIR
+#    threads: 1
+#    resources:
+#        mem_mb  = 4000,
+#        runtime = 60
+#    shell:
