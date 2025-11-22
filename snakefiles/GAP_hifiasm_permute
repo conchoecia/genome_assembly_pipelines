@@ -165,19 +165,34 @@ rule all:
 rule bam_to_fastq:
     """
     Convert BAM files to FASTQ.GZ for use with hifiasm
+    First copies BAM to local disk, processes it, then cleans up
+    Runtime: 30 minutes per GB of input BAM file
     """
     input:
         bam = lambda wildcards: [b for b in config["hifi_bam"] if os.path.basename(b).replace(".bam", "") == wildcards.bam_basename][0]
     output:
         fastq = "step0_bam_to_fastq/{bam_basename}.fastq.gz"
-    threads: 4
+    params:
+        local_bam = lambda wildcards: f"$TMPDIR/{wildcards.bam_basename}.bam"
+    threads: 2
     resources:
-        mem_mb = 8000,
-        runtime = 240
+        mem_mb = 4000,
+        runtime = lambda wildcards, input: max(60, int(os.path.getsize([b for b in config["hifi_bam"] if os.path.basename(b).replace(".bam", "") == wildcards.bam_basename][0]) / (1024**3) * 30))
     shell:
         """
         mkdir -p step0_bam_to_fastq
-        samtools fastq -@ {threads} {input.bam} | gzip -c > {output.fastq}
+        
+        # Copy BAM to local disk
+        echo "Copying BAM to local disk: {params.local_bam}"
+        cp {input.bam} {params.local_bam}
+        
+        # Process from local BAM
+        echo "Converting BAM to FASTQ..."
+        samtools view {params.local_bam} | awk '{{print "@"$1"\\n"$10"\\n+\\n"$11}}' | pigz -p {threads} -c > {output.fastq}
+        
+        # Clean up local BAM
+        echo "Removing local BAM copy..."
+        rm -f {params.local_bam}
         """
 
 rule base_assemble:
