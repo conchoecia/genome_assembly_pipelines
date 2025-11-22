@@ -7,7 +7,7 @@ all: bin/fasta_stats dependencies/SALSA/run_pipeline.py \
      bin/pilon-1.23.jar dependencies/pairix/bin/pairix \
      bin/fqjt bin/minlen_pair \
      dependencies/miniprot bin/sambamba \
-     bin/k8 dependencies/hickit/hickit.js
+     bin/k8 dependencies/hickit/hickit.js bin/fastp
 
 bin/fqjt: src/fq-jt.c
 	mkdir -p bin
@@ -75,4 +75,13 @@ dependencies/hickit/hickit.js: bin/k8
 	cd dependencies; git clone https://github.com/lh3/hickit.git
 	cd dependencies/hickit; make
 	@echo "hickit installed successfully to dependencies/hickit/"
+
+bin/fastp:
+	@echo "Installing fastp for Linux..."
+	@mkdir -p bin
+	@echo "Downloading latest fastp binary..."
+	wget -O bin/fastp http://opengene.org/fastp/fastp
+	chmod +x bin/fastp
+	@echo "fastp installed successfully to bin/fastp"
+
 
