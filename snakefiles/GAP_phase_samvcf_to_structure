@@ -191,10 +191,32 @@ def get_all_split_outputs(wildcards):
         for part in range(num_parts)
     ]
 
+# Helper function to get all seg.gz outputs for a library across all PAR beds
+def get_all_seg_outputs(wildcards):
+    """
+    Read the part_count.txt file to determine how many parts were created,
+    then return all expected seg.gz files for all PAR beds.
+    """
+    checkpoint_output = checkpoints.split_samgz_by_readid.get(
+        libtype=wildcards.libtype,
+        libname=wildcards.libname
+    ).output.part_count
+    
+    # Read the part count file
+    with open(checkpoint_output, 'r') as f:
+        num_parts = int(f.read().strip())
+    
+    # Return list of all expected seg.gz files for all PAR beds
+    return [
+        config["tool"] + f"/output/contacts_seg/{par}/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.seg.gz"
+        for par in config["PAR_BEDS"].keys()
+        for part in range(num_parts)
+    ]
+
 rule all:
     input:
-        # Aggregate all split files for all libraries
-        [config["tool"] + f"/output/samgz_split/{libtype}.{libname}/complete.txt"
+        # Aggregate all seg.gz files for all libraries and PAR beds
+        [config["tool"] + f"/output/contacts_seg/{libtype}.{libname}/complete.txt"
          for libtype in config["ACTIVE_LIBTYPES"]
          for libname in config["LIB_NAMES"][libtype]]
 
@@ -340,7 +362,7 @@ checkpoint split_samgz_by_readid:
         print(f"\nSplitting complete! Created {total_parts} parts", flush=True)
 
 ######################################################################
-# Aggregate rule to mark completion
+# Aggregate rule to mark completion of splitting
 ######################################################################
 
 rule aggregate_split_files:
@@ -359,6 +381,28 @@ rule aggregate_split_files:
     shell:
         """
         echo "All split files created for {wildcards.libtype}.{wildcards.libname}" > {output.done}
+        """
+
+######################################################################
+# Aggregate rule to mark completion of seg.gz processing
+######################################################################
+
+rule aggregate_seg_files:
+    """
+    Aggregate all seg.gz files for a library after all parts are processed
+    through sam2seg for all PAR bed configurations.
+    """
+    input:
+        get_all_seg_outputs
+    output:
+        done = config["tool"] + "/output/contacts_seg/{libtype}.{libname}/complete.txt"
+    threads: 1
+    resources:
+        mem_mb = 1000,
+        runtime = 5
+    shell:
+        """
+        echo "All seg.gz files created for {wildcards.libtype}.{wildcards.libname}" > {output.done}
         """
 
 ##############################################################################
