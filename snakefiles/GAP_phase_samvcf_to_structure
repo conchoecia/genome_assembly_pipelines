@@ -235,23 +235,12 @@ def get_all_pairs_outputs(wildcards):
         for part in range(num_parts)
     ]
 
-# Helper function to get ALL pairs outputs across all libraries
-def get_all_pairs_for_rule_all():
-    """
-    Get all pairs.gz files for all libraries and PAR beds.
-    This is used by rule all to aggregate everything.
-    """
-    all_pairs = []
-    for libtype in config["ACTIVE_LIBTYPES"]:
-        for libname in config["LIB_NAMES"][libtype]:
-            # Create a mock wildcards object
-            mock_wildcards = type('obj', (object,), {'libtype': libtype, 'libname': libname})()
-            all_pairs.extend(get_all_pairs_outputs(mock_wildcards))
-    return all_pairs
-
 rule all:
     input:
-        get_all_pairs_for_rule_all()
+        # Aggregate all pairs.gz files for all libraries and PAR beds
+        [config["tool"] + f"/output/contacts_pairs/{libtype}.{libname}/complete.txt"
+         for libtype in config["ACTIVE_LIBTYPES"]
+         for libname in config["LIB_NAMES"][libtype]]
 
 ######################################################################
 # Checkpoint: Split sam.gz file by counting unique read IDs
@@ -629,5 +618,27 @@ rule seg_to_pairs:
         # Clean up local seg.gz copy
         echo "Cleaning up local files..."
         rm -f $LOCAL_SEG
+        """
+
+######################################################################
+# Aggregate rule to mark completion of pairs.gz processing
+######################################################################
+
+rule aggregate_pairs_files:
+    """
+    Aggregate all pairs.gz files for a library after all parts are processed
+    through hickit for all PAR bed configurations.
+    """
+    input:
+        get_all_pairs_outputs
+    output:
+        done = config["tool"] + "/output/contacts_pairs/{libtype}.{libname}/complete.txt"
+    threads: 1
+    resources:
+        mem_mb = 1000,
+        runtime = 5
+    shell:
+        """
+        echo "All pairs.gz files created for {wildcards.libtype}.{wildcards.libname}" > {output.done}
         """
 
