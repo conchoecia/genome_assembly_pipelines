@@ -485,7 +485,7 @@ rule sam2seg_per_split:
     input:
         samgz = config["tool"] + "/output/samgz_split/{libtype}.{libname}.part{part}.sam.gz",
         tsv = lambda wildcards: config["tool"] + f"/output/phased_vcfs/{list(config['PHASED_VCFs'].keys())[0]}_phased_SNP.tsv",
-        parbed = lambda wildcards: config["PAR_BEDS"][wildcards.par]["path"] if wildcards.par != "nopar" else []
+        parbed = lambda wildcards: config["PAR_BEDs"][wildcards.par]["path"] if wildcards.par != "nopar" else []
     output:
         seg = config["tool"] + "/output/contacts_seg/{par}/{libtype}.{libname}.part{part}.seg.gz"
     threads: 1
