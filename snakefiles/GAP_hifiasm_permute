@@ -12,6 +12,8 @@ from math import ceil as ceil
 from functions import percent_of_data_mapping,run_fasta_stats, parse_flagstat, parse_permap
 
 configfile: "config.yaml"
+# TODO this needs to be update to have better file structuring later
+config["tool"] = "GAP_hifiasm_permute"
 
 ### CHECK IF THE CONFIG FILE HAS THE PREFIX
 if "prefix" not in config:
@@ -210,17 +212,17 @@ rule base_assemble:
         runtime = 2880
     params:
         prefix = config["prefix"],
-        HiFi_string        = " ".join(config["hifi_fastq_final"]),
+        HiFi_string        = lambda wildcards, input: " ".join([os.path.abspath(f) for f in input.LR]),
         analysis         = lambda wildcards: wildcards.base,
-        parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.base.split("-")[0].split("_")])
+        parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.base.split("-")[0].split("_")]),
+        outdir           = lambda wildcards: os.path.abspath(f"step1_hifiasm/base/{wildcards.base}")
     shell:
         """
-        mkdir -p step1_hifiasm
-        cd step1_hifiasm
-        mkdir -p base
-        cd base
-        mkdir -p {params.analysis}
-        cd {params.analysis}
+        # Create output directory
+        mkdir -p {params.outdir}
+        
+        # Run hifiasm in the output directory
+        cd {params.outdir}
         hifiasm -o {params.prefix} \
           -t {threads} \
           {params.parameter_string} \
