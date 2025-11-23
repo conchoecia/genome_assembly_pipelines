@@ -163,6 +163,7 @@ wildcard_constraints:
     phasedvcf="[A-Za-z0-9]+",
     libtype="[A-Za-z]+",
     libname="[A-Za-z0-9]+",
+    par="[A-Za-z0-9]+",
     datatype="[A-Za-z]+",
     part="[0-9]+"
 
@@ -360,42 +361,128 @@ rule aggregate_split_files:
         echo "All split files created for {wildcards.libtype}.{wildcards.libname}" > {output.done}
         """
 
-
 ##############################################################################
 # Step 2: make a rule to get the SNPs for dip-c/hickit's input requirements
 ##############################################################################
 
-#rule softlinks_phased_vcf:
-#    input:
-#        # we make softlinks of the phased VCFs here in the input directory
-#        vcf = lambda wildcards: config["PHASED_VCFs"][wildcards.phasedvcf]["path"]
-#    output:
-#        vcf_link = config["tool"] + "/input/phased_vcfs/{phasedvcf}_phased.vcf.gz"
-#    params:
-#        outdir = config["tool"] + "/input/phased_vcfs"
-#    threads: 1
-#    resources:
-#        mem_mb  = 1000,
-#        runtime = 10
-#    shell:
-#        """
-#        mkdir -p {params.outdir}
-#        ln -sf {input.vcf} {output.vcf_link}
-#        """
-#
-#rule process_phased_vcf:
-#    """
-#    Does this step from the hickit pipeline
-#        ${BINDIR}/hickit.js vcf2tsv ${VCFGZ} > phased_SNP.tsv
-#    """
-#    input:
-#        vcf = config["tool"] + "/input/phased_vcfs/{phasedvcf}_phased.vcf.gz"
-#    output:
-#        tsv = config["tool"] + "/output/phased_vcfs/{phasedvcf}_phased_SNP.tsv"
-#    params:
-#        bindir = HICKIT_DIR
-#    threads: 1
-#    resources:
-#        mem_mb  = 4000,
-#        runtime = 60
-#    shell:
+rule softlinks_phased_vcf:
+    input:
+        # we make softlinks of the phased VCFs here in the input directory
+        vcf = lambda wildcards: config["PHASED_VCFs"][wildcards.phasedvcf]["path"]
+    output:
+        vcf_link = config["tool"] + "/input/phased_vcfs/{phasedvcf}_phased.vcf.gz"
+    params:
+        outdir = config["tool"] + "/input/phased_vcfs"
+    threads: 1
+    resources:
+        mem_mb  = 1000,
+        runtime = 10
+    shell:
+        """
+        mkdir -p {params.outdir}
+        ln -sf {input.vcf} {output.vcf_link}
+        """
+
+rule process_phased_vcf:
+    """
+    Does this step from the hickit pipeline
+        ${BINDIR}/hickit.js vcf2tsv ${VCFGZ} > phased_SNP.tsv
+    
+    Strategy: Copy VCF to $TMPDIR, process there, then move output to target
+    """
+    input:
+        vcf = config["tool"] + "/input/phased_vcfs/{phasedvcf}_phased.vcf.gz"
+    output:
+        tsv = config["tool"] + "/output/phased_vcfs/{phasedvcf}_phased_SNP.tsv"
+    params:
+        bindir = HICKIT_DIR
+    threads: 1
+    resources:
+        mem_mb  = 7999,
+        runtime = 180
+    shell:
+        """
+        # Copy VCF to local disk
+        LOCAL_VCF=$TMPDIR/{wildcards.phasedvcf}_phased.vcf.gz
+        LOCAL_TSV=$TMPDIR/{wildcards.phasedvcf}_phased_SNP.tsv
+        
+        echo "Copying VCF to $LOCAL_VCF"
+        cp {input.vcf} $LOCAL_VCF
+        
+        # Process from local disk
+        echo "Processing VCF to TSV..."
+        {HICKIT_JS} vcf2tsv $LOCAL_VCF > $LOCAL_TSV
+        
+        # Move output to target directory
+        echo "Moving output to target directory..."
+        mkdir -p $(dirname {output.tsv})
+        mv $LOCAL_TSV {output.tsv}
+        
+        # Clean up local VCF
+        echo "Removing local VCF copy..."
+        rm -f $LOCAL_VCF
+        """
+
+######################################################################
+# Step 3: make a rule to run sam2seg on each split sam.gz file
+######################################################################
+
+rule sam2seg_per_split:
+    """
+    Process each split sam.gz file through the hickit pipeline:
+        hickit.js sam2seg -v phased_SNP.tsv ${SAMGZ} | \
+            hickit.js chronly - | \
+            hickit.js bedflt ${PARBED} - | \
+            gzip > contacts.seg.gz
+    
+    This processes each split sam.gz part in parallel.
+    Strategy: Copy files to $TMPDIR, process there, move output to target
+    """
+    input:
+        samgz = config["tool"] + "/output/samgz_split/{libtype}.{libname}.part{part}.sam.gz",
+        tsv = lambda wildcards: config["tool"] + f"/output/phased_vcfs/{list(config['PHASED_VCFs'].keys())[0]}_phased_SNP.tsv",
+        parbed = lambda wildcards: config["PAR_BEDS"][wildcards.par]["path"] if wildcards.par != "nopar" else []
+    output:
+        seg = config["tool"] + "/output/contacts_seg/{par}/{libtype}.{libname}.part{part}.seg.gz"
+    threads: 1
+    resources:
+        mem_mb = 4000,
+        runtime = 180
+    shell:
+        """
+        # Copy input files to local disk
+        LOCAL_SAMGZ=$TMPDIR/$(basename {input.samgz})
+        LOCAL_TSV=$TMPDIR/$(basename {input.tsv})
+        LOCAL_SEG=$TMPDIR/$(basename {output.seg})
+        
+        echo "Copying inputs to $TMPDIR..."
+        cp {input.samgz} $LOCAL_SAMGZ
+        cp {input.tsv} $LOCAL_TSV
+        
+        # Process with hickit pipeline
+        echo "Processing with hickit pipeline..."
+        if [ "{wildcards.par}" != "nopar" ]; then
+            # With PAR bed filtering
+            echo "Using PAR bed: {input.parbed}"
+            {K8} {HICKIT_JS} sam2seg -v $LOCAL_TSV $LOCAL_SAMGZ | \
+                {K8} {HICKIT_JS} chronly - | \
+                {K8} {HICKIT_JS} bedflt {input.parbed} - | \
+                gzip > $LOCAL_SEG
+        else
+            # Without PAR bed filtering
+            echo "No PAR bed filtering"
+            {K8} {HICKIT_JS} sam2seg -v $LOCAL_TSV $LOCAL_SAMGZ | \
+                {K8} {HICKIT_JS} chronly - | \
+                gzip > $LOCAL_SEG
+        fi
+        
+        # Move output to target directory
+        echo "Moving output to target directory..."
+        mkdir -p $(dirname {output.seg})
+        mv $LOCAL_SEG {output.seg}
+        
+        # Clean up local copies
+        echo "Cleaning up local files..."
+        rm -f $LOCAL_SAMGZ $LOCAL_TSV
+        """
+

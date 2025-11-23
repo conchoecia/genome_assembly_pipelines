@@ -15,6 +15,11 @@ PHASED_VCFs: # This is only used in the GAP_phase_samvcf_to_structure module. Wo
     path: "/path/to/vcf/file/to/phase/phased_output.vcf.gz"
     note: "These are the unfiltered variants that have already been phased somehow. This will be used with the hickit/dip-c pipeline to generate the final files."
 
+PAR_BED: # COMMENT OUT IF NOT USING. This is only used in the GAP_phase_samvcf_to_structure module. Won't do anything in GAP_phase module.
+  hs37u5PAR: # name must only be these characters: [A-Za-z0-9]
+    path: "/path/to/par_regions.bed"
+    note: "BED file with PAR regions to handle them correctly during phasing."
+
 # Chromosomes/scaffolds to phase
 CHROMS: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
