@@ -20,6 +20,14 @@ PAR_BEDs: # COMMENT OUT IF NOT USING. This is only used in the GAP_phase_samvcf_
     path: "/path/to/par_regions.bed"
     note: "BED file with PAR regions to handle them correctly during phasing."
 
+SNP_FILTER_BEDs: # COMMENT OUT IF NOT USING. This is only used in the GAP_phase_samvcf_to_structure module. Won't do anything in GAP_phase module.
+  filter1:
+    path: "/path/to/snp_filter_regions.bed"
+    note: "BED file with regions to filter SNPs from the VCF before phasing."
+  filter2:
+    path: "/path/to/another_snp_filter_regions.bed"
+    note: "Another BED file with regions to filter SNPs from the VCF before phasing."
+
 # Chromosomes/scaffolds to phase
 CHROMS: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
