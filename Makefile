@@ -61,20 +61,20 @@ bin/sambamba:
 
 bin/k8:
 	@echo "Installing k8 JavaScript shell..."
-	@mkdir -p bin
+	@mkdir -p bin dependencies
 	@echo "Downloading k8..."
-	@rm -f k8-1.2.tar.bz2
-	wget https://github.com/attractivechaos/k8/releases/download/v1.2/k8-1.2.tar.bz2
+	cd dependencies && wget -O k8-1.2.tar.bz2 https://github.com/attractivechaos/k8/releases/download/v1.2/k8-1.2.tar.bz2
 	@echo "Extracting k8..."
-	tar -jxf k8-1.2.tar.bz2
-	@echo "Copying k8 binary..."
-	cp -f k8-1.2/k8-x86_64-Linux bin/k8
-	chmod +x bin/k8
+	cd dependencies && tar -jxf k8-1.2.tar.bz2
+	@echo "Creating symlink..."
+	ln -sf ../dependencies/k8-1.2/k8-x86_64-Linux bin/k8
+	chmod +x dependencies/k8-1.2/k8-x86_64-Linux
 	@echo "Verifying installation..."
 	@ls -lh bin/k8
 	@file bin/k8
-	@echo "k8 installed successfully to bin/k8"
-	@echo "Note: k8-1.2/ directory left in place for hickit compilation"
+	@echo "Cleaning up tarball..."
+	rm -f dependencies/k8-1.2.tar.bz2
+	@echo "k8 installed successfully to bin/k8 (symlinked from dependencies/k8-1.2/)"
 
 dependencies/hickit/hickit.js: bin/k8
 	@echo "Installing hickit (requires k8)..."
