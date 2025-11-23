@@ -213,12 +213,45 @@ def get_all_seg_outputs(wildcards):
         for part in range(num_parts)
     ]
 
+# Helper function to get all pairs.gz outputs for a library across all PAR beds
+def get_all_pairs_outputs(wildcards):
+    """
+    Read the part_count.txt file to determine how many parts were created,
+    then return all expected pairs.gz files for all PAR beds.
+    """
+    checkpoint_output = checkpoints.split_samgz_by_readid.get(
+        libtype=wildcards.libtype,
+        libname=wildcards.libname
+    ).output.part_count
+    
+    # Read the part count file
+    with open(checkpoint_output, 'r') as f:
+        num_parts = int(f.read().strip())
+    
+    # Return list of all expected pairs.gz files for all PAR beds
+    return [
+        config["tool"] + f"/output/contacts_pairs/{par}/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.pairs.gz"
+        for par in config["PAR_BEDs"].keys()
+        for part in range(num_parts)
+    ]
+
+# Helper function to get ALL pairs outputs across all libraries
+def get_all_pairs_for_rule_all():
+    """
+    Get all pairs.gz files for all libraries and PAR beds.
+    This is used by rule all to aggregate everything.
+    """
+    all_pairs = []
+    for libtype in config["ACTIVE_LIBTYPES"]:
+        for libname in config["LIB_NAMES"][libtype]:
+            # Create a mock wildcards object
+            mock_wildcards = type('obj', (object,), {'libtype': libtype, 'libname': libname})()
+            all_pairs.extend(get_all_pairs_outputs(mock_wildcards))
+    return all_pairs
+
 rule all:
     input:
-        # Aggregate all seg.gz files for all libraries and PAR beds
-        [config["tool"] + f"/output/contacts_seg/{libtype}.{libname}/complete.txt"
-         for libtype in config["ACTIVE_LIBTYPES"]
-         for libname in config["LIB_NAMES"][libtype]]
+        get_all_pairs_for_rule_all()
 
 ######################################################################
 # Checkpoint: Split sam.gz file by counting unique read IDs
@@ -540,5 +573,61 @@ rule sam2seg_per_split:
         # Clean up local sam.gz copy
         echo "Cleaning up local files..."
         rm -f $LOCAL_SAMGZ
+        """
+
+######################################################################
+# Step 4: Convert seg.gz files to pairs.gz using hickit
+######################################################################
+
+rule seg_to_pairs:
+    """
+    Convert contacts.seg.gz files to pairs.gz format using hickit:
+        hickit -i contacts.seg.gz -o - | bgzip > contacts.pairs.gz
+    
+    This processes each seg.gz file independently to generate pairs.gz files.
+    Strategy: Copy seg.gz to $TMPDIR, process with hickit binary, pipe to bgzip
+    """
+    input:
+        seg = config["tool"] + "/output/contacts_seg/{par}/{libtype}.{libname}.part{part}.seg.gz"
+    output:
+        pairs = config["tool"] + "/output/contacts_pairs/{par}/{libtype}.{libname}.part{part}.pairs.gz"
+    threads: 1
+    resources:
+        mem_mb = 16000,
+        runtime = 120
+    shell:
+        """
+        # Copy seg.gz to local disk for faster I/O
+        LOCAL_SEG=$TMPDIR/$(basename {input.seg})
+        LOCAL_PAIRS=$TMPDIR/$(basename {output.pairs})
+        
+        echo "Copying seg.gz to $TMPDIR..."
+        cp {input.seg} $LOCAL_SEG
+        sync
+        
+        # Verify file integrity after copy with md5sum
+        echo "Verifying file integrity with md5sum..."
+        SRC_MD5=$(md5sum {input.seg} | awk '{{print $1}}')
+        DST_MD5=$(md5sum $LOCAL_SEG | awk '{{print $1}}')
+        if [ "$SRC_MD5" != "$DST_MD5" ]; then
+            echo "ERROR: MD5 checksum mismatch after copy!"
+            echo "Source: $SRC_MD5"
+            echo "Local:  $DST_MD5"
+            exit 1
+        fi
+        echo "File integrity verified: $DST_MD5"
+        
+        # Process with hickit binary
+        echo "Converting seg.gz to pairs.gz with hickit..."
+        {HICKIT_BIN} -i $LOCAL_SEG -o - | bgzip > $LOCAL_PAIRS
+        
+        # Move output to target directory
+        echo "Moving output to target directory..."
+        mkdir -p $(dirname {output.pairs})
+        mv $LOCAL_PAIRS {output.pairs}
+        
+        # Clean up local seg.gz copy
+        echo "Cleaning up local files..."
+        rm -f $LOCAL_SEG
         """
 
