@@ -209,7 +209,7 @@ def get_all_seg_outputs(wildcards):
     # Return list of all expected seg.gz files for all PAR beds
     return [
         config["tool"] + f"/output/contacts_seg/{par}/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.seg.gz"
-        for par in config["PAR_BEDS"].keys()
+        for par in config["PAR_BEDs"].keys()
         for part in range(num_parts)
     ]
 
