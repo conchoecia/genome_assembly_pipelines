@@ -237,10 +237,11 @@ def get_all_pairs_outputs(wildcards):
 
 rule all:
     input:
-        # Aggregate all pairs.gz files for all libraries and PAR beds
-        [config["tool"] + f"/output/contacts_pairs/{libtype}.{libname}/complete.txt"
+        # Aggregate all merged and sorted pairs.gz files for all libraries and PAR beds
+        [config["tool"] + f"/output/contacts_pairs_merged/{par}/{libtype}.{libname}.merged.sorted.pairs.gz"
          for libtype in config["ACTIVE_LIBTYPES"]
-         for libname in config["LIB_NAMES"][libtype]]
+         for libname in config["LIB_NAMES"][libtype]
+         for par in config["PAR_BEDs"].keys()]
 
 ######################################################################
 # Checkpoint: Split sam.gz file by counting unique read IDs
@@ -582,8 +583,8 @@ rule seg_to_pairs:
         pairs = config["tool"] + "/output/contacts_pairs/{par}/{libtype}.{libname}.part{part}.pairs.gz"
     threads: 1
     resources:
-        mem_mb = 16000,
-        runtime = 120
+        mem_mb = 7999,
+        runtime = 30
     shell:
         """
         # Copy seg.gz to local disk for faster I/O
@@ -640,5 +641,50 @@ rule aggregate_pairs_files:
     shell:
         """
         echo "All pairs.gz files created for {wildcards.libtype}.{wildcards.libname}" > {output.done}
+        """
+
+######################################################################
+# Step 5: Merge and sort all pairs.gz files for each library+PAR
+######################################################################
+
+rule merge_and_sort_pairs:
+    """
+    Merge and sort all pairs.gz parts for a library+PAR combination.
+    
+    Takes all part*.pairs.gz files and:
+    1. Decompresses with zcat
+    2. Removes header lines with grep -v '^#'
+    3. Sorts by chr2, chr4, pos3, pos5 with parallel sort
+    4. Compresses with pigz
+    
+    This creates a single merged and sorted pairs.gz file per library+PAR combination.
+    """
+    input:
+        lambda wildcards: [
+            config["tool"] + f"/output/contacts_pairs/{wildcards.par}/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.pairs.gz"
+            for part in range(
+                int(open(checkpoints.split_samgz_by_readid.get(
+                    libtype=wildcards.libtype,
+                    libname=wildcards.libname
+                ).output.part_count).read().strip())
+            )
+        ]
+    output:
+        merged = config["tool"] + "/output/contacts_pairs_merged/{par}/{libtype}.{libname}.merged.sorted.pairs.gz"
+    threads: 64
+    resources:
+        mem_mb = 320000,  # 300G buffer + overhead
+        runtime = 480     # 8 hours
+    shell:
+        """
+        echo "Merge and sort job started at $(date)"
+        
+        # Merge all parts, remove headers, sort, and compress
+        zcat {input} | \
+        grep -v '^#' | \
+        sort -k2,2V -k4,4V -k3,3n -k5,5n --parallel={threads} --buffer-size=300G | \
+        pigz -p {threads} > {output.merged}
+        
+        echo "Merge and sort job finished at $(date)"
         """
 
