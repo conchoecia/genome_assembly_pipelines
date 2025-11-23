@@ -503,8 +503,8 @@ rule sam2seg_per_split:
         seg = config["tool"] + "/output/contacts_seg/{par}/{libtype}.{libname}.part{part}.seg.gz"
     threads: 1
     resources:
-        mem_mb = 4000,
-        runtime = 180
+        mem_mb = 8000,
+        runtime = 59
     shell:
         """
         # Copy sam.gz to local disk (large file benefits from local I/O)
