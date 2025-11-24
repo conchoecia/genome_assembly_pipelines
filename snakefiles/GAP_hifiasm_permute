@@ -280,8 +280,8 @@ rule HiC_assemblies:
         hap2gfa    = "step1_hifiasm/hic_analyses/{hic_analysis}/" + config["prefix"] + ".hic.hap2.p_ctg.gfa",
     threads: 48
     resources:
-        mem_mb = 150000,
-        runtime = 2880
+        mem_mb = 300000,
+        runtime = 5760
     params:
         input_direc      = lambda wildcards: "step1_hifiasm/base/" + wildcards.hic_analysis.split("-")[0] + "-" + wildcards.hic_analysis.split("-")[1].split("_")[0] + "_None", 
         input_direc2     = lambda wildcards: "step1_hifiasm/ul_analyses/" + wildcards.hic_analysis.split("-")[0] + "-" + wildcards.hic_analysis.split("-")[1].split("_")[0] + "_None", 
