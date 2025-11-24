@@ -270,11 +270,8 @@ rule UL_assemblies:
 rule HiC_assemblies:
     input:
         LR  = config["hifi_fastq_final"],
-        ec_bin     = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ec.bin", base = config["base_analyses"]),
-        re_bin     = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.reverse.bin", base = config["base_analyses"]),
-        so_bin     = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ovlp.source.bin", base = config["base_analyses"]),
-        uidx_bin   = expand("step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".uidx.bin", ul_analysis=config["ul_analyses"]),
-        reuidx_bin = expand("step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".re.uidx.bin", ul_analysis=config["ul_analyses"]),
+        hic_R1 = lambda wildcards: [filepath for lib in config["hic"] for filepath in config["hic"][lib]["R1"]],
+        hic_R2 = lambda wildcards: [filepath for lib in config["hic"] for filepath in config["hic"][lib]["R2"]]
     output:
         hap1gfa    = "step1_hifiasm/hic_analyses/{hic_analysis}/" + config["prefix"] + ".hic.hap1.p_ctg.gfa",
         hap2gfa    = "step1_hifiasm/hic_analyses/{hic_analysis}/" + config["prefix"] + ".hic.hap2.p_ctg.gfa",
@@ -283,30 +280,23 @@ rule HiC_assemblies:
         mem_mb = 300000,
         runtime = 5760
     params:
-        input_direc      = lambda wildcards: "step1_hifiasm/base/" + wildcards.hic_analysis.split("-")[0] + "-" + wildcards.hic_analysis.split("-")[1].split("_")[0] + "_None", 
-        input_direc2     = lambda wildcards: "step1_hifiasm/ul_analyses/" + wildcards.hic_analysis.split("-")[0] + "-" + wildcards.hic_analysis.split("-")[1].split("_")[0] + "_None", 
         prefix           = config["prefix"],
-        LR_string        = " ".join(config["hifi_fastq_final"]),
-        analysis         = lambda wildcards: wildcards.hic_analysis,
+        HiFi_string      = lambda wildcards, input: " ".join([os.path.abspath(f) for f in input.LR]),
         parameter_string = lambda wildcards: " ".join([config["parameter_dict"][x] for x in wildcards.hic_analysis.split("-")[0].split("_")]),
-        ul_string        = lambda wildcards: config["ul_dict"][ wildcards.hic_analysis.split("-")[1].split("_")[0]],
-        hic_string       = lambda wildcards: config["hic_dict"][wildcards.hic_analysis.split("-")[1].split("_")[1]]
+        hic_string       = lambda wildcards: config["hic_dict"][wildcards.hic_analysis.split("-")[1].split("_")[1]],
+        outdir           = lambda wildcards: os.path.abspath(f"step1_hifiasm/hic_analyses/{wildcards.hic_analysis}")
     shell:
         """
-        mkdir -p step1_hifiasm
-        cd step1_hifiasm
-        mkdir -p hic_analyses
-        cd hic_analyses
-        mkdir -p {params.analysis}
-        cd {params.analysis}
-        cp ../../../{params.input_direc}/*.bin ./ 2>/dev/null || :
-        cp ../../../{params.input_direc2}/*.bin ./ 2>/dev/null || :
+        # Create output directory
+        mkdir -p {params.outdir}
+
+        # Run hifiasm in the output directory
+        cd {params.outdir}
         hifiasm -o {params.prefix} \
           -t {threads} \
           {params.parameter_string} \
           {params.hic_string} \
-          {params.ul_string} \
-          {params.LR_string} >> assemble_log.txt 2>&1
+          {params.HiFi_string} >> assemble_log.txt 2>&1
         """
 
 rule base_gfa_to_fasta:
