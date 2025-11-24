@@ -247,7 +247,7 @@ rule all:
          for par in config["PAR_BEDs"].keys()
          for snpfilter in list(config["SNP_FILTER_BEDs"].keys()) + ["nofilter"]],
         # Aggregate all Hi-C heatmaps
-        [config["tool"] + f"/output/hic_heatmaps/{par}/{snpfilter}/{libtype}.{libname}.heatmap.png"
+        [config["tool"] + f"/output/hic_heatmaps/{par}/{snpfilter}/{libtype}.{libname}.par{par}.snp{snpfilter}.bin2.5Mb.heatmap.png"
          for libtype in config["ACTIVE_LIBTYPES"]
          for libname in config["LIB_NAMES"][libtype]
          for par in config["PAR_BEDs"].keys()
