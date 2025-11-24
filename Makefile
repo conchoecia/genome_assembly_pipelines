@@ -8,7 +8,7 @@ all: bin/fasta_stats dependencies/SALSA/run_pipeline.py \
      bin/fqjt bin/minlen_pair \
      dependencies/miniprot bin/sambamba \
      bin/k8 dependencies/hickit/hickit.js bin/fastp \
-     bin/bedtools
+     bin/bedtools bin/bgzip bin/tabix
 
 bin/fqjt: src/fq-jt.c
 	mkdir -p bin
@@ -99,6 +99,38 @@ bin/bedtools:
 	wget -O bin/bedtools https://github.com/arq5x/bedtools2/releases/download/v2.31.0/bedtools.static
 	chmod +x bin/bedtools
 	@echo "bedtools installed successfully to bin/bedtools"
+
+dependencies/htslib/bgzip: dependencies/htslib/Makefile
+	@echo "Building htslib..."
+	cd dependencies/htslib && make
+	@echo "htslib built successfully"
+
+dependencies/htslib/Makefile:
+	@echo "Installing htslib v1.22.1..."
+	@mkdir -p dependencies
+	@echo "Downloading htslib..."
+	cd dependencies && wget -O htslib-1.22.1.tar.bz2 https://github.com/samtools/htslib/releases/download/1.22.1/htslib-1.22.1.tar.bz2
+	@echo "Extracting htslib..."
+	cd dependencies && tar -xjf htslib-1.22.1.tar.bz2
+	@echo "Renaming to htslib..."
+	cd dependencies && mv htslib-1.22.1 htslib
+	@echo "Configuring htslib (disabling lzma)..."
+	cd dependencies/htslib && ./configure --disable-lzma
+	@echo "Cleaning up tarball..."
+	rm -f dependencies/htslib-1.22.1.tar.bz2
+	@echo "htslib configured successfully"
+
+bin/bgzip: dependencies/htslib/bgzip
+	@echo "Creating symlink for bgzip..."
+	@mkdir -p bin
+	ln -sf ../dependencies/htslib/bgzip bin/bgzip
+	@echo "bgzip symlinked to bin/bgzip"
+
+bin/tabix: dependencies/htslib/bgzip
+	@echo "Creating symlink for tabix..."
+	@mkdir -p bin
+	ln -sf ../dependencies/htslib/tabix bin/tabix
+	@echo "tabix symlinked to bin/tabix"
 
 
 

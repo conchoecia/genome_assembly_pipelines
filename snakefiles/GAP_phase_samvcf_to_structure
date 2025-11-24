@@ -61,6 +61,7 @@ HICKIT_DIR = os.path.join(filepath, "../dependencies/hickit")
 HICKIT_JS = os.path.join(HICKIT_DIR, "hickit.js")
 HICKIT_BIN = os.path.join(HICKIT_DIR, "hickit")
 BEDTOOLS = os.path.join(filepath, "../bin/bedtools")
+BGZIP = os.path.join(filepath, "../bin/bgzip")
 
 ###############################################################################
 # Parse library configuration - supports both old and new config formats
@@ -612,7 +613,7 @@ rule seg_to_pairs:
         
         # Process with hickit binary
         echo "Converting seg.gz to pairs.gz with hickit..."
-        {HICKIT_BIN} -i $LOCAL_SEG -o - | bgzip > $LOCAL_PAIRS
+        {HICKIT_BIN} -i $LOCAL_SEG -o - | {BGZIP} > $LOCAL_PAIRS
         
         # Move output to target directory
         echo "Moving output to target directory..."
@@ -704,15 +705,16 @@ rule filter_pairs:
     """
     Filter merged pairs.gz files through BED regions of interest.
     
-    Uses bedtools pairtobed to keep only pairs where BOTH ends fall within the BED regions.
+    Keeps only pairs where BOTH ends fall within the BED regions.
     Special case: snpfilter='nofilter' passes through unfiltered.
     
     Process:
-    1. Save header from input pairs.gz
-    2. Convert pairs to BEDPE format (preserving phase0/phase1 columns)
-    3. Filter with bedtools pairtobed -type both
-    4. Convert BEDPE back to pairs format
-    5. Recombine header + filtered body and compress
+    1. Find all line numbers where side 1 (chr2, pos3) intersects the BED regions
+    2. Find all line numbers where side 2 (chr4, pos5) intersects the BED regions
+    3. Keep only line numbers that passed filtering on BOTH sides
+    4. Extract header and those specific lines from the original pairs file
+    
+    This approach uses line numbers instead of read IDs since all read IDs may be "."
     """
     input:
         pairs = config["tool"] + "/output/contacts_pairs_merged/{par}/{libtype}.{libname}.merged.sorted.pairs.gz",
@@ -735,49 +737,42 @@ rule filter_pairs:
             # Create output directory
             mkdir -p $(dirname {output.filtered})
             
-            # Temporary files
-            HEADER_TMP=$TMPDIR/header_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.tmp
-            BEDPE_TMP=$TMPDIR/filtered_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.bedpe
-            BODY_TMP=$TMPDIR/body_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.pairs
+            # Temporary files in TMPDIR
+            SIDE1_IDS=$TMPDIR/side1_ids_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.txt
+            SIDE2_IDS=$TMPDIR/side2_ids_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.txt
+            KEEP_IDS=$TMPDIR/keep_ids_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.txt
             
-            # 1) Save header
-            zcat {input.pairs} | grep '^#' > $HEADER_TMP
+            echo "Finding line numbers where side 1 intersects BED regions..."
+            # Side 1: chrom (chr2=$2), chromStart (pos3-1), chromEnd (pos3=$3), name (line number=NR)
+            zcat {input.pairs} | grep -v '^#' | \
+              awk 'BEGIN{{OFS="\t"}} {{print $2, $3-1, $3, NR}}' | \
+              {BEDTOOLS} intersect -a - -b {input.bed} -wa | \
+              cut -f4 | sort -n -u > $SIDE1_IDS
             
-            # 2) pairs -> BEDPE (keep phase0/phase1) -> pairtobed filter
+            echo "Finding line numbers where side 2 intersects BED regions..."
+            # Side 2: chrom (chr4=$4), chromStart (pos5-1), chromEnd (pos5=$5), name (line number=NR)
+            zcat {input.pairs} | grep -v '^#' | \
+              awk 'BEGIN{{OFS="\t"}} {{print $4, $5-1, $5, NR}}' | \
+              {BEDTOOLS} intersect -a - -b {input.bed} -wa | \
+              cut -f4 | sort -n -u > $SIDE2_IDS
+            
+            echo "Finding line numbers that passed filtering on BOTH sides..."
+            # Keep only line numbers present in both files
+            comm -12 $SIDE1_IDS $SIDE2_IDS > $KEEP_IDS
+            
+            KEEP_COUNT=$(wc -l < $KEEP_IDS)
+            echo "Keeping $KEEP_COUNT read pairs that passed filtering on both sides"
+            
+            echo "Filtering pairs file..."
+            # Extract header and the specific line numbers
             zcat {input.pairs} | \
-              awk 'BEGIN{{OFS="\t"}} 
-                   /^#/ {{next}} 
-                   {{
-                     # BEDPE: chr1, start1, end1, chr2, start2, end2, name, score, strand1, strand2
-                     # Then carry phase0 ($8) and phase1 ($9) through as extra columns
-                     print $2, $3-1, $3, $4, $5-1, $5, $1, ".", $6, $7, $8, $9
-                   }}' | \
-              {BEDTOOLS} pairtobed -a stdin -b {input.bed} -type both \
-              > $BEDPE_TMP
+              awk 'BEGIN{{while((getline < "'$KEEP_IDS'") > 0) keep[$1]=1}}
+                   /^#/ {{print; next}}
+                   {{line++; if(keep[line]) print}}' | \
+              {BGZIP} > {output.filtered}
             
-            # 3) BEDPE back to pairs (restore columns 8 and 9: phase0/phase1)
-            awk 'BEGIN{{OFS="\t"}} {{
-              # Reconstruct original pairs columns:
-              # readID chr1 pos1 chr2 pos2 strand1 strand2 phase0 phase1
-            
-              readID  = $7
-              chr1    = $1
-              pos1    = $3    # end1 = original pos1
-              chr2    = $4
-              pos2    = $6    # end2 = original pos2
-              strand1 = $9
-              strand2 = $10
-              phase0  = $11
-              phase1  = $12
-            
-              print readID, chr1, pos1, chr2, pos2, strand1, strand2, phase0, phase1
-            }}' $BEDPE_TMP > $BODY_TMP
-            
-            # 4) Recombine header + body and recompress
-            cat $HEADER_TMP $BODY_TMP | bgzip -@ {threads} > {output.filtered}
-            
-            # 5) Clean up
-            rm -f $HEADER_TMP $BEDPE_TMP $BODY_TMP
+            # Clean up temporary files
+            rm -f $SIDE1_IDS $SIDE2_IDS $KEEP_IDS
             
             echo "Filtering complete"
         fi
