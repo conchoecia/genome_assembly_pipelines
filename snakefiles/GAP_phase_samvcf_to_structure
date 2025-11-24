@@ -743,8 +743,8 @@ rule make_pairs_side1_bed:
         side1 = config["tool"] + "/output/contacts_pairs_sides/{par}/{libtype}.{libname}.side1.bed"
     threads: 2
     resources:
-        mem_mb = 8000,
-        runtime = 60
+        mem_mb = 7999,
+        runtime = 59
     shell:
         """
         echo "Creating side 1 BED file with line numbers..."
@@ -766,8 +766,8 @@ rule make_pairs_side2_bed:
         side2 = config["tool"] + "/output/contacts_pairs_sides/{par}/{libtype}.{libname}.side2.bed"
     threads: 2
     resources:
-        mem_mb = 8000,
-        runtime = 60
+        mem_mb = 7999,
+        runtime = 59
     shell:
         """
         echo "Creating side 2 BED file with line numbers..."
@@ -856,11 +856,11 @@ rule filter_pairs:
             
             echo "Finding line numbers where side 1 intersects BED regions..."
             {BEDTOOLS} intersect -a $SIDE1_BED -b $BED_TMP -wa | \
-              cut -f4 | sort --parallel={threads} --buffer-size=24G -n -u > $SIDE1_IDS
+              cut -f4 | sort --parallel={threads} --buffer-size=24G -u > $SIDE1_IDS
             
             echo "Finding line numbers where side 2 intersects BED regions..."
             {BEDTOOLS} intersect -a $SIDE2_BED -b $BED_TMP -wa | \
-              cut -f4 | sort --parallel={threads} --buffer-size=24G -n -u > $SIDE2_IDS
+              cut -f4 | sort --parallel={threads} --buffer-size=24G -u > $SIDE2_IDS
             
             echo "Finding line numbers that passed filtering on BOTH sides..."
             # Keep only line numbers present in both files
