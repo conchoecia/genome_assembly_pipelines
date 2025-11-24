@@ -150,13 +150,14 @@ def bin_pairs(pairs_files, chrom_map, bin_size):
     
     return contacts
 
-def save_matrix(contacts, chrom_list, total_bins, bin_size, output_file):
+def save_matrix(contacts, chrom_list, chrom_map, total_bins, bin_size, output_file):
     """
     Save contact matrix as sparse npz file.
     
     Args:
         contacts: dict of (bin1, bin2) -> count
         chrom_list: list of (chrom, phase) tuples
+        chrom_map: dict of (chrom, phase) -> (start_bin, num_bins)
         total_bins: total number of bins
         bin_size: size of bins in bp
         output_file: output .npz file path
@@ -194,18 +195,19 @@ def save_matrix(contacts, chrom_list, total_bins, bin_size, output_file):
     # Save metadata separately with chromosome bin ranges
     metadata_file = output_file.replace('.npz', '.metadata.npz')
     
-    # Create list of bin ranges for each chromosome
-    chrom_bins = []
+    # Extract bin ranges for each chromosome from chrom_map
+    chrom_start_bins = []
+    chrom_num_bins = []
     for chrom, phase in chrom_list:
-        start_bin, num_bins = None, None
-        # Find this chromosome in chrom_map (need to reconstruct from chrom_list)
-        for key, value in contacts.items():
-            pass  # We'll save the chrom_list structure instead
-        chrom_bins.append((chrom, phase))
+        start_bin, num_bins = chrom_map[(chrom, phase)]
+        chrom_start_bins.append(start_bin)
+        chrom_num_bins.append(num_bins)
     
     np.savez(metadata_file,
              chrom_names=chrom_names,
              chrom_list=chrom_list,
+             chrom_start_bins=np.array(chrom_start_bins),
+             chrom_num_bins=np.array(chrom_num_bins),
              bin_size=bin_size,
              total_bins=total_bins)
     
@@ -237,7 +239,7 @@ def main():
     contacts = bin_pairs(args.input, chrom_map, args.bin_size)
     
     # Save matrix
-    save_matrix(contacts, chrom_list, total_bins, args.bin_size, args.output)
+    save_matrix(contacts, chrom_list, chrom_map, total_bins, args.bin_size, args.output)
     
     print("Done!", file=sys.stderr)
 

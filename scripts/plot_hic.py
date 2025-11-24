@@ -36,6 +36,8 @@ def load_matrix(matrix_file):
     
     chrom_names = metadata['chrom_names']
     chrom_list = metadata.get('chrom_list', [])
+    chrom_start_bins = metadata['chrom_start_bins']
+    chrom_num_bins = metadata['chrom_num_bins']
     bin_size = int(metadata['bin_size'])
     total_bins = int(metadata['total_bins'])
     
@@ -44,7 +46,7 @@ def load_matrix(matrix_file):
     print(f"Bin size: {bin_size:,} bp ({bin_size / 1e6:.2f} Mb)", file=sys.stderr)
     print(f"Chromosomes: {len(chrom_names)}", file=sys.stderr)
     
-    return matrix, chrom_names, chrom_list, bin_size, total_bins
+    return matrix, chrom_names, chrom_list, chrom_start_bins, chrom_num_bins, bin_size, total_bins
 
 def symmetrize_matrix(upper_triangle):
     """
@@ -123,15 +125,14 @@ def create_colormap():
     
     return cmap
 
-def get_chromosome_boundaries(chrom_names, chrom_list, bin_size, matrix_shape):
+def get_chromosome_boundaries(chrom_names, chrom_start_bins, chrom_num_bins):
     """
-    Calculate chromosome boundary positions for plotting based on bin ranges.
+    Calculate chromosome boundary positions for plotting based on actual bin ranges.
     
     Args:
         chrom_names: list of chromosome names (e.g., ['1.0', '1.1', '2.0', '2.1', ...])
-        chrom_list: list of (chrom, phase) tuples from metadata
-        bin_size: bin size in bp
-        matrix_shape: shape of the matrix (to verify bin count)
+        chrom_start_bins: array of starting bin indices for each haplotype
+        chrom_num_bins: array of number of bins for each haplotype
     
     Returns:
         tuple: (boundaries, labels, label_positions)
@@ -140,41 +141,44 @@ def get_chromosome_boundaries(chrom_names, chrom_list, bin_size, matrix_shape):
     labels = []
     label_positions = []
     
-    # Track cumulative bins to find boundaries
-    cumulative_bins = 0
     prev_chrom = None
     
-    print(f"\nCalculating chromosome boundaries (matrix shape: {matrix_shape}):", file=sys.stderr)
+    print(f"\nCalculating chromosome boundaries:", file=sys.stderr)
     
     # Each entry in chrom_names corresponds to a haplotype
     # We need to find where chromosome changes occur
     for i, name in enumerate(chrom_names):
+        start_bin = chrom_start_bins[i]
+        num_bins = chrom_num_bins[i]
+        
         # Get base chromosome name (without .0 or .1)
         curr_chrom = name.rsplit('.', 1)[0] if '.' in name else name
         
         # Add boundary when chromosome changes (not just haplotype)
         if prev_chrom is not None and curr_chrom != prev_chrom:
-            boundaries.append(i)
-            print(f"  Boundary at bin {i} (between {prev_chrom} and {curr_chrom})", file=sys.stderr)
+            boundaries.append(start_bin)
+            print(f"  Boundary at bin {start_bin} (between {prev_chrom} and {curr_chrom})", file=sys.stderr)
         
         prev_chrom = curr_chrom
         
-        # Label at center of each haplotype (single bin wide in this representation)
+        # Label at center of each haplotype's bin range
+        center_bin = start_bin + num_bins / 2.0
         labels.append(name)
-        label_positions.append(i + 0.5)
+        label_positions.append(center_bin)
     
     print(f"Found {len(boundaries)} chromosome boundaries\n", file=sys.stderr)
     
     return boundaries, labels, label_positions
 
-def plot_heatmap(matrix, chrom_names, chrom_list, bin_size, output_file):
+def plot_heatmap(matrix, chrom_names, chrom_start_bins, chrom_num_bins, bin_size, output_file):
     """
     Generate Hi-C heatmap with chromosome boundaries and labels.
     
     Args:
         matrix: log-transformed contact matrix
         chrom_names: list of chromosome names
-        chrom_list: list of (chrom, phase) tuples
+        chrom_start_bins: array of starting bin indices for each haplotype
+        chrom_num_bins: array of number of bins for each haplotype
         bin_size: bin size in bp
         output_file: output PNG file path
     """
@@ -195,7 +199,7 @@ def plot_heatmap(matrix, chrom_names, chrom_list, bin_size, output_file):
     
     # Add chromosome boundaries
     boundaries, labels, label_positions = get_chromosome_boundaries(
-        chrom_names, chrom_list, bin_size, matrix.shape)
+        chrom_names, chrom_start_bins, chrom_num_bins)
     
     for boundary in boundaries:
         ax.axhline(boundary, color='black', linewidth=0.5, alpha=0.5)
@@ -238,7 +242,7 @@ def main():
     args = parser.parse_args()
     
     # Load matrix
-    matrix, chrom_names, chrom_list, bin_size, total_bins = load_matrix(args.input)
+    matrix, chrom_names, chrom_list, chrom_start_bins, chrom_num_bins, bin_size, total_bins = load_matrix(args.input)
     
     # Symmetrize matrix
     symmetric_matrix = symmetrize_matrix(matrix)
@@ -247,7 +251,7 @@ def main():
     log_matrix = apply_log_transform(symmetric_matrix)
     
     # Plot heatmap
-    plot_heatmap(log_matrix, chrom_names, chrom_list, bin_size, args.output)
+    plot_heatmap(log_matrix, chrom_names, chrom_start_bins, chrom_num_bins, bin_size, args.output)
     
     print("Done!", file=sys.stderr)
 
