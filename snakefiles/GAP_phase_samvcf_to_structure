@@ -240,8 +240,8 @@ def get_all_pairs_outputs(wildcards):
 
 rule all:
     input:
-        # Aggregate all filtered pairs.gz files for all libraries, PAR beds, and SNP filters
-        [config["tool"] + f"/output/contacts_pairs_filtered/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
+        # Aggregate all .con.gz files for all libraries, PAR beds, and SNP filters
+        [config["tool"] + f"/output/contacts_con/{par}/{snpfilter}/{libtype}.{libname}.con.gz"
          for libtype in config["ACTIVE_LIBTYPES"]
          for libname in config["LIB_NAMES"][libtype]
          for par in config["PAR_BEDs"].keys()
@@ -882,4 +882,42 @@ rule filter_pairs:
             
             echo "Filtering complete"
         fi
+        """
+
+######################################################################
+# Step 6: Convert filtered pairs.gz to .con.gz format
+######################################################################
+
+rule pairs_to_con:
+    """
+    Convert filtered pairs.gz files to .con.gz format for dip-c analysis.
+    
+    Format conversion:
+    - Input (pairs.gz): readID chr1 pos1 chr2 pos2 strand1 strand2 phase1 phase2
+    - Output (con.gz): chr1,pos1,phase1 chr2,pos2,phase2
+    
+    Only processes rows where both phase columns (8 and 9) are not "." (already filtered upstream).
+    Uses pigz for parallel compression with available threads.
+    """
+    input:
+        pairs = config["tool"] + "/output/contacts_pairs_filtered/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
+    output:
+        con = config["tool"] + "/output/contacts_con/{par}/{snpfilter}/{libtype}.{libname}.con.gz"
+    threads: 2
+    resources:
+        mem_mb = 7999,
+        runtime = 60
+    shell:
+        """
+        echo "Converting pairs.gz to con.gz format..."
+        
+        # Extract phased contacts and format as: chr1,pos1,phase1 chr2,pos2,phase2
+        zcat {input.pairs} | \
+          awk -F'\\t' 'BEGIN {{ OFS="\\t" }}
+               !/^#/ && $8 != "." && $9 != "." {{
+                   print $2","$3","$8, $4","$5","$9
+               }}' | \
+          pigz -p {threads} > {output.con}
+        
+        echo "Conversion complete"
         """
