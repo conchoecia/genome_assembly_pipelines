@@ -980,7 +980,7 @@ rule plot_hic_heatmap:
         matrix = config["tool"] + "/output/contact_matrices/{par}/{snpfilter}/{libtype}.{libname}.matrix.npz",
         metadata = config["tool"] + "/output/contact_matrices/{par}/{snpfilter}/{libtype}.{libname}.matrix.metadata.npz"
     output:
-        heatmap = config["tool"] + "/output/hic_heatmaps/{par}/{snpfilter}/{libtype}.{libname}.heatmap.png"
+        heatmap = config["tool"] + "/output/hic_heatmaps/{par}/{snpfilter}/{libtype}.{libname}.par{par}.snp{snpfilter}.bin2.5Mb.heatmap.png"
     threads: 1
     resources:
         mem_mb = 32000,  # Need memory to convert sparse to dense

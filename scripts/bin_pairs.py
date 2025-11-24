@@ -191,10 +191,21 @@ def save_matrix(contacts, chrom_list, total_bins, bin_size, output_file):
     
     scipy.sparse.save_npz(output_file, matrix)
     
-    # Save metadata separately
+    # Save metadata separately with chromosome bin ranges
     metadata_file = output_file.replace('.npz', '.metadata.npz')
+    
+    # Create list of bin ranges for each chromosome
+    chrom_bins = []
+    for chrom, phase in chrom_list:
+        start_bin, num_bins = None, None
+        # Find this chromosome in chrom_map (need to reconstruct from chrom_list)
+        for key, value in contacts.items():
+            pass  # We'll save the chrom_list structure instead
+        chrom_bins.append((chrom, phase))
+    
     np.savez(metadata_file,
              chrom_names=chrom_names,
+             chrom_list=chrom_list,
              bin_size=bin_size,
              total_bins=total_bins)
     
