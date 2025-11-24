@@ -245,6 +245,12 @@ rule all:
          for libtype in config["ACTIVE_LIBTYPES"]
          for libname in config["LIB_NAMES"][libtype]
          for par in config["PAR_BEDs"].keys()
+         for snpfilter in list(config["SNP_FILTER_BEDs"].keys()) + ["nofilter"]],
+        # Aggregate all Hi-C heatmaps
+        [config["tool"] + f"/output/hic_heatmaps/{par}/{snpfilter}/{libtype}.{libname}.heatmap.png"
+         for libtype in config["ACTIVE_LIBTYPES"]
+         for libname in config["LIB_NAMES"][libtype]
+         for par in config["PAR_BEDs"].keys()
          for snpfilter in list(config["SNP_FILTER_BEDs"].keys()) + ["nofilter"]]
 
 ######################################################################
@@ -920,4 +926,68 @@ rule pairs_to_con:
           pigz -p {threads} > {output.con}
         
         echo "Conversion complete"
+        """
+
+######################################################################
+# Step 7: Bin pairs into contact matrix
+######################################################################
+
+rule bin_pairs_to_matrix:
+    """
+    Bin filtered pairs.gz files into contact matrix for visualization.
+    
+    Takes filtered pairs.gz files and bins contacts into 2.5 Mb bins (configurable).
+    Creates diploid chromosome representation (chr1.0, chr1.1, ..., chrX.0, chrX.1, chrY.0, chrY.1).
+    Stores upper triangle only for efficiency.
+    
+    Multiple pairs.gz files (from different libraries/filters) can be merged by providing
+    them all as input - the rule will accumulate all contacts into a single matrix.
+    """
+    input:
+        pairs = config["tool"] + "/output/contacts_pairs_filtered/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
+    output:
+        matrix = config["tool"] + "/output/contact_matrices/{par}/{snpfilter}/{libtype}.{libname}.matrix.npz",
+        metadata = config["tool"] + "/output/contact_matrices/{par}/{snpfilter}/{libtype}.{libname}.matrix.metadata.npz"
+    params:
+        bin_size = 2500000  # 2.5 Mb bins
+    threads: 1
+    resources:
+        mem_mb = 16000,
+        runtime = 120
+    shell:
+        """
+        python {filepath}/../scripts/bin_pairs.py \
+          --input {input.pairs} \
+          --output {output.matrix} \
+          --bin-size {params.bin_size}
+        """
+
+######################################################################
+# Step 8: Plot Hi-C heatmap
+######################################################################
+
+rule plot_hic_heatmap:
+    """
+    Generate Hi-C contact heatmap from binned matrix.
+    
+    Creates a publication-quality heatmap with:
+    - Log-scale coloring (white to #B10000)
+    - Symmetric matrix across diagonal
+    - Chromosome boundaries and labels
+    - Native resolution output (2500x2500 pixels for 2.5 Mb bins)
+    """
+    input:
+        matrix = config["tool"] + "/output/contact_matrices/{par}/{snpfilter}/{libtype}.{libname}.matrix.npz",
+        metadata = config["tool"] + "/output/contact_matrices/{par}/{snpfilter}/{libtype}.{libname}.matrix.metadata.npz"
+    output:
+        heatmap = config["tool"] + "/output/hic_heatmaps/{par}/{snpfilter}/{libtype}.{libname}.heatmap.png"
+    threads: 1
+    resources:
+        mem_mb = 32000,  # Need memory to convert sparse to dense
+        runtime = 60
+    shell:
+        """
+        python {filepath}/../scripts/plot_hic.py \
+          --input {input.matrix} \
+          --output {output.heatmap}
         """
