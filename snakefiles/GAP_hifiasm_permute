@@ -57,8 +57,8 @@ if "hic" in config:
     if len(failed) > 0:
         raise Exception("The following Hi-C files do not exist:\n" + "\n".join(failed))
     # if they exist, proceed
-    hic_R1_string = "--h1 " + ",".join([filepath for filepath in config["hic"][lib]["R1"] for lib in config["hic"]])
-    hic_R2_string = "--h2 " + ",".join([filepath for filepath in config["hic"][lib]["R2"] for lib in config["hic"]])
+    hic_R1_string = "--h1 " + ",".join([filepath for lib in config["hic"] for filepath in config["hic"][lib]["R1"]])
+    hic_R2_string = "--h2 " + ",".join([filepath for lib in config["hic"] for filepath in config["hic"][lib]["R2"]])
     config["hic_dict"]["HiC"] = hic_R1_string + " " + hic_R2_string
 
 # set up the ultralong parameters
@@ -303,7 +303,7 @@ rule base_gfa_to_fasta:
     input:
         gfa = "step1_hifiasm/base/{base}/" + config["prefix"] + ".bp.hap{hap}.p_ctg.gfa",
     output:
-        gfa = temp("step2_assemblies/base/" + config["prefix"] +  ".{base}.hap{hap}.p_ctg.fasta")
+        gfa = "step2_assemblies/base/" + config["prefix"] +  ".{base}.hap{hap}.p_ctg.fasta"
     threads: 1
     resources:
         mem_mb = 4000,
@@ -319,7 +319,7 @@ rule ul_gfa_to_fasta:
     input:
         gfa = "step1_hifiasm/ul_analyses/{ul_analysis}/" + config["prefix"] + ".bp.hap{hap}.p_ctg.gfa",
     output:
-        gfa = temp("step2_assemblies/ul_analyses/" + config["prefix"] +  ".{ul_analysis}.hap{hap}.p_ctg.fasta")
+        gfa = "step2_assemblies/ul_analyses/" + config["prefix"] +  ".{ul_analysis}.hap{hap}.p_ctg.fasta"
     threads: 1
     resources:
         mem_mb = 4000,
@@ -335,7 +335,7 @@ rule hic_gfa_to_fasta:
     input:
         gfa = "step1_hifiasm/hic_analyses/{hic_analysis}/" + config["prefix"] + ".hic.hap{hap}.p_ctg.gfa",
     output:
-        gfa = temp("step2_assemblies/hic_analyses/" + config["prefix"] +  ".{hic_analysis}.hap{hap}.p_ctg.fasta")
+        gfa = "step2_assemblies/hic_analyses/" + config["prefix"] +  ".{hic_analysis}.hap{hap}.p_ctg.fasta"
     threads: 1
     resources:
         mem_mb = 4000,
