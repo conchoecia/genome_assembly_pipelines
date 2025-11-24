@@ -230,6 +230,9 @@ rule base_assemble:
         """
 
 rule UL_assemblies:
+    """
+    TODO - needs to be fixed to have the same setup as the base and Hi-C assemblies
+    """
     input:
         LR  = config["hifi_fastq_final"],
         ec_bin = expand("step1_hifiasm/base/{base}/" + config["prefix"] + ".ec.bin", base = config["base_analyses"]),
