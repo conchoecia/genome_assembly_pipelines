@@ -721,10 +721,10 @@ rule filter_pairs:
         bed = lambda wildcards: config["SNP_FILTER_BEDs"][wildcards.snpfilter]["path"] if wildcards.snpfilter != "nofilter" else []
     output:
         filtered = config["tool"] + "/output/contacts_pairs_filtered/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
-    threads: 1
+    threads: 4
     resources:
-        mem_mb = 7999,
-        runtime = 59
+        mem_mb = 32000,
+        runtime = 180
     shell:
         """
         if [ "{wildcards.snpfilter}" = "nofilter" ]; then
@@ -737,24 +737,51 @@ rule filter_pairs:
             # Create output directory
             mkdir -p $(dirname {output.filtered})
             
-            # Temporary files in TMPDIR
+            # Temporary files in TMPDIR - materialize input files
+            PAIRS_TMP=$TMPDIR/pairs_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.gz
+            BED_TMP=$TMPDIR/bed_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.bed
+            SIDE1_BED=$TMPDIR/side1_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.bed
+            SIDE2_BED=$TMPDIR/side2_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.bed
             SIDE1_IDS=$TMPDIR/side1_ids_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.txt
             SIDE2_IDS=$TMPDIR/side2_ids_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.txt
             KEEP_IDS=$TMPDIR/keep_ids_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.txt
             
-            echo "Finding line numbers where side 1 intersects BED regions..."
+            echo "Copying input files to TMPDIR for faster I/O..."
+            cp {input.pairs} $PAIRS_TMP
+            cp {input.bed} $BED_TMP
+            
+            echo "Verifying file integrity with md5sum..."
+            md5sum {input.pairs} | awk '{{print $1}}' > $TMPDIR/original_pairs.md5
+            md5sum $PAIRS_TMP | awk '{{print $1}}' > $TMPDIR/copied_pairs.md5
+            md5sum {input.bed} | awk '{{print $1}}' > $TMPDIR/original_bed.md5
+            md5sum $BED_TMP | awk '{{print $1}}' > $TMPDIR/copied_bed.md5
+            
+            if ! diff -q $TMPDIR/original_pairs.md5 $TMPDIR/copied_pairs.md5 > /dev/null; then
+                echo "ERROR: md5sum mismatch for pairs file after copy to TMPDIR"
+                exit 1
+            fi
+            if ! diff -q $TMPDIR/original_bed.md5 $TMPDIR/copied_bed.md5 > /dev/null; then
+                echo "ERROR: md5sum mismatch for BED file after copy to TMPDIR"
+                exit 1
+            fi
+            echo "md5sum verification passed for both files"
+            
+            echo "Decompressing pairs and creating BED files with line numbers..."
             # Side 1: chrom (chr2=$2), chromStart (pos3-1), chromEnd (pos3=$3), name (line number=NR)
-            zcat {input.pairs} | grep -v '^#' | \
-              awk 'BEGIN{{OFS="\t"}} {{print $2, $3-1, $3, NR}}' | \
-              {BEDTOOLS} intersect -a - -b {input.bed} -wa | \
-              cut -f4 | sort -n -u > $SIDE1_IDS
+            pigz -dc -p {threads} $PAIRS_TMP | grep -v '^#' | \
+              awk 'BEGIN{{OFS="\t"}} {{print $2, $3-1, $3, NR}}' > $SIDE1_BED
+            
+            # Side 2: chrom (chr4=$4), chromStart (pos5-1), chromEnd (pos5=$5), name (line number=NR)
+            pigz -dc -p {threads} $PAIRS_TMP | grep -v '^#' | \
+              awk 'BEGIN{{OFS="\t"}} {{print $4, $5-1, $5, NR}}' > $SIDE2_BED
+            
+            echo "Finding line numbers where side 1 intersects BED regions..."
+            {BEDTOOLS} intersect -a $SIDE1_BED -b $BED_TMP -wa | \
+              cut -f4 | sort --parallel={threads} --buffer-size=24G -n -u > $SIDE1_IDS
             
             echo "Finding line numbers where side 2 intersects BED regions..."
-            # Side 2: chrom (chr4=$4), chromStart (pos5-1), chromEnd (pos5=$5), name (line number=NR)
-            zcat {input.pairs} | grep -v '^#' | \
-              awk 'BEGIN{{OFS="\t"}} {{print $4, $5-1, $5, NR}}' | \
-              {BEDTOOLS} intersect -a - -b {input.bed} -wa | \
-              cut -f4 | sort -n -u > $SIDE2_IDS
+            {BEDTOOLS} intersect -a $SIDE2_BED -b $BED_TMP -wa | \
+              cut -f4 | sort --parallel={threads} --buffer-size=24G -n -u > $SIDE2_IDS
             
             echo "Finding line numbers that passed filtering on BOTH sides..."
             # Keep only line numbers present in both files
@@ -765,14 +792,14 @@ rule filter_pairs:
             
             echo "Filtering pairs file..."
             # Extract header and the specific line numbers
-            zcat {input.pairs} | \
+            pigz -dc -p {threads} $PAIRS_TMP | \
               awk 'BEGIN{{while((getline < "'$KEEP_IDS'") > 0) keep[$1]=1}}
                    /^#/ {{print; next}}
                    {{line++; if(keep[line]) print}}' | \
-              {BGZIP} > {output.filtered}
+              pigz -p {threads} > {output.filtered}
             
             # Clean up temporary files
-            rm -f $SIDE1_IDS $SIDE2_IDS $KEEP_IDS
+            rm -f $PAIRS_TMP $BED_TMP $SIDE1_BED $SIDE2_BED $SIDE1_IDS $SIDE2_IDS $KEEP_IDS
             
             echo "Filtering complete"
         fi
