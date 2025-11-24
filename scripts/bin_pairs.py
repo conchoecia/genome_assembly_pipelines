@@ -21,9 +21,9 @@ def parse_header(pairs_file):
     Parse chromosome information from pairs.gz header.
     
     Returns:
-        dict: chromosome name -> length mapping
+        list: ordered list of (chromosome name, length) tuples
     """
-    chroms = {}
+    chroms = []
     with gzip.open(pairs_file, 'rt') as f:
         for line in f:
             if not line.startswith('#'):
@@ -34,7 +34,7 @@ def parse_header(pairs_file):
                 if len(parts) >= 3:
                     chrom_name = parts[1]
                     chrom_length = int(parts[2])
-                    chroms[chrom_name] = chrom_length
+                    chroms.append((chrom_name, chrom_length))
     return chroms
 
 def create_diploid_chromosome_map(chroms, bin_size):
@@ -42,7 +42,7 @@ def create_diploid_chromosome_map(chroms, bin_size):
     Create mapping from (chrom, phase) to bin indices.
     
     Args:
-        chroms: dict of chromosome name -> length
+        chroms: ordered list of (chromosome name, length) tuples
         bin_size: size of bins in bp
     
     Returns:
@@ -55,14 +55,21 @@ def create_diploid_chromosome_map(chroms, bin_size):
     chrom_list = []
     current_bin = 0
     
+    print("\nChromosome bin allocation:", file=sys.stderr)
+    
     # Create diploid chromosomes: chr1.0, chr1.1, chr2.0, chr2.1, etc.
-    for chrom_name, chrom_length in chroms.items():
+    # Iterate over list to preserve order from pairs.gz header
+    for chrom_name, chrom_length in chroms:
         num_bins = (chrom_length + bin_size - 1) // bin_size  # Ceiling division
         
         for phase in [0, 1]:
             chrom_map[(chrom_name, phase)] = (current_bin, num_bins)
             chrom_list.append((chrom_name, phase))
+            print(f"  {chrom_name}.{phase}: bins {current_bin}-{current_bin + num_bins - 1} ({num_bins} bins, {chrom_length:,} bp)", 
+                  file=sys.stderr)
             current_bin += num_bins
+    
+    print(f"\nTotal bins allocated: {current_bin:,}\n", file=sys.stderr)
     
     return chrom_map, chrom_list, current_bin
 
