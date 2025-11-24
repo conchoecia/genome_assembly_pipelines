@@ -690,15 +690,44 @@ rule merge_and_sort_pairs:
         BUFFER_SIZE=$(echo "{resources.mem_mb} * 0.8" | bc | cut -d. -f1)
 
         # Extract header from first file
-        zcat {input[0]} | grep '^#' | pigz -p {threads} > {output.merged}
+        zcat {input[0]} | grep '^#' | {BGZIP} > {output.merged}
 
         # Merge all parts (excluding headers), sort, and append
         zcat {input} | \
         grep -v '^#' | \
         sort -k2,2V -k4,4V -k3,3n -k5,5n --parallel={threads} --buffer-size=${{BUFFER_SIZE}}M | \
-        pigz -p {threads} >> {output.merged}
+        {BGZIP} >> {output.merged}
 
         echo "Merge and sort job finished at $(date)"
+        """
+
+rule filter_phased_pairs:
+    """
+    Filter merged pairs.gz to keep only rows where BOTH phase columns (8 and 9) are not ".".
+    This removes unphaseable contacts before applying SNP-based filtering.
+    
+    Keeps the header lines (starting with #) and only data rows with valid phasing info.
+    """
+    input:
+        pairs = config["tool"] + "/output/contacts_pairs_merged/{par}/{libtype}.{libname}.merged.sorted.pairs.gz"
+    output:
+        phased = config["tool"] + "/output/contacts_pairs_phased/{par}/{libtype}.{libname}.phased.pairs.gz"
+    threads: 4
+    resources:
+        mem_mb = 8000,
+        runtime = 60
+    shell:
+        """
+        echo "Filtering pairs to keep only phased contacts..."
+        
+        # Keep header and filter data rows where columns 8 AND 9 are not "."
+        zcat {input.pairs} | \
+          awk 'BEGIN{{OFS="\\t"}} 
+               /^#/ {{print; next}}
+               $8 != "." && $9 != "." {{print}}' | \
+          {BGZIP} > {output.phased}
+        
+        echo "Phased pairs filtering complete"
         """
 
 rule filter_pairs:
@@ -717,7 +746,7 @@ rule filter_pairs:
     This approach uses line numbers instead of read IDs since all read IDs may be "."
     """
     input:
-        pairs = config["tool"] + "/output/contacts_pairs_merged/{par}/{libtype}.{libname}.merged.sorted.pairs.gz",
+        pairs = config["tool"] + "/output/contacts_pairs_phased/{par}/{libtype}.{libname}.phased.pairs.gz",
         bed = lambda wildcards: config["SNP_FILTER_BEDs"][wildcards.snpfilter]["path"] if wildcards.snpfilter != "nofilter" else []
     output:
         filtered = config["tool"] + "/output/contacts_pairs_filtered/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
