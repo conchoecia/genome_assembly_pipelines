@@ -715,19 +715,65 @@ rule filter_phased_pairs:
     threads: 4
     resources:
         mem_mb = 8000,
-        runtime = 60
+        runtime = 120
     shell:
         """
         echo "Filtering pairs to keep only phased contacts..."
         
         # Keep header and filter data rows where columns 8 AND 9 are not "."
         zcat {input.pairs} | \
-          awk 'BEGIN{{OFS="\\t"}} 
+          awk 'BEGIN{{OFS="\\t"}}
                /^#/ {{print; next}}
                $8 != "." && $9 != "." {{print}}' | \
           {BGZIP} > {output.phased}
         
         echo "Phased pairs filtering complete"
+        """
+
+rule make_pairs_side1_bed:
+    """
+    Create BED file for side 1 (first contact end) with line numbers.
+    Side 1: chrom (chr2=$2), chromStart (pos3-1), chromEnd (pos3=$3), name (line number=NR)
+    
+    This is computed once per library+PAR combination and reused across all SNP filters.
+    """
+    input:
+        pairs = config["tool"] + "/output/contacts_pairs_phased/{par}/{libtype}.{libname}.phased.pairs.gz"
+    output:
+        side1 = config["tool"] + "/output/contacts_pairs_sides/{par}/{libtype}.{libname}.side1.bed"
+    threads: 2
+    resources:
+        mem_mb = 8000,
+        runtime = 60
+    shell:
+        """
+        echo "Creating side 1 BED file with line numbers..."
+        zcat {input.pairs} | grep -v '^#' | \
+          awk 'BEGIN{{OFS="\\t"}} {{print $2, $3-1, $3, NR}}' > {output.side1}
+        echo "Side 1 BED file created"
+        """
+
+rule make_pairs_side2_bed:
+    """
+    Create BED file for side 2 (second contact end) with line numbers.
+    Side 2: chrom (chr4=$4), chromStart (pos5-1), chromEnd (pos5=$5), name (line number=NR)
+    
+    This is computed once per library+PAR combination and reused across all SNP filters.
+    """
+    input:
+        pairs = config["tool"] + "/output/contacts_pairs_phased/{par}/{libtype}.{libname}.phased.pairs.gz"
+    output:
+        side2 = config["tool"] + "/output/contacts_pairs_sides/{par}/{libtype}.{libname}.side2.bed"
+    threads: 2
+    resources:
+        mem_mb = 8000,
+        runtime = 60
+    shell:
+        """
+        echo "Creating side 2 BED file with line numbers..."
+        zcat {input.pairs} | grep -v '^#' | \
+          awk 'BEGIN{{OFS="\\t"}} {{print $4, $5-1, $5, NR}}' > {output.side2}
+        echo "Side 2 BED file created"
         """
 
 rule filter_pairs:
@@ -738,15 +784,18 @@ rule filter_pairs:
     Special case: snpfilter='nofilter' passes through unfiltered.
     
     Process:
-    1. Find all line numbers where side 1 (chr2, pos3) intersects the BED regions
-    2. Find all line numbers where side 2 (chr4, pos5) intersects the BED regions
-    3. Keep only line numbers that passed filtering on BOTH sides
-    4. Extract header and those specific lines from the original pairs file
+    1. Use precomputed side1 and side2 BED files (created once per library+PAR)
+    2. Find line numbers where side 1 intersects the BED regions
+    3. Find line numbers where side 2 intersects the BED regions
+    4. Keep only line numbers that passed filtering on BOTH sides
+    5. Extract header and those specific lines from the original pairs file
     
     This approach uses line numbers instead of read IDs since all read IDs may be "."
     """
     input:
         pairs = config["tool"] + "/output/contacts_pairs_phased/{par}/{libtype}.{libname}.phased.pairs.gz",
+        side1 = config["tool"] + "/output/contacts_pairs_sides/{par}/{libtype}.{libname}.side1.bed",
+        side2 = config["tool"] + "/output/contacts_pairs_sides/{par}/{libtype}.{libname}.side2.bed",
         bed = lambda wildcards: config["SNP_FILTER_BEDs"][wildcards.snpfilter]["path"] if wildcards.snpfilter != "nofilter" else []
     output:
         filtered = config["tool"] + "/output/contacts_pairs_filtered/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
@@ -766,7 +815,7 @@ rule filter_pairs:
             # Create output directory
             mkdir -p $(dirname {output.filtered})
             
-            # Temporary files in TMPDIR - materialize input files
+            # Temporary files in TMPDIR
             PAIRS_TMP=$TMPDIR/pairs_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.gz
             BED_TMP=$TMPDIR/bed_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.bed
             SIDE1_BED=$TMPDIR/side1_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.bed
@@ -778,6 +827,8 @@ rule filter_pairs:
             echo "Copying input files to TMPDIR for faster I/O..."
             cp {input.pairs} $PAIRS_TMP
             cp {input.bed} $BED_TMP
+            cp {input.side1} $SIDE1_BED
+            cp {input.side2} $SIDE2_BED
             
             echo "Verifying file integrity with md5sum..."
             ORIGINAL_PAIRS_MD5=$TMPDIR/original_pairs_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.md5
@@ -802,15 +853,6 @@ rule filter_pairs:
             
             # Clean up md5 files
             rm -f $ORIGINAL_PAIRS_MD5 $COPIED_PAIRS_MD5 $ORIGINAL_BED_MD5 $COPIED_BED_MD5
-            
-            echo "Decompressing pairs and creating BED files with line numbers..."
-            # Side 1: chrom (chr2=$2), chromStart (pos3-1), chromEnd (pos3=$3), name (line number=NR)
-            pigz -dc -p {threads} $PAIRS_TMP | grep -v '^#' | \
-              awk 'BEGIN{{OFS="\t"}} {{print $2, $3-1, $3, NR}}' > $SIDE1_BED
-            
-            # Side 2: chrom (chr4=$4), chromStart (pos5-1), chromEnd (pos5=$5), name (line number=NR)
-            pigz -dc -p {threads} $PAIRS_TMP | grep -v '^#' | \
-              awk 'BEGIN{{OFS="\t"}} {{print $4, $5-1, $5, NR}}' > $SIDE2_BED
             
             echo "Finding line numbers where side 1 intersects BED regions..."
             {BEDTOOLS} intersect -a $SIDE1_BED -b $BED_TMP -wa | \
