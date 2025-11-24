@@ -751,20 +751,28 @@ rule filter_pairs:
             cp {input.bed} $BED_TMP
             
             echo "Verifying file integrity with md5sum..."
-            md5sum {input.pairs} | awk '{{print $1}}' > $TMPDIR/original_pairs.md5
-            md5sum $PAIRS_TMP | awk '{{print $1}}' > $TMPDIR/copied_pairs.md5
-            md5sum {input.bed} | awk '{{print $1}}' > $TMPDIR/original_bed.md5
-            md5sum $BED_TMP | awk '{{print $1}}' > $TMPDIR/copied_bed.md5
+            ORIGINAL_PAIRS_MD5=$TMPDIR/original_pairs_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.md5
+            COPIED_PAIRS_MD5=$TMPDIR/copied_pairs_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.md5
+            ORIGINAL_BED_MD5=$TMPDIR/original_bed_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.md5
+            COPIED_BED_MD5=$TMPDIR/copied_bed_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.md5
             
-            if ! diff -q $TMPDIR/original_pairs.md5 $TMPDIR/copied_pairs.md5 > /dev/null; then
+            md5sum {input.pairs} | awk '{{print $1}}' > $ORIGINAL_PAIRS_MD5
+            md5sum $PAIRS_TMP | awk '{{print $1}}' > $COPIED_PAIRS_MD5
+            md5sum {input.bed} | awk '{{print $1}}' > $ORIGINAL_BED_MD5
+            md5sum $BED_TMP | awk '{{print $1}}' > $COPIED_BED_MD5
+            
+            if ! diff -q $ORIGINAL_PAIRS_MD5 $COPIED_PAIRS_MD5 > /dev/null; then
                 echo "ERROR: md5sum mismatch for pairs file after copy to TMPDIR"
                 exit 1
             fi
-            if ! diff -q $TMPDIR/original_bed.md5 $TMPDIR/copied_bed.md5 > /dev/null; then
+            if ! diff -q $ORIGINAL_BED_MD5 $COPIED_BED_MD5 > /dev/null; then
                 echo "ERROR: md5sum mismatch for BED file after copy to TMPDIR"
                 exit 1
             fi
             echo "md5sum verification passed for both files"
+            
+            # Clean up md5 files
+            rm -f $ORIGINAL_PAIRS_MD5 $COPIED_PAIRS_MD5 $ORIGINAL_BED_MD5 $COPIED_BED_MD5
             
             echo "Decompressing pairs and creating BED files with line numbers..."
             # Side 1: chrom (chr2=$2), chromStart (pos3-1), chromEnd (pos3=$3), name (line number=NR)
