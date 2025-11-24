@@ -7,7 +7,8 @@ all: bin/fasta_stats dependencies/SALSA/run_pipeline.py \
      bin/pilon-1.23.jar dependencies/pairix/bin/pairix \
      bin/fqjt bin/minlen_pair \
      dependencies/miniprot bin/sambamba \
-     bin/k8 dependencies/hickit/hickit.js bin/fastp
+     bin/k8 dependencies/hickit/hickit.js bin/fastp \
+     bin/bedtools
 
 bin/fqjt: src/fq-jt.c
 	mkdir -p bin
@@ -90,5 +91,15 @@ bin/fastp:
 	wget -O bin/fastp http://opengene.org/fastp/fastp
 	chmod +x bin/fastp
 	@echo "fastp installed successfully to bin/fastp"
+
+bin/bedtools:
+	@echo "Installing bedtools static binary for Linux..."
+	@mkdir -p bin
+	@echo "Downloading bedtools v2.31.0 static binary..."
+	wget -O bin/bedtools https://github.com/arq5x/bedtools2/releases/download/v2.31.0/bedtools.static
+	chmod +x bin/bedtools
+	@echo "bedtools installed successfully to bin/bedtools"
+
+
 
 

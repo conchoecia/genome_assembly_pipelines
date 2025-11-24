@@ -60,6 +60,7 @@ K8 = os.path.join(filepath, "../bin/k8")
 HICKIT_DIR = os.path.join(filepath, "../dependencies/hickit")
 HICKIT_JS = os.path.join(HICKIT_DIR, "hickit.js")
 HICKIT_BIN = os.path.join(HICKIT_DIR, "hickit")
+BEDTOOLS = os.path.join(filepath, "../bin/bedtools")
 
 ###############################################################################
 # Parse library configuration - supports both old and new config formats
@@ -660,6 +661,9 @@ rule merge_and_sort_pairs:
     4. Compresses with pigz
     
     This creates a single merged and sorted pairs.gz file per library+PAR combination.
+    
+    Memory estimation: ~26x the total compressed input size
+    (Based on empirical observation: 6.8GB compressed → 174GB RAM needed)
     """
     input:
         lambda wildcards: [
@@ -675,11 +679,14 @@ rule merge_and_sort_pairs:
         merged = config["tool"] + "/output/contacts_pairs_merged/{par}/{libtype}.{libname}.merged.sorted.pairs.gz"
     threads: 64
     resources:
-        mem_mb = 320000,  # 300G buffer + overhead
-        runtime = 480     # 8 hours
+        mem_mb = lambda wildcards, input: int(sum(os.path.getsize(f) for f in input) / (1024**2) * 26 * 1.5),
+        runtime = lambda wildcards, input: int(sum(os.path.getsize(f) for f in input) / (1024**3) * 22) # 22 minutes per GB of pairs.gz. Should take 11 minutes per GB
     shell:
         """
         echo "Merge and sort job started at $(date)"
+        
+        # Calculate buffer size (80% of allocated memory for sort buffer)
+        BUFFER_SIZE=$(echo "{resources.mem_mb} * 0.8" | bc | cut -d. -f1)
 
         # Extract header from first file
         zcat {input[0]} | grep '^#' | pigz -p {threads} > {output.merged}
@@ -687,7 +694,7 @@ rule merge_and_sort_pairs:
         # Merge all parts (excluding headers), sort, and append
         zcat {input} | \
         grep -v '^#' | \
-        sort -k2,2V -k4,4V -k3,3n -k5,5n --parallel={threads} --buffer-size=300G | \
+        sort -k2,2V -k4,4V -k3,3n -k5,5n --parallel={threads} --buffer-size=${{BUFFER_SIZE}}M | \
         pigz -p {threads} >> {output.merged}
 
         echo "Merge and sort job finished at $(date)"
@@ -745,7 +752,7 @@ rule filter_pairs:
                      # Then carry phase0 ($8) and phase1 ($9) through as extra columns
                      print $2, $3-1, $3, $4, $5-1, $5, $1, ".", $6, $7, $8, $9
                    }}' | \
-              bedtools pairtobed -a stdin -b {input.bed} -type both \
+              {BEDTOOLS} pairtobed -a stdin -b {input.bed} -type both \
               > $BEDPE_TMP
             
             # 3) BEDPE back to pairs (restore columns 8 and 9: phase0/phase1)
