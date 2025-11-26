@@ -9,6 +9,9 @@ VCFs:
   unfiltered:
     path: "/path/to/vcf/file/to/phase/output.vcf.gz"
     note: "These are the unfiltered variants directly from HapCUT2."
+  Q20FiltCommon:
+    path: "/path/to/q20_filtered_common_variants.vcf.gz"
+    note: "These are the Q20 filtered variants present in the NCBI common variants DB."
 
 PHASED_VCFs: # This is only used in the GAP_phase_samvcf_to_structure module. Won't do anything in GAP_phase module.
   unfilteredPhased:

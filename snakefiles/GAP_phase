@@ -124,32 +124,97 @@ config["ACTIVE_LIBTYPES"] = list(config["LIB_NAMES"].keys())
 # make sure everything in the config["CHROMS"] is a string
 config["CHROMS"] = [str(chrom) for chrom in config["CHROMS"]]
 
+###############################################################################
+# Parse VCF configuration - supports both old and new config formats
+# NEW: Multiple VCFs can be processed in parallel
+###############################################################################
+
+# Check if using new VCF format (multiple VCFs)
+if "VCFs" in config:
+    # New format: config["VCFs"][vcfname] = {path: "/path/to.vcf", note: "..."}
+    config["VCF_STRUCTURE"] = "new"
+    
+    # Ensure config["VCFs"] is a dict
+    if not isinstance(config["VCFs"], dict):
+        raise ValueError("config['VCFs'] must be a dictionary")
+    
+    # Extract VCF names and paths
+    config["VCF_NAMES"] = list(config["VCFs"].keys())
+    config["VCF_PATHS"] = {name: config["VCFs"][name]["path"] for name in config["VCF_NAMES"]}
+    
+    # Validate VCF names match pattern [A-Za-z0-9]+
+    import re
+    for vcfname in config["VCF_NAMES"]:
+        if not re.match(r'^[A-Za-z0-9]+$', vcfname):
+            raise ValueError(
+                f"\n\nERROR: VCF name '{vcfname}' contains invalid characters!\n"
+                f"VCF names must only contain letters and numbers [A-Za-z0-9]+\n"
+                f"No underscores, hyphens, or special characters allowed.\n\n"
+            )
+    
+    # Validate VCF file paths exist
+    for vcfname, vcf_path in config["VCF_PATHS"].items():
+        if not os.path.exists(vcf_path):
+            raise ValueError(
+                f"\n\nERROR: VCF file does not exist!\n"
+                f"VCF name: {vcfname}\n"
+                f"Path: {vcf_path}\n\n"
+            )
+
+elif "VCFfile" in config:
+    # Old format: convert to new format for backward compatibility
+    config["VCF_STRUCTURE"] = "old"
+    print("\nWARNING: Using deprecated 'VCFfile' config format.")
+    print("Please update your config to use 'VCFs' dictionary format.")
+    print("See config_GAP_phase_multi_library.yaml for examples.\n")
+    
+    # Convert to new format with default name "default"
+    config["VCFs"] = {"default": {"path": config["VCFfile"], "note": "Converted from old VCFfile format"}}
+    config["VCF_NAMES"] = ["default"]
+    config["VCF_PATHS"] = {"default": config["VCFfile"]}
+else:
+    raise ValueError("Config must specify either 'VCFs' (new format) or 'VCFfile' (deprecated)")
+
 wildcard_constraints:
     libtype="[A-Za-z]+",
     libname="[A-Za-z0-9]+",
-    datatype="[A-Za-z]+"
+    datatype="[A-Za-z]+",
+    vcfname="[A-Za-z0-9]+"
 
 rule all:
     input:
-        expand(config["tool"] + "/output/vcf/orig/split/{chrom}.vcf",
-                    chrom=config["CHROMS"]),
-        expand(config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag",
-               chrom = config["CHROMS"]),
-        expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
-               chrom = config["CHROMS"]),
+        # Per-VCF outputs
+        expand(config["tool"] + "/output/{vcfname}/vcf/orig/split/{chrom}.vcf",
+                    vcfname=config["VCF_NAMES"], chrom=config["CHROMS"]),
+        expand(config["tool"] + "/output/{vcfname}/hapcut2_evidence/concatenated/{chrom}.frag",
+               vcfname=config["VCF_NAMES"], chrom = config["CHROMS"]),
+        expand(config["tool"] + "/output/{vcfname}/hapcut2_results/{chrom}.hap",
+               vcfname=config["VCF_NAMES"], chrom = config["CHROMS"]),
 
-        config["tool"] + "/output/final_output/complete_assembly.hap.gz",
-        config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz",
-        config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt",
-        config["tool"] + "/output/final_output/hapcut_largest_block_final_table.txt",
-        config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
-        expand(config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz", chrom = config["CHROMS"]),
+        expand(config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.gz",
+               vcfname=config["VCF_NAMES"]),
+        expand(config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.phased.vcf.gz",
+               vcfname=config["VCF_NAMES"]),
+        expand(config["tool"] + "/output/{vcfname}/final_output/hapcut_largest_blocks_per_sca.txt",
+               vcfname=config["VCF_NAMES"]),
+        expand(config["tool"] + "/output/{vcfname}/final_output/hapcut_largest_block_final_table.txt",
+               vcfname=config["VCF_NAMES"]),
+        expand(config["tool"] + "/output/{vcfname}/final_output/largest_blocks.hap.phased.vcf.gz",
+               vcfname=config["VCF_NAMES"]),
+        expand(config["tool"] + "/output/{vcfname}/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
+               vcfname=config["VCF_NAMES"], chrom = config["CHROMS"]),
 
-        # also generate haplotagged bam files:
-        expand(config["tool"] + "/output/final_output/{libtype}_haplotagged.bam",
-               libtype = config["ACTIVE_LIBTYPES"]),
-        expand(config["tool"] + "/output/final_output/{libtype}_haplotagged.bam.bai",
-               libtype = config["ACTIVE_LIBTYPES"])
+        # also generate haplotagged bam files (per VCF and per library type):
+        expand(config["tool"] + "/output/{vcfname}/final_output/{libtype}_haplotagged.bam",
+               vcfname=config["VCF_NAMES"], libtype = config["ACTIVE_LIBTYPES"]),
+        expand(config["tool"] + "/output/{vcfname}/final_output/{libtype}_haplotagged.bam.bai",
+               vcfname=config["VCF_NAMES"], libtype = config["ACTIVE_LIBTYPES"]),
+
+        # Multi-VCF summary reports (only if multiple VCFs)
+        config["tool"] + "/output/multi_vcf_summary/genome_wide_summary.txt" if len(config["VCF_NAMES"]) > 1 else [],
+        config["tool"] + "/output/multi_vcf_summary/per_chromosome_comparison.txt" if len(config["VCF_NAMES"]) > 1 else [],
+        config["tool"] + "/output/multi_vcf_summary/phase_block_statistics.txt" if len(config["VCF_NAMES"]) > 1 else [],
+        config["tool"] + "/output/multi_vcf_summary/vcf_comparison.txt" if len(config["VCF_NAMES"]) > 1 else []
 
 
 ######################################################################
@@ -453,10 +518,11 @@ rule update_vcf_dict:
     """
     input:
         seqdict = config["tool"] + "/input/ref/input.ref.dict",
-        vcf = config["VCFfile"],
         picard = config["PICARD"]
     output:
-        vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.vcf"
+        vcf = config["tool"] + "/output/{vcfname}/vcf/orig_sorted/input.header_updated.vcf"
+    params:
+        vcf = lambda wildcards: config["VCF_PATHS"][wildcards.vcfname]
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -464,7 +530,7 @@ rule update_vcf_dict:
     shell:
         """
         java -jar -Xmx1g {input.picard} UpdateVcfSequenceDictionary \
-          -I {input.vcf} \
+          -I {params.vcf} \
           -O {output.vcf} \
           -SD {input.seqdict}
         """
@@ -486,9 +552,9 @@ rule filter_vcf:
      - n/6 too many, just remove this
     """
     input:
-        vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.vcf"
+        vcf = config["tool"] + "/output/{vcfname}/vcf/orig_sorted/input.header_updated.vcf"
     output:
-        vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.filtered.vcf"
+        vcf = config["tool"] + "/output/{vcfname}/vcf/orig_sorted/input.header_updated.filtered.vcf"
     threads: 1
     resources:
         mem_mb  = 4000,
@@ -515,11 +581,11 @@ rule sort_input_vcf:
       Now it's like this:   -INPUT {input.bam}
     """
     input:
-        vcf = config["tool"] + "/output/vcf/orig_sorted/input.header_updated.filtered.vcf",
+        vcf = config["tool"] + "/output/{vcfname}/vcf/orig_sorted/input.header_updated.filtered.vcf",
         picard  = config["PICARD"],
         seqdict = config["tool"] + "/input/ref/input.ref.dict"
     output:
-        vcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf"
+        vcf = config["tool"] + "/output/{vcfname}/vcf/orig_sorted/input.sorted.vcf"
     threads: 1
     resources:
         mem_mb  = 4000,
@@ -535,9 +601,9 @@ rule sort_input_vcf:
 # compress the vcf file
 rule split_vcf_into_chr_zip:
     input:
-        vcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf"
+        vcf = config["tool"] + "/output/{vcfname}/vcf/orig_sorted/input.sorted.vcf"
     output:
-        tvcf = temp(config["tool"] + "/output/vcf/orig/temp.vcf.gz")
+        tvcf = temp(config["tool"] + "/output/{vcfname}/vcf/orig/temp.vcf.gz")
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -550,9 +616,9 @@ rule split_vcf_into_chr_zip:
 # index the vcf file
 rule index_vcf:
     input:
-        tvcf = config["tool"] + "/output/vcf/orig/temp.vcf.gz"
+        tvcf = config["tool"] + "/output/{vcfname}/vcf/orig/temp.vcf.gz"
     output:
-        index = temp(config["tool"] + "/output/vcf/orig/temp.vcf.gz.tbi"),
+        index = temp(config["tool"] + "/output/{vcfname}/vcf/orig/temp.vcf.gz.tbi"),
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -566,7 +632,7 @@ rule list_of_chroms_from_reference:
     input:
         fai = config["tool"] + "/input/assembly/input.fasta.fai"
     output:
-        chrtxt = config["tool"] + "/output/vcf/chromosomes.txt"
+        chrtxt = config["tool"] + "/output/{vcfname}/vcf/chromosomes.txt"
     threads: 1
     resources:
         mem_mb  = 1000,
@@ -585,9 +651,9 @@ rule list_of_chroms_from_config:
       - Previously, this would fail sometimes, even if there were perfect matches
     """
     input:
-        chrtxt = config["tool"] + "/output/vcf/chromosomes.txt",
+        chrtxt = config["tool"] + "/output/{vcfname}/vcf/chromosomes.txt",
     output:
-        chrtxt = config["tool"] + "/output/vcf/chroms_filt.txt"
+        chrtxt = config["tool"] + "/output/{vcfname}/vcf/chroms_filt.txt"
     threads: 1
     resources:
         mem_mb  = 1000,
@@ -618,14 +684,14 @@ rule list_of_chroms_from_config:
 # split all vcf files by chromosome
 rule split_vcf_into_chr_remainder:
     input:
-        gz = config["tool"] + "/output/vcf/orig/temp.vcf.gz",
-        index = config["tool"] + "/output/vcf/orig/temp.vcf.gz.tbi",
-        chrtxt = config["tool"] + "/output/vcf/chroms_filt.txt"
+        gz = config["tool"] + "/output/{vcfname}/vcf/orig/temp.vcf.gz",
+        index = config["tool"] + "/output/{vcfname}/vcf/orig/temp.vcf.gz.tbi",
+        chrtxt = config["tool"] + "/output/{vcfname}/vcf/chroms_filt.txt"
     output:
-        vcf  = expand(config["tool"] + "/output/vcf/orig/split/{chrom}.vcf",
+        vcf  = expand(config["tool"] + "/output/{{vcfname}}/vcf/orig/split/{chrom}.vcf",
                     chrom=config["CHROMS"])
     params:
-        outstub = config["tool"] + "/output/vcf/orig/split"
+        outstub = config["tool"] + "/output/{vcfname}/vcf/orig/split"
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -984,9 +1050,9 @@ rule extract_hairs:
         fai = config["tool"] + "/input/assembly/input.fasta.fai",
         bam = config["tool"] + "/output/bams/split_rmdups/{libtype}.REF_{chrom}.rmdups.bam",
         bai = config["tool"] + "/output/bams/split_rmdups/{libtype}.REF_{chrom}.rmdups.bam.bai",
-        vcf = config["tool"] + "/output/vcf/orig/split/{chrom}.vcf"
+        vcf = config["tool"] + "/output/{vcfname}/vcf/orig/split/{chrom}.vcf"
     output:
-        frag = config["tool"] + "/output/hapcut2_evidence/per-datatype/{libtype}.{chrom}.frag"
+        frag = config["tool"] + "/output/{vcfname}/hapcut2_evidence/per-datatype/{libtype}.{chrom}.frag"
     threads: 1
     params:
         fragtype = lambda wildcards: wildcards.libtype
@@ -996,10 +1062,10 @@ rule extract_hairs:
     shell:
         """
         if [ "{params.fragtype}" == "longreads" ]; then
-            extractHAIRS --pacbio 1 --new_format 1 --indels 1 \
+            extractHAIRS --pacbio 1 --new_format 1 --ep 1 --indels 1 \
                --bam {input.bam} --ref {input.ref} --VCF {input.vcf} > {output.frag}
         elif [ "{params.fragtype}" == "hic" ]; then
-            extractHAIRS --hic 1 --new_format 1 \
+            extractHAIRS --hic 1 --new_format 1 --maxIS 40000000 \
                --indels 1 --bam {input.bam} --VCF {input.vcf} > {output.frag}
         elif [ "{params.fragtype}" == "chi" ]; then
             extractHAIRS --maxIS 10000000 --new_format 1 \
@@ -1014,10 +1080,10 @@ rule extract_hairs:
 
 rule concatenate_HAPCUT2_evidence:
     input:
-        frags = expand(config["tool"] + "/output/hapcut2_evidence/per-datatype/{libtype}.{{chrom}}.frag",
+        frags = expand(config["tool"] + "/output/{{vcfname}}/hapcut2_evidence/per-datatype/{libtype}.{{chrom}}.frag",
                        libtype = config["ACTIVE_LIBTYPES"])
     output:
-        cat = config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag"
+        cat = config["tool"] + "/output/{vcfname}/hapcut2_evidence/concatenated/{chrom}.frag"
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -1034,14 +1100,14 @@ rule concatenate_HAPCUT2_evidence:
 # run HapCUT2 to assemble haplotypes from combined Hi-C + longread haplotype fragments
 rule run_hapcut2_hic_longread:
     input:
-        frag = config["tool"] + "/output/hapcut2_evidence/concatenated/{chrom}.frag",
-        vcf  = config["tool"] + "/output/vcf/orig/split/{chrom}.vcf"
+        frag = config["tool"] + "/output/{vcfname}/hapcut2_evidence/concatenated/{chrom}.frag",
+        vcf  = config["tool"] + "/output/{vcfname}/vcf/orig/split/{chrom}.vcf"
     output:
-        hap   = config["tool"] + "/output/hapcut2_results/{chrom}.hap",
-        vcf   = config["tool"] + "/output/hapcut2_results/{chrom}.hap.phased.VCF"
+        hap   = config["tool"] + "/output/{vcfname}/hapcut2_results/{chrom}.hap",
+        vcf   = config["tool"] + "/output/{vcfname}/hapcut2_results/{chrom}.hap.phased.VCF"
     params:
         thischrom = lambda wildcards: wildcards.chrom,
-        model = config["tool"] + "/output/hapcut2_results/{chrom}.htrans_model"
+        model = config["tool"] + "/output/{vcfname}/hapcut2_results/{chrom}.htrans_model"
     threads: 1
     resources:
         mem_mb  = lambda wildcards, input: get_hapcut2_memory(wildcards, input),
@@ -1067,12 +1133,12 @@ rule cat_haps:
     This pools all of the haplotype files that we generated previously.
     """
     input:
-        hap = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap",
+        hap = expand(config["tool"] + "/output/{{vcfname}}/hapcut2_results/{chrom}.hap",
                      chrom=config["CHROMS"])
     output:
-        hap = temp(config["tool"] + "/output/final_output/complete_assembly.hap")
+        hap = temp(config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap")
     params:
-        outdir = config["tool"] + "/output/final_output"
+        outdir = config["tool"] + "/output/{vcfname}/final_output"
     threads: 1
     resources:
         mem_mb=1000, runtime=10
@@ -1090,13 +1156,13 @@ rule merge_vcfs:
     from the original VCF to each per-chromosome file before concatenating.
     """
     input:
-        origvcf = config["tool"] + "/output/vcf/orig_sorted/input.sorted.vcf",
-        vcfs    = expand(config["tool"] + "/output/hapcut2_results/{chrom}.hap.phased.VCF",
+        origvcf = config["tool"] + "/output/{vcfname}/vcf/orig_sorted/input.sorted.vcf",
+        vcfs    = expand(config["tool"] + "/output/{{vcfname}}/hapcut2_results/{chrom}.hap.phased.VCF",
                          chrom=config["CHROMS"])
     output:
-        merged = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.unsorted.vcf")
+        merged = temp(config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.phased.unsorted.vcf")
     params:
-        outdir = config["tool"] + "/output/final_output"
+        outdir = config["tool"] + "/output/{vcfname}/final_output"
     threads: 2
     resources:
         mem_mb=4000, runtime=30
@@ -1158,9 +1224,9 @@ rule sort_merged_vcf:
     This completes the workflow that was split from the old sort_final_vcf rule.
     """
     input:
-        unsorted = config["tool"] + "/output/final_output/complete_assembly.hap.phased.unsorted.vcf"
+        unsorted = config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.phased.unsorted.vcf"
     output:
-        sorted_vcf = temp(config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf")
+        sorted_vcf = temp(config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.phased.vcf")
     threads: 2
     resources:
         mem_mb=4000, runtime=30
@@ -1177,10 +1243,10 @@ rule get_largest_hap_blocks:
       that were phased.
     """
     input:
-        hap = config["tool"] + "/output/final_output/complete_assembly.hap",
-        vcf = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf"
+        hap = config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap",
+        vcf = config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.phased.vcf"
     output:
-        txt = config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt"
+        txt = config["tool"] + "/output/{vcfname}/final_output/hapcut_largest_blocks_per_sca.txt"
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -1240,11 +1306,11 @@ rule hap_blocks_to_vcf:
     This converts the haplotype blocks to a vcf
     """
     input:
-        hap = config["tool"] + "/output/final_output/complete_assembly.hap",
-        vcf = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf",
-        txt = config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt"
+        hap = config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap",
+        vcf = config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.phased.vcf",
+        txt = config["tool"] + "/output/{vcfname}/final_output/hapcut_largest_blocks_per_sca.txt"
     output:
-        final_vcf = temp(config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf")
+        final_vcf = temp(config["tool"] + "/output/{vcfname}/final_output/largest_blocks.hap.phased.vcf")
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -1300,10 +1366,10 @@ rule hap_blocks_to_vcf:
 ######################################################################
 rule compress_final_output:
     input:
-        final_vcf = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf"
+        final_vcf = config["tool"] + "/output/{vcfname}/final_output/largest_blocks.hap.phased.vcf"
     output:
-        final_gz = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
-        final_in = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz.tbi"
+        final_gz = config["tool"] + "/output/{vcfname}/final_output/largest_blocks.hap.phased.vcf.gz",
+        final_in = config["tool"] + "/output/{vcfname}/final_output/largest_blocks.hap.phased.vcf.gz.tbi"
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -1318,10 +1384,10 @@ rule compress_final_output:
 
 rule gzip_hapcut2_vcf:
     input:
-        vcf = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf"
+        vcf = config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.phased.vcf"
     output:
-        vcf = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz",
-        tbi = config["tool"] + "/output/final_output/complete_assembly.hap.phased.vcf.gz.tbi"
+        vcf = config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.phased.vcf.gz",
+        tbi = config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.phased.vcf.gz.tbi"
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -1335,9 +1401,9 @@ rule gzip_hapcut2_vcf:
 
 rule gzip_complete_assembly_hap_file:
     input:
-        hap = config["tool"] + "/output/final_output/complete_assembly.hap"
+        hap = config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap"
     output:
-        gzipped = config["tool"] + "/output/final_output/complete_assembly.hap.gz"
+        gzipped = config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.gz"
     threads: 1
     resources:
         mem_mb  = 2000,
@@ -1365,12 +1431,12 @@ rule make_table_of_final_output:
       - largest_pb_num_phased (the number of phased variants in the largest phase block)
     """
     input:
-        txt   = config["tool"] + "/output/final_output/hapcut_largest_blocks_per_sca.txt",
-        vcfgz = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
-        tbi   = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz.tbi",
+        txt   = config["tool"] + "/output/{vcfname}/final_output/hapcut_largest_blocks_per_sca.txt",
+        vcfgz = config["tool"] + "/output/{vcfname}/final_output/largest_blocks.hap.phased.vcf.gz",
+        tbi   = config["tool"] + "/output/{vcfname}/final_output/largest_blocks.hap.phased.vcf.gz.tbi",
         ref   = config["tool"] + "/input/assembly/input.fasta"
     output:
-        txt = config["tool"] + "/output/final_output/hapcut_largest_block_final_table.txt"
+        txt = config["tool"] + "/output/{vcfname}/final_output/hapcut_largest_block_final_table.txt"
     threads: 1
     resources:
         mem_mb=2000, runtime=30
@@ -1438,10 +1504,10 @@ rule make_table_of_final_output:
 
 rule split_phased_into_individual_chromosomes:
     input:
-        final_gz = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz",
-        final_in = config["tool"] + "/output/final_output/largest_blocks.hap.phased.vcf.gz.tbi"
+        final_gz = config["tool"] + "/output/{vcfname}/final_output/largest_blocks.hap.phased.vcf.gz",
+        final_in = config["tool"] + "/output/{vcfname}/final_output/largest_blocks.hap.phased.vcf.gz.tbi"
     output:
-        chromgz = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz"
+        chromgz = config["tool"] + "/output/{vcfname}/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz"
     threads: 1
     resources:
         mem_mb  = 4000,
@@ -1455,9 +1521,9 @@ rule split_phased_into_individual_chromosomes:
 
 rule index_vcf_individual_chromosomes:
     input:
-        chromgz = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz"
+        chromgz = config["tool"] + "/output/{vcfname}/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz"
     output:
-        index   = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi"
+        index   = config["tool"] + "/output/{vcfname}/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi"
     threads: 1
     resources:
         mem_mb  = 4000,
@@ -1511,14 +1577,14 @@ rule haplotag_reads_chrom:
     input:
         bam    = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam",
         bai    = config["tool"] + "/output/bams/split/{libtype}.REF_{chrom}.bam.bai",
-        vcfgz  = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
-        vcfin  = config["tool"] + "/output/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi",
+        vcfgz  = config["tool"] + "/output/{vcfname}/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
+        vcfin  = config["tool"] + "/output/{vcfname}/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz.tbi",
         # index may not exist for empty shard; keep optional in logic
         ref    = config["tool"] + "/input/assembly/input.fasta",
         fai    = config["tool"] + "/input/assembly/input.fasta.fai"
     output:
-        bam = config["tool"] + "/output/final_output/haplotagged_by_chrom/{libtype}.REF_{chrom}.haplotagged.bam",
-        bai = config["tool"] + "/output/final_output/haplotagged_by_chrom/{libtype}.REF_{chrom}.haplotagged.bam.bai"
+        bam = config["tool"] + "/output/{vcfname}/final_output/haplotagged_by_chrom/{libtype}.REF_{chrom}.haplotagged.bam",
+        bai = config["tool"] + "/output/{vcfname}/final_output/haplotagged_by_chrom/{libtype}.REF_{chrom}.haplotagged.bam.bai"
     threads: 1
     resources:
         # Bigger floor for Hi-C, modest floor for others
@@ -1579,10 +1645,10 @@ def runtime_for_merge_minutes(libtype: str, paths,
 
 rule merge_haplotagged:
     input:
-        bams = expand(config["tool"] + "/output/final_output/haplotagged_by_chrom/{{libtype}}.REF_{chrom}.haplotagged.bam",
+        bams = expand(config["tool"] + "/output/{{vcfname}}/final_output/haplotagged_by_chrom/{{libtype}}.REF_{chrom}.haplotagged.bam",
                chrom=config["CHROMS"])
     output:
-        bam = config["tool"] + "/output/final_output/{libtype}_haplotagged.bam"
+        bam = config["tool"] + "/output/{vcfname}/final_output/{libtype}_haplotagged.bam"
     threads: 8
     resources:
         mem_mb  = 8000,  # merge is light on RAM
@@ -1594,9 +1660,9 @@ rule merge_haplotagged:
 
 rule index_haplotagged:
     input:
-        bam = config["tool"] + "/output/final_output/{libtype}_haplotagged.bam"
+        bam = config["tool"] + "/output/{vcfname}/final_output/{libtype}_haplotagged.bam"
     output:
-        bam = config["tool"] + "/output/final_output/{libtype}_haplotagged.bam.bai"
+        bam = config["tool"] + "/output/{vcfname}/final_output/{libtype}_haplotagged.bam.bai"
     threads: 1
     resources:
         mem_mb=8000,
@@ -1605,3 +1671,332 @@ rule index_haplotagged:
         """
         samtools index -@ {threads} {input.bam}
         """
+
+########################################################################
+#    Multi-VCF Summary Report
+#    Comprehensive comparison of phasing results across all VCF files
+########################################################################
+
+rule create_multi_vcf_phasing_summary:
+    """
+    Create comprehensive summary reports comparing phasing results across all VCF files.
+    
+    Generates four summary files:
+    1. genome_wide_summary.txt - VCF-level aggregate statistics
+    2. per_chromosome_comparison.txt - All VCF-chromosome combinations
+    3. phase_block_statistics.txt - Detailed phase block metrics including N50/N90
+    4. vcf_comparison.txt - Direct metric comparisons between VCFs
+    
+    Metrics include:
+    - Genome-wide phasing coverage and variant statistics
+    - Phase block quality (N50, N90, sizes from all blocks, not just largest)
+    - Per-chromosome phasing statistics
+    - Phasing quality scores from VCF FORMAT fields
+    - Cross-VCF comparisons
+    """
+    input:
+        tables = expand(config["tool"] + "/output/{vcfname}/final_output/hapcut_largest_block_final_table.txt",
+                       vcfname=config["VCF_NAMES"]),
+        haps = expand(config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.gz",
+                     vcfname=config["VCF_NAMES"]),
+        vcfs = expand(config["tool"] + "/output/{vcfname}/final_output/complete_assembly.hap.phased.vcf.gz",
+                     vcfname=config["VCF_NAMES"]),
+        ref = config["tool"] + "/input/assembly/input.fasta"
+    output:
+        summary = config["tool"] + "/output/multi_vcf_summary/genome_wide_summary.txt",
+        per_chrom = config["tool"] + "/output/multi_vcf_summary/per_chromosome_comparison.txt",
+        block_stats = config["tool"] + "/output/multi_vcf_summary/phase_block_statistics.txt",
+        comparison = config["tool"] + "/output/multi_vcf_summary/vcf_comparison.txt"
+    threads: 1
+    resources:
+        mem_mb=8000,
+        runtime=60
+    run:
+        import gzip
+        import subprocess
+        from collections import defaultdict
+        from Bio import SeqIO
+        
+        # Get chromosome lengths from reference
+        chrom_lengths = {}
+        with open(input.ref, "r") as f:
+            for record in SeqIO.parse(f, "fasta"):
+                chrom_lengths[record.id] = len(record.seq)
+        
+        total_genome_size = sum(chrom_lengths.values())
+        
+        # Data structures to hold all metrics
+        vcf_data = {}  # vcfname -> metrics dict
+        per_chrom_data = []  # list of dicts for per-chromosome comparison
+        
+        # Process each VCF
+        for vcfname, table_file, hap_file, vcf_file in zip(
+            config["VCF_NAMES"], input.tables, input.haps, input.vcfs):
+            
+            # Initialize data structure for this VCF
+            vcf_metrics = {
+                'vcfname': vcfname,
+                'total_genome_bp': total_genome_size,
+                'chromosomes': {},
+                'all_phase_blocks': []  # Will store all block sizes
+            }
+            
+            # Parse per-chromosome table
+            with open(table_file, 'r') as f:
+                header = f.readline()  # Skip header
+                for line in f:
+                    if not line.strip():
+                        continue
+                    fields = line.strip().split('\t')
+                    chrom = fields[0]
+                    chrom_length = int(fields[1])
+                    largest_pb_start = int(fields[2])
+                    largest_pb_stop = int(fields[3])
+                    largest_pb_length = int(fields[4])
+                    percent_chrom_covered = float(fields[5])
+                    num_variants = int(fields[6])
+                    num_phased = int(fields[7])
+                    percent_phased = float(fields[8])
+                    
+                    vcf_metrics['chromosomes'][chrom] = {
+                        'chrom_length': chrom_length,
+                        'largest_pb_start': largest_pb_start,
+                        'largest_pb_stop': largest_pb_stop,
+                        'largest_pb_length': largest_pb_length,
+                        'percent_chrom_covered': percent_chrom_covered,
+                        'num_variants': num_variants,
+                        'num_phased': num_phased,
+                        'percent_phased': percent_phased
+                    }
+                    
+                    # Add to per-chromosome comparison data
+                    per_chrom_data.append({
+                        'vcfname': vcfname,
+                        'chrom': chrom,
+                        'chrom_length': chrom_length,
+                        'largest_pb_length': largest_pb_length,
+                        'coverage_pct': percent_chrom_covered,
+                        'num_variants': num_variants,
+                        'variants_phased': num_phased,
+                        'phasing_rate_pct': percent_phased,
+                        'variants_per_mb': (num_variants / chrom_length * 1_000_000) if chrom_length > 0 else 0,
+                        'pb_start': largest_pb_start,
+                        'pb_stop': largest_pb_stop,
+                        'pb_span_mb': largest_pb_length / 1_000_000
+                    })
+            
+            # Parse .hap file to get ALL phase blocks (not just largest per chromosome)
+            with gzip.open(hap_file, 'rt') as f:
+                current_block_positions = []
+                for line in f:
+                    line = line.replace('*', '').strip()
+                    if not line:
+                        continue
+                    
+                    fields = line.split()
+                    if fields[0] == "BLOCK:":
+                        # Save previous block if it exists
+                        if current_block_positions:
+                            block_size = max(current_block_positions) - min(current_block_positions) + 1
+                            vcf_metrics['all_phase_blocks'].append(block_size)
+                        current_block_positions = []
+                    else:
+                        # This is a variant line: fields[4] is position
+                        try:
+                            pos = int(fields[4])
+                            current_block_positions.append(pos)
+                        except (IndexError, ValueError):
+                            continue
+                
+                # Don't forget the last block
+                if current_block_positions:
+                    block_size = max(current_block_positions) - min(current_block_positions) + 1
+                    vcf_metrics['all_phase_blocks'].append(block_size)
+            
+            # Calculate aggregate statistics
+            chroms = vcf_metrics['chromosomes']
+            vcf_metrics['num_chromosomes'] = len(chroms)
+            vcf_metrics['total_variants'] = sum(c['num_variants'] for c in chroms.values())
+            vcf_metrics['total_phased'] = sum(c['num_phased'] for c in chroms.values())
+            vcf_metrics['overall_phasing_rate'] = (
+                (vcf_metrics['total_phased'] / vcf_metrics['total_variants'] * 100)
+                if vcf_metrics['total_variants'] > 0 else 0
+            )
+            vcf_metrics['largest_pb_total_bp'] = sum(c['largest_pb_length'] for c in chroms.values())
+            vcf_metrics['genome_coverage_pct'] = (
+                vcf_metrics['largest_pb_total_bp'] / total_genome_size * 100
+            )
+            
+            # Per-chromosome statistics
+            coverages = [c['percent_chrom_covered'] for c in chroms.values()]
+            vcf_metrics['mean_chrom_coverage'] = sum(coverages) / len(coverages) if coverages else 0
+            vcf_metrics['median_chrom_coverage'] = sorted(coverages)[len(coverages)//2] if coverages else 0
+            vcf_metrics['min_chrom_coverage'] = min(coverages) if coverages else 0
+            vcf_metrics['max_chrom_coverage'] = max(coverages) if coverages else 0
+            
+            vcf_metrics['chroms_over_50pct'] = sum(1 for c in coverages if c >= 50)
+            vcf_metrics['chroms_over_75pct'] = sum(1 for c in coverages if c >= 75)
+            vcf_metrics['chroms_over_90pct'] = sum(1 for c in coverages if c >= 90)
+            
+            # Phase block statistics from ALL blocks
+            blocks = sorted(vcf_metrics['all_phase_blocks'], reverse=True)
+            vcf_metrics['total_phase_blocks'] = len(blocks)
+            vcf_metrics['mean_block_size'] = sum(blocks) / len(blocks) if blocks else 0
+            vcf_metrics['median_block_size'] = blocks[len(blocks)//2] if blocks else 0
+            vcf_metrics['largest_block'] = blocks[0] if blocks else 0
+            vcf_metrics['smallest_block'] = blocks[-1] if blocks else 0
+            
+            # Calculate N50, N90, N95
+            def calculate_nx(sorted_blocks, x):
+                total = sum(sorted_blocks)
+                threshold = total * (x / 100)
+                cumsum = 0
+                for block_size in sorted_blocks:
+                    cumsum += block_size
+                    if cumsum >= threshold:
+                        return block_size
+                return 0
+            
+            vcf_metrics['block_n50'] = calculate_nx(blocks, 50)
+            vcf_metrics['block_n90'] = calculate_nx(blocks, 90)
+            vcf_metrics['block_n95'] = calculate_nx(blocks, 95)
+            
+            vcf_metrics['blocks_over_1mb'] = sum(1 for b in blocks if b >= 1_000_000)
+            vcf_metrics['blocks_over_10mb'] = sum(1 for b in blocks if b >= 10_000_000)
+            vcf_metrics['blocks_over_50mb'] = sum(1 for b in blocks if b >= 50_000_000)
+            
+            # Get phasing quality scores from VCF
+            try:
+                cmd = f"bcftools query -f '%PQ\\n' {vcf_file} 2>/dev/null"
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                if result.returncode == 0 and result.stdout.strip():
+                    pq_scores = [int(x) for x in result.stdout.strip().split('\n') if x and x != '.']
+                    if pq_scores:
+                        vcf_metrics['mean_phasing_quality'] = sum(pq_scores) / len(pq_scores)
+                        vcf_metrics['median_phasing_quality'] = sorted(pq_scores)[len(pq_scores)//2]
+                        vcf_metrics['min_phasing_quality'] = min(pq_scores)
+                        vcf_metrics['max_phasing_quality'] = max(pq_scores)
+                    else:
+                        vcf_metrics['mean_phasing_quality'] = vcf_metrics['median_phasing_quality'] = 'N/A'
+                        vcf_metrics['min_phasing_quality'] = vcf_metrics['max_phasing_quality'] = 'N/A'
+                else:
+                    vcf_metrics['mean_phasing_quality'] = vcf_metrics['median_phasing_quality'] = 'N/A'
+                    vcf_metrics['min_phasing_quality'] = vcf_metrics['max_phasing_quality'] = 'N/A'
+            except Exception as e:
+                print(f"Warning: Could not extract PQ scores for {vcfname}: {e}")
+                vcf_metrics['mean_phasing_quality'] = vcf_metrics['median_phasing_quality'] = 'N/A'
+                vcf_metrics['min_phasing_quality'] = vcf_metrics['max_phasing_quality'] = 'N/A'
+            
+            vcf_data[vcfname] = vcf_metrics
+        
+        # Write output file 1: Genome-wide summary
+        with open(output.summary, 'w') as f:
+            f.write('\t'.join([
+                'vcf_name', 'total_genome_bp', 'largest_pb_total_bp', 'genome_coverage_pct',
+                'total_variants', 'variants_phased', 'phasing_rate_pct', 'num_chromosomes',
+                'pb_n50', 'pb_n90', 'pb_n95', 'largest_single_pb', 'median_pb_size', 'mean_pb_size',
+                'mean_chrom_coverage_pct', 'median_chrom_coverage_pct',
+                'chroms_over50pct', 'chroms_over75pct', 'chroms_over90pct',
+                'total_phase_blocks', 'blocks_over_1mb', 'blocks_over_10mb', 'blocks_over_50mb',
+                'mean_phasing_quality', 'median_phasing_quality'
+            ]) + '\n')
+            
+            for vcfname in config["VCF_NAMES"]:
+                m = vcf_data[vcfname]
+                f.write('\t'.join(map(str, [
+                    vcfname, m['total_genome_bp'], m['largest_pb_total_bp'],
+                    f"{m['genome_coverage_pct']:.2f}",
+                    m['total_variants'], m['total_phased'],
+                    f"{m['overall_phasing_rate']:.2f}",
+                    m['num_chromosomes'],
+                    m['block_n50'], m['block_n90'], m['block_n95'],
+                    m['largest_block'], m['median_block_size'], int(m['mean_block_size']),
+                    f"{m['mean_chrom_coverage']:.2f}",
+                    f"{m['median_chrom_coverage']:.2f}",
+                    m['chroms_over_50pct'], m['chroms_over_75pct'], m['chroms_over_90pct'],
+                    m['total_phase_blocks'], m['blocks_over_1mb'], m['blocks_over_10mb'],
+                    m['blocks_over_50mb'],
+                    m['mean_phasing_quality'] if isinstance(m['mean_phasing_quality'], str) else f"{m['mean_phasing_quality']:.2f}",
+                    m['median_phasing_quality']
+                ])) + '\n')
+        
+        # Write output file 2: Per-chromosome comparison
+        with open(output.per_chrom, 'w') as f:
+            f.write('\t'.join([
+                'vcf_name', 'chrom', 'chrom_length', 'largest_pb_length', 'coverage_pct',
+                'num_variants', 'variants_phased', 'phasing_rate_pct', 'variants_per_mb',
+                'pb_start', 'pb_stop', 'pb_span_mb'
+            ]) + '\n')
+            
+            for row in per_chrom_data:
+                f.write('\t'.join(map(str, [
+                    row['vcfname'], row['chrom'], row['chrom_length'],
+                    row['largest_pb_length'], f"{row['coverage_pct']:.2f}",
+                    row['num_variants'], row['variants_phased'],
+                    f"{row['phasing_rate_pct']:.2f}",
+                    f"{row['variants_per_mb']:.2f}",
+                    row['pb_start'], row['pb_stop'], f"{row['pb_span_mb']:.2f}"
+                ])) + '\n')
+        
+        # Write output file 3: Phase block statistics detail
+        with open(output.block_stats, 'w') as f:
+            f.write('\t'.join([
+                'vcf_name', 'total_phase_blocks', 'mean_block_size', 'median_block_size',
+                'block_n50', 'block_n90', 'block_n95', 'largest_block', 'smallest_block',
+                'blocks_over_1mb', 'blocks_over_10mb', 'blocks_over_50mb',
+                'total_bp_in_blocks', 'mean_variants_per_block', 'median_variants_per_block'
+            ]) + '\n')
+            
+            for vcfname in config["VCF_NAMES"]:
+                m = vcf_data[vcfname]
+                # Calculate variant statistics per block
+                chroms = m['chromosomes']
+                variants_per_block = [c['num_phased'] for c in chroms.values()]
+                mean_vars = sum(variants_per_block) / len(variants_per_block) if variants_per_block else 0
+                median_vars = sorted(variants_per_block)[len(variants_per_block)//2] if variants_per_block else 0
+                
+                f.write('\t'.join(map(str, [
+                    vcfname, m['total_phase_blocks'], int(m['mean_block_size']),
+                    m['median_block_size'], m['block_n50'], m['block_n90'], m['block_n95'],
+                    m['largest_block'], m['smallest_block'],
+                    m['blocks_over_1mb'], m['blocks_over_10mb'], m['blocks_over_50mb'],
+                    sum(m['all_phase_blocks']),
+                    int(mean_vars), int(median_vars)
+                ])) + '\n')
+        
+        # Write output file 4: VCF comparison (if multiple VCFs)
+        if len(config["VCF_NAMES"]) > 1:
+            with open(output.comparison, 'w') as f:
+                f.write('\t'.join(['metric'] + config["VCF_NAMES"] + ['notes']) + '\n')
+                
+                metrics_to_compare = [
+                    ('total_variants', 'Total variants in input VCF'),
+                    ('total_phased', 'Variants successfully phased'),
+                    ('overall_phasing_rate', 'Phasing success rate (%)'),
+                    ('genome_coverage_pct', 'Genome covered by largest phase blocks (%)'),
+                    ('block_n50', 'Phase block N50 (bp)'),
+                    ('block_n90', 'Phase block N90 (bp)'),
+                    ('largest_block', 'Largest single phase block (bp)'),
+                    ('total_phase_blocks', 'Total number of phase blocks'),
+                    ('mean_chrom_coverage', 'Mean per-chromosome coverage (%)'),
+                    ('median_chrom_coverage', 'Median per-chromosome coverage (%)'),
+                    ('chroms_over_90pct', 'Chromosomes with >90% coverage'),
+                    ('mean_block_size', 'Mean phase block size (bp)'),
+                    ('blocks_over_10mb', 'Phase blocks larger than 10 Mb')
+                ]
+                
+                for metric_key, description in metrics_to_compare:
+                    values = []
+                    for vcfname in config["VCF_NAMES"]:
+                        val = vcf_data[vcfname][metric_key]
+                        if isinstance(val, float):
+                            values.append(f"{val:.2f}")
+                        else:
+                            values.append(str(val))
+                    
+                    f.write('\t'.join([metric_key] + values + [description]) + '\n')
+        else:
+            # Single VCF, just note that comparison requires multiple VCFs
+            with open(output.comparison, 'w') as f:
+                f.write('# VCF comparison requires multiple VCF files\n')
+                f.write('# Only one VCF file was processed in this run\n')
