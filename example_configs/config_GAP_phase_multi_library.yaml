@@ -40,6 +40,12 @@ PICARD: "/path/to/picard.jar"
 # Optional: Sample name for read groups (default: sample1)
 SAMPLE_NAME: "my_sample"
 
+# Optional: Generate haplotagged BAM files (default: False)
+# These files can be VERY LARGE (N_VCFs × N_libraries × genome_size)
+# Haplotagged BAMs contain HP tags indicating which haplotype each read supports
+# Set to True only when you need haplotagged reads for downstream haplotype-aware analysis
+GENERATE_HAPLOTAGGED_BAMS: False  # Set to True to generate haplotagged BAMs
+
 ###############################################################################
 # LIBRARY FORMAT - All libraries use BAM files
 #                - We additionally can provide the sam.gz file
