@@ -175,6 +175,11 @@ elif "VCFfile" in config:
 else:
     raise ValueError("Config must specify either 'VCFs' (new format) or 'VCFfile' (deprecated)")
 
+# Optional: Generate haplotagged BAM files (can be very large)
+# Set to True to generate haplotagged BAMs, False to skip them
+if "GENERATE_HAPLOTAGGED_BAMS" not in config:
+    config["GENERATE_HAPLOTAGGED_BAMS"] = False  # Default: do not generate
+
 wildcard_constraints:
     libtype="[A-Za-z]+",
     libname="[A-Za-z0-9]+",
@@ -204,11 +209,14 @@ rule all:
         expand(config["tool"] + "/output/{vcfname}/final_output/phased_by_chromosome/largest_blocks.hap.phased.{chrom}.vcf.gz",
                vcfname=config["VCF_NAMES"], chrom = config["CHROMS"]),
 
-        # also generate haplotagged bam files (per VCF and per library type):
-        expand(config["tool"] + "/output/{vcfname}/final_output/{libtype}_haplotagged.bam",
-               vcfname=config["VCF_NAMES"], libtype = config["ACTIVE_LIBTYPES"]),
-        expand(config["tool"] + "/output/{vcfname}/final_output/{libtype}_haplotagged.bam.bai",
-               vcfname=config["VCF_NAMES"], libtype = config["ACTIVE_LIBTYPES"]),
+        # Optional: haplotagged bam files (per VCF and per library type)
+        # Only generated if GENERATE_HAPLOTAGGED_BAMS is set to True in config
+        (expand(config["tool"] + "/output/{vcfname}/final_output/{libtype}_haplotagged.bam",
+                vcfname=config["VCF_NAMES"], libtype = config["ACTIVE_LIBTYPES"])
+         if config["GENERATE_HAPLOTAGGED_BAMS"] else []),
+        (expand(config["tool"] + "/output/{vcfname}/final_output/{libtype}_haplotagged.bam.bai",
+                vcfname=config["VCF_NAMES"], libtype = config["ACTIVE_LIBTYPES"])
+         if config["GENERATE_HAPLOTAGGED_BAMS"] else []),
 
         # Multi-VCF summary reports (only if multiple VCFs)
         config["tool"] + "/output/multi_vcf_summary/genome_wide_summary.txt" if len(config["VCF_NAMES"]) > 1 else [],
