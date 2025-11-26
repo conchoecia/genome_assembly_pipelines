@@ -1547,16 +1547,28 @@ def mem_for_bam_mb(path: str, floor=8000, ceil=65536, pct=0.10, base=1024) -> in
     return int(max(floor, min(ceil, base + pct * mb)))
 
 def mem_for_hic_piecewise_mb(path: str) -> int:
-    """More reasonable RAM for Hi-C shards for whatshap haplotag."""
+    """Memory allocation for Hi-C shards for whatshap haplotag.
+    
+    WhatsHap haplotag is memory-intensive for Hi-C data because:
+    - Loads entire BAM into memory for phase assignment
+    - Hi-C read pairs span long distances requiring large buffers
+    - Actual memory usage is typically 5-6x the BAM file size
+    
+    Conservative approach: allocate ~6x BAM size with generous minimums.
+    Based on empirical failures: 7-8 GB BAM with 24 GB allocation = OOM
+    """
     gb = bam_size_mb(path) / 1024
-    if gb <= 5:   return 16000   # 16 GB
-    if gb <= 10:  return 24000   # 24 GB
-    if gb <= 20:  return 32000   # 32 GB
-    if gb <= 30:  return 40000   # 40 GB
-    if gb <= 40:  return 48000   # 48 GB
-    if gb <= 60:  return 64000   # 64 GB
-    if gb <= 80:  return 80000   # 80 GB
-    return 96000                 # safety cap at 96 GB
+    
+    # For Hi-C, allocate ~6x the BAM size with safety margins
+    if gb <= 2:   return 16000   # 16 GB (small shards)
+    if gb <= 5:   return 32000   # 32 GB (was 16 GB - too low)
+    if gb <= 8:   return 48000   # 48 GB (was 24 GB - caused OOM!)
+    if gb <= 12:  return 72000   # 72 GB (was 32 GB)
+    if gb <= 18:  return 108000  # 108 GB (was 40 GB)
+    if gb <= 25:  return 150000  # 150 GB
+    if gb <= 35:  return 192000  # 192 GB
+    if gb <= 50:  return 256000  # 256 GB
+    return 384000                # 384 GB safety cap for very large shards
 
 def mem_for_libtype_mb(libtype: str, path: str) -> int:
     """Hi-C uses piecewise; long reads get a modest scaler; others lighter."""
