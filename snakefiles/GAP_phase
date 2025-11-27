@@ -1480,8 +1480,9 @@ rule make_table_of_final_output:
     output:
         txt = config["tool"] + "/output/{vcfname}/final_output/hapcut_largest_block_final_table.txt"
     threads: 1
+    retries: 2
     resources:
-        mem_mb=2000, runtime=30
+        mem_mb=2000, runtime=120
     run:
         import subprocess
         from Bio import SeqIO
