@@ -547,32 +547,84 @@ rule sam2seg_per_split:
     output:
         seg = temp(config["tool"] + "/output/contacts_seg/{vcfname}/{par}/{libtype}.{libname}.part{part}.seg.gz")
     threads: 1
+    retries: 2
     resources:
         mem_mb = 8000,
-        runtime = 59
+        runtime = 120
     shell:
         """
-        # Copy sam.gz to local disk (large file benefits from local I/O)
-        # TSV remains on network storage (42MB, filesystem caching efficient for parallel reads)
+        # Copy sam.gz and TSV to local disk for faster I/O and to avoid filesystem contention
         LOCAL_SAMGZ=$TMPDIR/$(basename {input.samgz})
+        LOCAL_TSV=$TMPDIR/$(basename {input.tsv})
         LOCAL_SEG=$TMPDIR/$(basename {output.seg})
         
         echo "Copying sam.gz to $TMPDIR..."
         cp {input.samgz} $LOCAL_SAMGZ
         
-        # Process with hickit pipeline
+        # Copy TSV with retry logic (10 attempts with exponential backoff)
+        # This handles filesystem contention from 600+ parallel jobs reading same file
+        echo "Copying TSV to $TMPDIR with retry logic..."
+        TSV_COPIED=0
+        for ATTEMPT in {{1..10}}; do
+            echo "TSV copy attempt $ATTEMPT of 10..."
+            
+            # Copy the file
+            if cp {input.tsv} $LOCAL_TSV 2>/dev/null; then
+                sync
+                
+                # Verify with md5sum
+                echo "Verifying TSV file integrity with md5sum..."
+                SRC_MD5=$(md5sum {input.tsv} | awk '{{print $1}}')
+                DST_MD5=$(md5sum $LOCAL_TSV | awk '{{print $1}}')
+                
+                if [ "$SRC_MD5" = "$DST_MD5" ]; then
+                    echo "TSV copy successful on attempt $ATTEMPT (md5: $DST_MD5)"
+                    TSV_COPIED=1
+                    break
+                else
+                    echo "WARNING: md5sum mismatch on attempt $ATTEMPT"
+                    echo "  Source: $SRC_MD5"
+                    echo "  Local:  $DST_MD5"
+                    rm -f $LOCAL_TSV
+                fi
+            else
+                echo "WARNING: Copy failed on attempt $ATTEMPT"
+            fi
+            
+            # Exponential backoff with jitter: 2, 5, 10, 17, 26, 37, 50, 65, 82, 101 seconds
+            if [ $ATTEMPT -lt 10 ]; then
+                DELAY=$((2 + (ATTEMPT * ATTEMPT)))
+                echo "Waiting ${{DELAY}} seconds before retry..."
+                sleep $DELAY
+            fi
+        done
+        
+        if [ $TSV_COPIED -eq 0 ]; then
+            echo "ERROR: Failed to copy TSV after 10 attempts"
+            rm -f $LOCAL_SAMGZ
+            exit 1
+        fi
+        
+        # Verify TSV file exists and is readable
+        if [ ! -f "$LOCAL_TSV" ]; then
+            echo "ERROR: TSV file not found at $LOCAL_TSV after successful copy"
+            rm -f $LOCAL_SAMGZ
+            exit 1
+        fi
+        
+        # Process with hickit pipeline using local TSV
         echo "Processing with hickit pipeline..."
         if [ "{wildcards.par}" != "nopar" ]; then
             # With PAR bed filtering
             echo "Using PAR bed: {input.parbed}"
-            {K8} {HICKIT_JS} sam2seg -v {input.tsv} $LOCAL_SAMGZ | \
+            {K8} {HICKIT_JS} sam2seg -v $LOCAL_TSV $LOCAL_SAMGZ | \
                 {K8} {HICKIT_JS} chronly - | \
                 {K8} {HICKIT_JS} bedflt {input.parbed} - | \
                 gzip > $LOCAL_SEG
         else
             # Without PAR bed filtering
             echo "No PAR bed filtering"
-            {K8} {HICKIT_JS} sam2seg -v {input.tsv} $LOCAL_SAMGZ | \
+            {K8} {HICKIT_JS} sam2seg -v $LOCAL_TSV $LOCAL_SAMGZ | \
                 {K8} {HICKIT_JS} chronly - | \
                 gzip > $LOCAL_SEG
         fi
@@ -582,9 +634,9 @@ rule sam2seg_per_split:
         mkdir -p $(dirname {output.seg})
         mv $LOCAL_SEG {output.seg}
         
-        # Clean up local sam.gz copy
+        # Clean up local copies
         echo "Cleaning up local files..."
-        rm -f $LOCAL_SAMGZ
+        rm -f $LOCAL_SAMGZ $LOCAL_TSV
         """
 
 ######################################################################
@@ -606,7 +658,7 @@ rule seg_to_pairs:
     threads: 1
     resources:
         mem_mb = 7999,
-        runtime = 30
+        runtime = 120
     shell:
         """
         # Copy seg.gz to local disk for faster I/O
