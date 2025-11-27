@@ -172,7 +172,7 @@ if "SNP_FILTER_BEDs" not in config:
     config["SNP_FILTER_BEDs"] = {}
 
 wildcard_constraints:
-    phasedvcf="[A-Za-z0-9]+",
+    vcfname="[A-Za-z0-9]+",
     libtype="[A-Za-z]+",
     libname="[A-Za-z0-9]+",
     par="[A-Za-z0-9]+",
@@ -221,7 +221,7 @@ def get_all_seg_outputs(wildcards):
     
     # Return list of all expected seg.gz files for all PAR beds
     return [
-        config["tool"] + f"/output/contacts_seg/{par}/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.seg.gz"
+        config["tool"] + f"/output/contacts_seg/{wildcards.vcfname}/{par}/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.seg.gz"
         for par in config["PAR_BEDs"].keys()
         for part in range(num_parts)
     ]
@@ -243,21 +243,23 @@ def get_all_pairs_outputs(wildcards):
     
     # Return list of all expected pairs.gz files for all PAR beds
     return [
-        config["tool"] + f"/output/contacts_pairs/{par}/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.pairs.gz"
+        config["tool"] + f"/output/contacts_pairs/{wildcards.vcfname}/{par}/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.pairs.gz"
         for par in config["PAR_BEDs"].keys()
         for part in range(num_parts)
     ]
 
 rule all:
     input:
-        # Aggregate all .con.gz files for all libraries, PAR beds, and SNP filters
-        [config["tool"] + f"/output/contacts_con/{par}/{snpfilter}/{libtype}.{libname}.con.gz"
+        # Aggregate all .con.gz files for all VCFs, libraries, PAR beds, and SNP filters
+        [config["tool"] + f"/output/contacts_con/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.con.gz"
+         for vcfname in config["PHASED_VCFs"].keys()
          for libtype in config["ACTIVE_LIBTYPES"]
          for libname in config["LIB_NAMES"][libtype]
          for par in config["PAR_BEDs"].keys()
          for snpfilter in list(config["SNP_FILTER_BEDs"].keys()) + ["nofilter"]],
         # Aggregate all Hi-C heatmaps
-        [config["tool"] + f"/output/hic_heatmaps/{par}/{snpfilter}/{libtype}.{libname}.par{par}.snp{snpfilter}.bin2.5Mb.heatmap.png"
+        [config["tool"] + f"/output/hic_heatmaps/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.par{par}.snp{snpfilter}.bin2.5Mb.heatmap.png"
+         for vcfname in config["PHASED_VCFs"].keys()
          for libtype in config["ACTIVE_LIBTYPES"]
          for libname in config["LIB_NAMES"][libtype]
          for par in config["PAR_BEDs"].keys()
@@ -438,14 +440,14 @@ rule aggregate_seg_files:
     input:
         get_all_seg_outputs
     output:
-        done = config["tool"] + "/output/contacts_seg/{libtype}.{libname}/complete.txt"
+        done = config["tool"] + "/output/contacts_seg/{vcfname}/{libtype}.{libname}/complete.txt"
     threads: 1
     resources:
         mem_mb = 1000,
         runtime = 5
     shell:
         """
-        echo "All seg.gz files created for {wildcards.libtype}.{wildcards.libname}" > {output.done}
+        echo "All seg.gz files created for {wildcards.vcfname} {wildcards.libtype}.{wildcards.libname}" > {output.done}
         """
 
 ##############################################################################
@@ -455,9 +457,9 @@ rule aggregate_seg_files:
 rule softlinks_phased_vcf:
     input:
         # we make softlinks of the phased VCFs here in the input directory
-        vcf = lambda wildcards: config["PHASED_VCFs"][wildcards.phasedvcf]["path"]
+        vcf = lambda wildcards: config["PHASED_VCFs"][wildcards.vcfname]["path"]
     output:
-        vcf_link = config["tool"] + "/input/phased_vcfs/{phasedvcf}_phased.vcf.gz"
+        vcf_link = config["tool"] + "/input/phased_vcfs/{vcfname}_phased.vcf.gz"
     params:
         outdir = config["tool"] + "/input/phased_vcfs"
     threads: 1
@@ -478,9 +480,9 @@ rule process_phased_vcf:
     Strategy: Copy VCF to $TMPDIR, process there, then move output to target
     """
     input:
-        vcf = config["tool"] + "/input/phased_vcfs/{phasedvcf}_phased.vcf.gz"
+        vcf = config["tool"] + "/input/phased_vcfs/{vcfname}_phased.vcf.gz"
     output:
-        tsv = config["tool"] + "/output/phased_vcfs/{phasedvcf}_phased_SNP.tsv"
+        tsv = config["tool"] + "/output/phased_vcfs/{vcfname}_phased_SNP.tsv"
     params:
         bindir = HICKIT_DIR
     threads: 1
@@ -490,8 +492,8 @@ rule process_phased_vcf:
     shell:
         """
         # Copy VCF to local disk
-        LOCAL_VCF=$TMPDIR/{wildcards.phasedvcf}_phased.vcf.gz
-        LOCAL_TSV=$TMPDIR/{wildcards.phasedvcf}_phased_SNP.tsv
+        LOCAL_VCF=$TMPDIR/{wildcards.vcfname}_phased.vcf.gz
+        LOCAL_TSV=$TMPDIR/{wildcards.vcfname}_phased_SNP.tsv
         
         echo "Copying VCF to $LOCAL_VCF"
         cp {input.vcf} $LOCAL_VCF
@@ -540,10 +542,10 @@ rule sam2seg_per_split:
     """
     input:
         samgz = config["tool"] + "/output/samgz_split/{libtype}.{libname}.part{part}.sam.gz",
-        tsv = lambda wildcards: config["tool"] + f"/output/phased_vcfs/{list(config['PHASED_VCFs'].keys())[0]}_phased_SNP.tsv",
+        tsv = config["tool"] + "/output/phased_vcfs/{vcfname}_phased_SNP.tsv",
         parbed = lambda wildcards: config["PAR_BEDs"][wildcards.par]["path"] if wildcards.par != "nopar" else []
     output:
-        seg = config["tool"] + "/output/contacts_seg/{par}/{libtype}.{libname}.part{part}.seg.gz"
+        seg = config["tool"] + "/output/contacts_seg/{vcfname}/{par}/{libtype}.{libname}.part{part}.seg.gz"
     threads: 1
     resources:
         mem_mb = 8000,
@@ -598,9 +600,9 @@ rule seg_to_pairs:
     Strategy: Copy seg.gz to $TMPDIR, process with hickit binary, pipe to bgzip
     """
     input:
-        seg = config["tool"] + "/output/contacts_seg/{par}/{libtype}.{libname}.part{part}.seg.gz"
+        seg = config["tool"] + "/output/contacts_seg/{vcfname}/{par}/{libtype}.{libname}.part{part}.seg.gz"
     output:
-        pairs = config["tool"] + "/output/contacts_pairs/{par}/{libtype}.{libname}.part{part}.pairs.gz"
+        pairs = config["tool"] + "/output/contacts_pairs/{vcfname}/{par}/{libtype}.{libname}.part{part}.pairs.gz"
     threads: 1
     resources:
         mem_mb = 7999,
@@ -653,14 +655,14 @@ rule aggregate_pairs_files:
     input:
         get_all_pairs_outputs
     output:
-        done = config["tool"] + "/output/contacts_pairs/{libtype}.{libname}/complete.txt"
+        done = config["tool"] + "/output/contacts_pairs/{vcfname}/{libtype}.{libname}/complete.txt"
     threads: 1
     resources:
         mem_mb = 1000,
         runtime = 5
     shell:
         """
-        echo "All pairs.gz files created for {wildcards.libtype}.{wildcards.libname}" > {output.done}
+        echo "All pairs.gz files created for {wildcards.vcfname} {wildcards.libtype}.{wildcards.libname}" > {output.done}
         """
 
 ######################################################################
@@ -684,7 +686,7 @@ rule merge_and_sort_pairs:
     """
     input:
         lambda wildcards: [
-            config["tool"] + f"/output/contacts_pairs/{wildcards.par}/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.pairs.gz"
+            config["tool"] + f"/output/contacts_pairs/{wildcards.vcfname}/{wildcards.par}/{wildcards.libtype}.{wildcards.libname}.part{part:04d}.pairs.gz"
             for part in range(
                 int(open(checkpoints.split_samgz_by_readid.get(
                     libtype=wildcards.libtype,
@@ -693,7 +695,7 @@ rule merge_and_sort_pairs:
             )
         ]
     output:
-        merged = config["tool"] + "/output/contacts_pairs_merged/{par}/{libtype}.{libname}.merged.sorted.pairs.gz"
+        merged = config["tool"] + "/output/contacts_pairs_merged/{vcfname}/{par}/{libtype}.{libname}.merged.sorted.pairs.gz"
     threads: 64
     resources:
         mem_mb = lambda wildcards, input: int(sum(os.path.getsize(f) for f in input) / (1024**2) * 26 * 1.5),
@@ -725,9 +727,9 @@ rule filter_phased_pairs:
     Keeps the header lines (starting with #) and only data rows with valid phasing info.
     """
     input:
-        pairs = config["tool"] + "/output/contacts_pairs_merged/{par}/{libtype}.{libname}.merged.sorted.pairs.gz"
+        pairs = config["tool"] + "/output/contacts_pairs_merged/{vcfname}/{par}/{libtype}.{libname}.merged.sorted.pairs.gz"
     output:
-        phased = config["tool"] + "/output/contacts_pairs_phased/{par}/{libtype}.{libname}.phased.pairs.gz"
+        phased = config["tool"] + "/output/contacts_pairs_phased/{vcfname}/{par}/{libtype}.{libname}.phased.pairs.gz"
     threads: 4
     resources:
         mem_mb = 8000,
@@ -754,9 +756,9 @@ rule make_pairs_side1_bed:
     This is computed once per library+PAR combination and reused across all SNP filters.
     """
     input:
-        pairs = config["tool"] + "/output/contacts_pairs_phased/{par}/{libtype}.{libname}.phased.pairs.gz"
+        pairs = config["tool"] + "/output/contacts_pairs_phased/{vcfname}/{par}/{libtype}.{libname}.phased.pairs.gz"
     output:
-        side1 = config["tool"] + "/output/contacts_pairs_sides/{par}/{libtype}.{libname}.side1.bed"
+        side1 = config["tool"] + "/output/contacts_pairs_sides/{vcfname}/{par}/{libtype}.{libname}.side1.bed"
     threads: 2
     resources:
         mem_mb = 7999,
@@ -777,9 +779,9 @@ rule make_pairs_side2_bed:
     This is computed once per library+PAR combination and reused across all SNP filters.
     """
     input:
-        pairs = config["tool"] + "/output/contacts_pairs_phased/{par}/{libtype}.{libname}.phased.pairs.gz"
+        pairs = config["tool"] + "/output/contacts_pairs_phased/{vcfname}/{par}/{libtype}.{libname}.phased.pairs.gz"
     output:
-        side2 = config["tool"] + "/output/contacts_pairs_sides/{par}/{libtype}.{libname}.side2.bed"
+        side2 = config["tool"] + "/output/contacts_pairs_sides/{vcfname}/{par}/{libtype}.{libname}.side2.bed"
     threads: 2
     resources:
         mem_mb = 7999,
@@ -809,12 +811,12 @@ rule filter_pairs:
     This approach uses line numbers instead of read IDs since all read IDs may be "."
     """
     input:
-        pairs = config["tool"] + "/output/contacts_pairs_phased/{par}/{libtype}.{libname}.phased.pairs.gz",
-        side1 = config["tool"] + "/output/contacts_pairs_sides/{par}/{libtype}.{libname}.side1.bed",
-        side2 = config["tool"] + "/output/contacts_pairs_sides/{par}/{libtype}.{libname}.side2.bed",
+        pairs = config["tool"] + "/output/contacts_pairs_phased/{vcfname}/{par}/{libtype}.{libname}.phased.pairs.gz",
+        side1 = config["tool"] + "/output/contacts_pairs_sides/{vcfname}/{par}/{libtype}.{libname}.side1.bed",
+        side2 = config["tool"] + "/output/contacts_pairs_sides/{vcfname}/{par}/{libtype}.{libname}.side2.bed",
         bed = lambda wildcards: config["SNP_FILTER_BEDs"][wildcards.snpfilter]["path"] if wildcards.snpfilter != "nofilter" else []
     output:
-        filtered = config["tool"] + "/output/contacts_pairs_filtered/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
+        filtered = config["tool"] + "/output/contacts_pairs_filtered/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
     threads: 4
     resources:
         mem_mb = 32000,
@@ -916,9 +918,9 @@ rule pairs_to_con:
     Uses pigz for parallel compression with available threads.
     """
     input:
-        pairs = config["tool"] + "/output/contacts_pairs_filtered/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
+        pairs = config["tool"] + "/output/contacts_pairs_filtered/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
     output:
-        con = config["tool"] + "/output/contacts_con/{par}/{snpfilter}/{libtype}.{libname}.con.gz"
+        con = config["tool"] + "/output/contacts_con/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.con.gz"
     threads: 2
     resources:
         mem_mb = 7999,
@@ -954,10 +956,10 @@ rule bin_pairs_to_matrix:
     them all as input - the rule will accumulate all contacts into a single matrix.
     """
     input:
-        pairs = config["tool"] + "/output/contacts_pairs_filtered/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
+        pairs = config["tool"] + "/output/contacts_pairs_filtered/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
     output:
-        matrix = config["tool"] + "/output/contact_matrices/{par}/{snpfilter}/{libtype}.{libname}.matrix.npz",
-        metadata = config["tool"] + "/output/contact_matrices/{par}/{snpfilter}/{libtype}.{libname}.matrix.metadata.npz"
+        matrix = config["tool"] + "/output/contact_matrices/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.matrix.npz",
+        metadata = config["tool"] + "/output/contact_matrices/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.matrix.metadata.npz"
     params:
         bin_size = 2500000  # 2.5 Mb bins
     threads: 1
@@ -987,10 +989,10 @@ rule plot_hic_heatmap:
     - Native resolution output (2500x2500 pixels for 2.5 Mb bins)
     """
     input:
-        matrix = config["tool"] + "/output/contact_matrices/{par}/{snpfilter}/{libtype}.{libname}.matrix.npz",
-        metadata = config["tool"] + "/output/contact_matrices/{par}/{snpfilter}/{libtype}.{libname}.matrix.metadata.npz"
+        matrix = config["tool"] + "/output/contact_matrices/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.matrix.npz",
+        metadata = config["tool"] + "/output/contact_matrices/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.matrix.metadata.npz"
     output:
-        heatmap = config["tool"] + "/output/hic_heatmaps/{par}/{snpfilter}/{libtype}.{libname}.par{par}.snp{snpfilter}.bin2.5Mb.heatmap.png"
+        heatmap = config["tool"] + "/output/hic_heatmaps/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.par{par}.snp{snpfilter}.bin2.5Mb.heatmap.png"
     threads: 1
     resources:
         mem_mb = 32000,  # Need memory to convert sparse to dense
