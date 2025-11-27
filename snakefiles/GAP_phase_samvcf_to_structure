@@ -545,9 +545,9 @@ rule sam2seg_per_split:
         tsv = config["tool"] + "/output/phased_vcfs/{vcfname}_phased_SNP.tsv",
         parbed = lambda wildcards: config["PAR_BEDs"][wildcards.par]["path"] if wildcards.par != "nopar" else []
     output:
-        seg = config["tool"] + "/output/contacts_seg/{vcfname}/{par}/{libtype}.{libname}.part{part}.seg.gz"
+        seg = temp(config["tool"] + "/output/contacts_seg/{vcfname}/{par}/{libtype}.{libname}.part{part}.seg.gz")
     threads: 1
-    retries: 2
+    retries: 4
     resources:
         mem_mb = 8000,
         runtime = 120
@@ -683,9 +683,9 @@ rule seg_to_pairs:
     input:
         seg = config["tool"] + "/output/contacts_seg/{vcfname}/{par}/{libtype}.{libname}.part{part}.seg.gz"
     output:
-        pairs = config["tool"] + "/output/contacts_pairs/{vcfname}/{par}/{libtype}.{libname}.part{part}.pairs.gz"
+        pairs = temp(config["tool"] + "/output/contacts_pairs/{vcfname}/{par}/{libtype}.{libname}.part{part}.pairs.gz")
     threads: 1
-    retries: 2
+    retries: 4
     resources:
         mem_mb = 7999,
         runtime = 120
