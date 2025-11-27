@@ -649,37 +649,70 @@ rule seg_to_pairs:
         hickit -i contacts.seg.gz -o - | bgzip > contacts.pairs.gz
     
     This processes each seg.gz file independently to generate pairs.gz files.
-    Strategy: Copy seg.gz to $TMPDIR, process with hickit binary, pipe to bgzip
+    Strategy: Copy seg.gz to $TMPDIR with retry logic, process with hickit binary, pipe to bgzip
     """
     input:
         seg = config["tool"] + "/output/contacts_seg/{vcfname}/{par}/{libtype}.{libname}.part{part}.seg.gz"
     output:
         pairs = temp(config["tool"] + "/output/contacts_pairs/{vcfname}/{par}/{libtype}.{libname}.part{part}.pairs.gz")
     threads: 1
+    retries: 2
     resources:
         mem_mb = 7999,
         runtime = 120
     shell:
         """
-        # Copy seg.gz to local disk for faster I/O
+        # Copy seg.gz to local disk with retry logic (10 attempts with exponential backoff)
+        # This handles filesystem contention from parallel jobs
         LOCAL_SEG=$TMPDIR/$(basename {input.seg})
         LOCAL_PAIRS=$TMPDIR/$(basename {output.pairs})
         
-        echo "Copying seg.gz to $TMPDIR..."
-        cp {input.seg} $LOCAL_SEG
-        sync
+        echo "Copying seg.gz to $TMPDIR with retry logic..."
+        SEG_COPIED=0
+        for ATTEMPT in {{1..10}}; do
+            echo "seg.gz copy attempt $ATTEMPT of 10..."
+            
+            # Copy the file
+            if cp {input.seg} $LOCAL_SEG 2>/dev/null; then
+                sync
+                
+                # Verify with md5sum
+                echo "Verifying seg.gz file integrity with md5sum..."
+                SRC_MD5=$(md5sum {input.seg} | awk '{{print $1}}')
+                DST_MD5=$(md5sum $LOCAL_SEG | awk '{{print $1}}')
+                
+                if [ "$SRC_MD5" = "$DST_MD5" ]; then
+                    echo "seg.gz copy successful on attempt $ATTEMPT (md5: $DST_MD5)"
+                    SEG_COPIED=1
+                    break
+                else
+                    echo "WARNING: md5sum mismatch on attempt $ATTEMPT"
+                    echo "  Source: $SRC_MD5"
+                    echo "  Local:  $DST_MD5"
+                    rm -f $LOCAL_SEG
+                fi
+            else
+                echo "WARNING: Copy failed on attempt $ATTEMPT"
+            fi
+            
+            # Exponential backoff with jitter: 2, 5, 10, 17, 26, 37, 50, 65, 82, 101 seconds
+            if [ $ATTEMPT -lt 10 ]; then
+                DELAY=$((2 + (ATTEMPT * ATTEMPT)))
+                echo "Waiting ${{DELAY}} seconds before retry..."
+                sleep $DELAY
+            fi
+        done
         
-        # Verify file integrity after copy with md5sum
-        echo "Verifying file integrity with md5sum..."
-        SRC_MD5=$(md5sum {input.seg} | awk '{{print $1}}')
-        DST_MD5=$(md5sum $LOCAL_SEG | awk '{{print $1}}')
-        if [ "$SRC_MD5" != "$DST_MD5" ]; then
-            echo "ERROR: MD5 checksum mismatch after copy!"
-            echo "Source: $SRC_MD5"
-            echo "Local:  $DST_MD5"
+        if [ $SEG_COPIED -eq 0 ]; then
+            echo "ERROR: Failed to copy seg.gz after 10 attempts"
             exit 1
         fi
-        echo "File integrity verified: $DST_MD5"
+        
+        # Verify seg.gz file exists and is readable
+        if [ ! -f "$LOCAL_SEG" ]; then
+            echo "ERROR: seg.gz file not found at $LOCAL_SEG after successful copy"
+            exit 1
+        fi
         
         # Process with hickit binary
         echo "Converting seg.gz to pairs.gz with hickit..."
