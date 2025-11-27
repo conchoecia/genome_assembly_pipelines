@@ -161,6 +161,16 @@ config["ACTIVE_LIBTYPES"] = list(config["LIB_NAMES"].keys())
 # make sure everything in the config["CHROMS"] is a string
 config["CHROMS"] = [str(chrom) for chrom in config["CHROMS"]]
 
+# Optional: PAR BED files (Pseudoautosomal regions)
+# If not provided, create a dummy "nopar" entry to skip PAR filtering
+if "PAR_BEDs" not in config or len(config["PAR_BEDs"]) == 0:
+    config["PAR_BEDs"] = {"nopar": {"path": "", "note": "No PAR filtering"}}
+
+# Optional: SNP filter BED files
+# If not provided, set to empty dict - workflow will only use "nofilter" option
+if "SNP_FILTER_BEDs" not in config:
+    config["SNP_FILTER_BEDs"] = {}
+
 wildcard_constraints:
     phasedvcf="[A-Za-z0-9]+",
     libtype="[A-Za-z]+",

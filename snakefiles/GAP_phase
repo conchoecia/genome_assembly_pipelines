@@ -1095,7 +1095,7 @@ rule concatenate_HAPCUT2_evidence:
     threads: 1
     resources:
         mem_mb  = 2000,
-        runtime = 15
+        runtime = 59
     shell:
         """
         cat {input.frags} > {output.cat}
