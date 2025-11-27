@@ -389,25 +389,28 @@ def get_hapcut2_runtime(wildcards, input):
     - Number of variants (larger chromosomes = more SNPs to phase)
     - Graph complexity (Hi-C creates dense contact graphs)
     
-    Empirical observation: Large chromosomes with deep Hi-C coverage can take hours.
-    Conservative estimate: 60 min baseline + 30 min per GB of fragment file
+    Empirical observation: Large chromosomes with deep Hi-C coverage can take many hours.
+    The graph construction and optimization is compute-intensive, not I/O bound.
     
-    Minimum: 60 minutes (small chromosomes)
-    Maximum: 1200 minutes (20 hours, for chr1 with very deep Hi-C)
+    Conservative estimate: 120 min baseline + 60 min per GB of fragment file
+    This gives significantly more time for the optimization phase.
+    
+    Minimum: 120 minutes (small chromosomes)
+    Maximum: 1440 minutes (24 hours, for chr1 with very deep Hi-C)
     """
     try:
         frag_size_bytes = os.path.getsize(input.frag)
         frag_size_gb = frag_size_bytes / (1024**3)
         
         # Base runtime + scaling factor
-        # 60 min baseline + 30 min per GB of fragment file
-        runtime_min = int(60 + (frag_size_gb * 30))
+        # 120 min baseline + 60 min per GB of fragment file
+        runtime_min = int(120 + (frag_size_gb * 60))
         
-        # Minimum 60 minutes, maximum 1200 minutes (20 hours)
-        return max(60, min(runtime_min, 1200))
+        # Minimum 120 minutes, maximum 1440 minutes (24 hours)
+        return max(120, min(runtime_min, 1440))
     except Exception as e:
         print(f"Warning: Could not calculate HapCUT2 runtime for {wildcards}: {e}")
-        return 180  # Safe default: 3 hours
+        return 240  # Safe default: 4 hours
 
 def get_sambamba_markdup_runtime(wildcards, input):
     """
@@ -1550,7 +1553,7 @@ rule split_phased_into_individual_chromosomes:
     threads: 1
     resources:
         mem_mb  = 4000,
-        runtime = 20
+        runtime = 59
     params:
         tchrom = lambda w: w.chrom
     shell:
@@ -1566,7 +1569,7 @@ rule index_vcf_individual_chromosomes:
     threads: 1
     resources:
         mem_mb  = 4000,
-        runtime = 20
+        runtime = 59
     params:
         tchrom = lambda w: w.chrom
     shell:
