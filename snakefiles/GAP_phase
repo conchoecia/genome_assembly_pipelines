@@ -1985,36 +1985,41 @@ rule create_multi_vcf_phasing_summary:
                 ])) + '\n')
         
         # Write output file 4: VCF comparison (if multiple VCFs)
+        # Format: One row per VCF sample, one column per metric
         if len(config["VCF_NAMES"]) > 1:
             with open(output.comparison, 'w') as f:
-                f.write('\t'.join(['metric'] + config["VCF_NAMES"] + ['notes']) + '\n')
-                
+                # Define metrics to compare (key, header_name)
                 metrics_to_compare = [
-                    ('total_variants', 'Total variants in input VCF'),
-                    ('total_phased', 'Variants successfully phased'),
-                    ('overall_phasing_rate', 'Phasing success rate (%)'),
-                    ('genome_coverage_pct', 'Genome covered by largest phase blocks (%)'),
-                    ('block_n50', 'Phase block N50 (bp)'),
-                    ('block_n90', 'Phase block N90 (bp)'),
-                    ('largest_block', 'Largest single phase block (bp)'),
-                    ('total_phase_blocks', 'Total number of phase blocks'),
-                    ('mean_chrom_coverage', 'Mean per-chromosome coverage (%)'),
-                    ('median_chrom_coverage', 'Median per-chromosome coverage (%)'),
-                    ('chroms_over_90pct', 'Chromosomes with >90% coverage'),
-                    ('mean_block_size', 'Mean phase block size (bp)'),
-                    ('blocks_over_10mb', 'Phase blocks larger than 10 Mb')
+                    ('total_variants', 'total_variants'),
+                    ('total_phased', 'total_phased'),
+                    ('overall_phasing_rate', 'overall_phasing_rate'),
+                    ('genome_coverage_pct', 'genome_coverage_pct'),
+                    ('block_n50', 'block_n50'),
+                    ('block_n90', 'block_n90'),
+                    ('largest_block', 'largest_block'),
+                    ('total_phase_blocks', 'total_phase_blocks'),
+                    ('mean_chrom_coverage', 'mean_chrom_coverage'),
+                    ('median_chrom_coverage', 'median_chrom_coverage'),
+                    ('chroms_over_90pct', 'chroms_over_90pct'),
+                    ('mean_block_size', 'mean_block_size'),
+                    ('blocks_over_10mb', 'blocks_over_10mb')
                 ]
                 
-                for metric_key, description in metrics_to_compare:
-                    values = []
-                    for vcfname in config["VCF_NAMES"]:
+                # Write header: sample_name followed by all metric names
+                header = ['sample_name'] + [metric[1] for metric in metrics_to_compare]
+                f.write('\t'.join(header) + '\n')
+                
+                # Write one row per VCF sample
+                for vcfname in config["VCF_NAMES"]:
+                    row_values = [vcfname]
+                    for metric_key, _ in metrics_to_compare:
                         val = vcf_data[vcfname][metric_key]
                         if isinstance(val, float):
-                            values.append(f"{val:.2f}")
+                            row_values.append(f"{val:.2f}")
                         else:
-                            values.append(str(val))
+                            row_values.append(str(val))
                     
-                    f.write('\t'.join([metric_key] + values + [description]) + '\n')
+                    f.write('\t'.join(row_values) + '\n')
         else:
             # Single VCF, just note that comparison requires multiple VCFs
             with open(output.comparison, 'w') as f:
