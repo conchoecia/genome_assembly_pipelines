@@ -1182,8 +1182,9 @@ rule cat_haps:
     params:
         outdir = config["tool"] + "/output/{vcfname}/final_output"
     threads: 1
+    retries: 2
     resources:
-        mem_mb=1000, runtime=10
+        mem_mb=1000, runtime=59
     shell:
         r"""
         mkdir -p {params.outdir}

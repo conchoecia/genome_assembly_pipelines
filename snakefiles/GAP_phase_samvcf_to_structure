@@ -629,10 +629,39 @@ rule sam2seg_per_split:
                 gzip > $LOCAL_SEG
         fi
         
+        # Validate seg.gz file before moving
+        echo "Validating seg.gz file..."
+        
+        # Test gzip integrity (file may be empty if no reads mapped to this segment)
+        if ! gzip -t $LOCAL_SEG 2>/dev/null; then
+            echo "ERROR: seg.gz file failed gzip integrity test"
+            rm -f $LOCAL_SAMGZ $LOCAL_TSV $LOCAL_SEG
+            exit 1
+        fi
+        echo "seg.gz gzip integrity validated"
+        
+        # Calculate md5sum before moving
+        echo "Calculating md5sum before move..."
+        LOCAL_MD5=$(md5sum $LOCAL_SEG | awk '{{print $1}}')
+        echo "Local seg.gz md5: $LOCAL_MD5"
+        
         # Move output to target directory
         echo "Moving output to target directory..."
         mkdir -p $(dirname {output.seg})
         mv $LOCAL_SEG {output.seg}
+        sync
+        
+        # Verify md5sum after move
+        echo "Verifying seg.gz integrity after move..."
+        FINAL_MD5=$(md5sum {output.seg} | awk '{{print $1}}')
+        if [ "$LOCAL_MD5" != "$FINAL_MD5" ]; then
+            echo "ERROR: md5sum mismatch after move!"
+            echo "  Local:  $LOCAL_MD5"
+            echo "  Final:  $FINAL_MD5"
+            rm -f $LOCAL_SAMGZ $LOCAL_TSV {output.seg}
+            exit 1
+        fi
+        echo "seg.gz integrity verified after move (md5: $FINAL_MD5)"
         
         # Clean up local copies
         echo "Cleaning up local files..."
