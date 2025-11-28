@@ -821,15 +821,74 @@ rule merge_and_sort_pairs:
         # Calculate buffer size (80% of allocated memory for sort buffer)
         BUFFER_SIZE=$(echo "{resources.mem_mb} * 0.8" | bc | cut -d. -f1)
 
-        # Extract header from first file
-        zcat {input[0]} | grep '^#' | {BGZIP} > {output.merged}
+        # Use SLURM_JOB_ID for unique filename on node (defaults to $$ if not in SLURM)
+        JOB_ID=${{SLURM_JOB_ID:-$$}}
+        LOCAL_MERGED=$TMPDIR/merged_pairs_${{JOB_ID}}.gz
+        
+        echo "Writing output to local file: $LOCAL_MERGED"
 
-        # Merge all parts (excluding headers), sort, and append
+        # Extract header from first file
+        zcat {input[0]} | grep '^#' | {BGZIP} > $LOCAL_MERGED
+
+        # Merge all parts (excluding headers), validate 9-field format, sort, and append
         zcat {input} | \
         grep -v '^#' | \
+        awk 'NF==9 {{print}}' | \
         sort -k2,2V -k4,4V -k3,3n -k5,5n --parallel={threads} --buffer-size=${{BUFFER_SIZE}}M | \
-        {BGZIP} >> {output.merged}
-
+        {BGZIP} >> $LOCAL_MERGED
+        
+        echo "Merge and sort complete, verifying and copying to target..."
+        
+        # Calculate md5sum of local file
+        LOCAL_MD5=$(md5sum $LOCAL_MERGED | awk '{{print $1}}')
+        echo "Local merged file md5: $LOCAL_MD5"
+        
+        # Copy to target with retry logic (10 attempts with exponential backoff)
+        COPY_SUCCESS=0
+        for ATTEMPT in {{1..10}}; do
+            echo "Copy attempt $ATTEMPT of 10..."
+            
+            # Create target directory and copy
+            mkdir -p $(dirname {output.merged})
+            if cp $LOCAL_MERGED {output.merged} 2>/dev/null; then
+                sync
+                
+                # Verify with md5sum
+                echo "Verifying file integrity with md5sum..."
+                TARGET_MD5=$(md5sum {output.merged} | awk '{{print $1}}')
+                
+                if [ "$LOCAL_MD5" = "$TARGET_MD5" ]; then
+                    echo "Copy successful on attempt $ATTEMPT (md5: $TARGET_MD5)"
+                    COPY_SUCCESS=1
+                    break
+                else
+                    echo "WARNING: md5sum mismatch on attempt $ATTEMPT"
+                    echo "  Local:  $LOCAL_MD5"
+                    echo "  Target: $TARGET_MD5"
+                    rm -f {output.merged}
+                fi
+            else
+                echo "WARNING: Copy failed on attempt $ATTEMPT"
+            fi
+            
+            # Exponential backoff with jitter: 2, 5, 10, 17, 26, 37, 50, 65, 82, 101 seconds
+            if [ $ATTEMPT -lt 10 ]; then
+                DELAY=$((2 + (ATTEMPT * ATTEMPT)))
+                echo "Waiting ${{DELAY}} seconds before retry..."
+                sleep $DELAY
+            fi
+        done
+        
+        if [ $COPY_SUCCESS -eq 0 ]; then
+            echo "ERROR: Failed to copy merged file after 10 attempts"
+            rm -f $LOCAL_MERGED
+            exit 1
+        fi
+        
+        # Clean up local file
+        echo "Cleaning up local file..."
+        rm -f $LOCAL_MERGED
+        
         echo "Merge and sort job finished at $(date)"
         """
 
