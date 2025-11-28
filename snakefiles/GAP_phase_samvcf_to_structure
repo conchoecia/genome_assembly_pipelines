@@ -827,11 +827,24 @@ rule merge_and_sort_pairs:
         
         echo "Writing output to local file: $LOCAL_MERGED"
 
-        # Extract header from first file
-        zcat {input[0]} | grep '^#' | {BGZIP} > $LOCAL_MERGED
+        # Extract header from first file (with error handling)
+        if gzip -t {input[0]} 2>/dev/null; then
+            zcat {input[0]} | grep '^#' | {BGZIP} > $LOCAL_MERGED
+        else
+            echo "WARNING: {input[0]} failed gzip test, treating as uncompressed" >&2
+            cat {input[0]} | grep '^#' | {BGZIP} > $LOCAL_MERGED
+        fi
 
         # Merge all parts (excluding headers), validate 9-field format, sort, and append
-        zcat {input} | \
+        # Loop through files and handle both gzipped and non-gzipped
+        (for FILE in {input}; do
+            if gzip -t "$FILE" 2>/dev/null; then
+                zcat "$FILE"
+            else
+                echo "WARNING: $FILE failed gzip test, treating as uncompressed" >&2
+                cat "$FILE"
+            fi
+        done) | \
         grep -v '^#' | \
         awk 'NF==9 {{print}}' | \
         sort -k2,2V -k4,4V -k3,3n -k5,5n --parallel={threads} --buffer-size=${{BUFFER_SIZE}}M | \
