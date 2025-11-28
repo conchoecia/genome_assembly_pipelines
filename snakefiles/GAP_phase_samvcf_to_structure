@@ -813,7 +813,7 @@ rule merge_and_sort_pairs:
     threads: 64
     resources:
         mem_mb = lambda wildcards, input: int(sum(os.path.getsize(f) for f in input) / (1024**2) * 26 * 1.5),
-        runtime = lambda wildcards, input: int(sum(os.path.getsize(f) for f in input) / (1024**3) * 33) # 33 minutes per GB of pairs.gz. Should take 11 minutes per GB
+        runtime = lambda wildcards, input: int(sum(os.path.getsize(f) for f in input) / (1024**3) * 66) # 66 minutes per GB of pairs.gz. Should take 11 minutes per GB but some systems are slow
     shell:
         """
         echo "Merge and sort job started at $(date)"
