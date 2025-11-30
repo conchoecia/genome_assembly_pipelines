@@ -477,7 +477,12 @@ rule process_phased_vcf:
     Does this step from the hickit pipeline
         ${BINDIR}/hickit.js vcf2tsv ${VCFGZ} > phased_SNP.tsv
     
-    Strategy: Copy VCF to $TMPDIR, process there, then move output to target
+    Strategy:
+    1. Verify input VCF is properly gzipped
+    2. Copy VCF to $TMPDIR using utility functions
+    3. Process locally for faster I/O
+    4. Copy TSV to destination with verification
+    5. Clean up temporary files
     """
     input:
         vcf = config["tool"] + "/input/phased_vcfs/{vcfname}_phased.vcf.gz"
@@ -486,30 +491,46 @@ rule process_phased_vcf:
     params:
         bindir = HICKIT_DIR
     threads: 1
+    retries: 4
     resources:
         mem_mb  = 7999,
         runtime = 180
     shell:
         """
-        # Copy VCF to local disk
-        LOCAL_VCF=$TMPDIR/{wildcards.vcfname}_phased.vcf.gz
-        LOCAL_TSV=$TMPDIR/{wildcards.vcfname}_phased_SNP.tsv
+        # Source utility functions
+        source {filepath}/../scripts/file_utils.sh
         
-        echo "Copying VCF to $LOCAL_VCF"
-        cp {input.vcf} $LOCAL_VCF
+        # Get unique job ID for temporary files
+        JOB_ID=$(get_job_id)
+        TEMP_DIR=$TMPDIR/vcf2tsv_${{JOB_ID}}_{wildcards.vcfname}
+        mkdir -p $TEMP_DIR
         
-        # Process from local disk
+        # Setup local paths
+        LOCAL_VCF=$TEMP_DIR/$(basename {input.vcf})
+        LOCAL_TSV=$TEMP_DIR/{wildcards.vcfname}_phased_SNP.tsv
+        
+        echo "Working directory: $TEMP_DIR"
+        
+        # Step 1: Verify input VCF is properly gzipped
+        verify_gzipped --file {input.vcf} --description "input VCF"
+        
+        # Step 2: Copy VCF to local node with retry logic
+        copy_with_retry --source {input.vcf} --dest $LOCAL_VCF --description "phased VCF"
+        
+        # Step 3: Process from local disk
         echo "Processing VCF to TSV..."
         {HICKIT_JS} vcf2tsv $LOCAL_VCF > $LOCAL_TSV
         
-        # Move output to target directory
-        echo "Moving output to target directory..."
+        # Step 4: Copy TSV to destination with verification
+        echo "Copying TSV to destination..."
         mkdir -p $(dirname {output.tsv})
-        mv $LOCAL_TSV {output.tsv}
+        copy_with_retry --source $LOCAL_TSV --dest {output.tsv} --description "phased SNP TSV"
         
-        # Clean up local VCF
-        echo "Removing local VCF copy..."
-        rm -f $LOCAL_VCF
+        # Step 5: Clean up temporary directory
+        echo "Cleaning up temporary directory: $TEMP_DIR"
+        rm -rf $TEMP_DIR
+        
+        echo "VCF processing complete"
         """
 
 ######################################################################
@@ -526,19 +547,13 @@ rule sam2seg_per_split:
     
     This processes each split sam.gz part in parallel.
     
-    Strategy: Copy sam.gz to $TMPDIR for faster I/O, read TSV directly from network storage
-    
-    Note on TSV file handling:
-    The phased SNP TSV file (42MB) is read directly from network storage rather than
-    being copied to $TMPDIR. This design choice addresses a filesystem buffering issue
-    encountered on SLURM nodes where copying the TSV to $TMPDIR resulted in data
-    corruption - hickit.js would fail with "Cannot read properties of undefined" errors
-    when reading lines that appeared to have missing fields. Reading the TSV directly
-    from InfiniBand-connected storage eliminates this issue and is efficient because:
-    1. The file is small (42MB) and heavily cached by the filesystem
-    2. InfiniBand is designed for high-performance parallel I/O
-    3. Hundreds of parallel jobs reading the same file benefit from filesystem caching
-    4. No risk of buffering/sync issues from local copies
+    Strategy: 
+    1. Verify input sam.gz is properly gzipped
+    2. Copy sam.gz and TSV to $TMPDIR using utility functions
+    3. Process locally for faster I/O
+    4. Verify output seg.gz is properly gzipped
+    5. Copy seg.gz to destination with verification
+    6. Clean up temporary files
     """
     input:
         samgz = config["tool"] + "/output/samgz_split/{libtype}.{libname}.part{part}.sam.gz",
@@ -553,66 +568,33 @@ rule sam2seg_per_split:
         runtime = 120
     shell:
         """
-        # Copy sam.gz and TSV to local disk for faster I/O and to avoid filesystem contention
-        LOCAL_SAMGZ=$TMPDIR/$(basename {input.samgz})
-        LOCAL_TSV=$TMPDIR/$(basename {input.tsv})
-        LOCAL_SEG=$TMPDIR/$(basename {output.seg})
+        # Source utility functions
+        source {filepath}/../scripts/file_utils.sh
         
-        echo "Copying sam.gz to $TMPDIR..."
-        cp {input.samgz} $LOCAL_SAMGZ
+        # Get unique job ID for temporary files
+        JOB_ID=$(get_job_id)
+        TEMP_DIR=$TMPDIR/sam2seg_${{JOB_ID}}_{wildcards.libtype}_{wildcards.libname}_{wildcards.part}
+        mkdir -p $TEMP_DIR
         
-        # Copy TSV with retry logic (10 attempts with exponential backoff)
-        # This handles filesystem contention from 600+ parallel jobs reading same file
-        echo "Copying TSV to $TMPDIR with retry logic..."
-        TSV_COPIED=0
-        for ATTEMPT in {{1..10}}; do
-            echo "TSV copy attempt $ATTEMPT of 10..."
-            
-            # Copy the file
-            if cp {input.tsv} $LOCAL_TSV 2>/dev/null; then
-                sync
-                
-                # Verify with md5sum
-                echo "Verifying TSV file integrity with md5sum..."
-                SRC_MD5=$(md5sum {input.tsv} | awk '{{print $1}}')
-                DST_MD5=$(md5sum $LOCAL_TSV | awk '{{print $1}}')
-                
-                if [ "$SRC_MD5" = "$DST_MD5" ]; then
-                    echo "TSV copy successful on attempt $ATTEMPT (md5: $DST_MD5)"
-                    TSV_COPIED=1
-                    break
-                else
-                    echo "WARNING: md5sum mismatch on attempt $ATTEMPT"
-                    echo "  Source: $SRC_MD5"
-                    echo "  Local:  $DST_MD5"
-                    rm -f $LOCAL_TSV
-                fi
-            else
-                echo "WARNING: Copy failed on attempt $ATTEMPT"
-            fi
-            
-            # Exponential backoff with jitter: 2, 5, 10, 17, 26, 37, 50, 65, 82, 101 seconds
-            if [ $ATTEMPT -lt 10 ]; then
-                DELAY=$((2 + (ATTEMPT * ATTEMPT)))
-                echo "Waiting ${{DELAY}} seconds before retry..."
-                sleep $DELAY
-            fi
-        done
+        # Setup local paths
+        LOCAL_SAMGZ=$TEMP_DIR/$(basename {input.samgz})
+        LOCAL_TSV=$TEMP_DIR/$(basename {input.tsv})
+        LOCAL_SEG=$TEMP_DIR/$(basename {output.seg})
         
-        if [ $TSV_COPIED -eq 0 ]; then
-            echo "ERROR: Failed to copy TSV after 10 attempts"
-            rm -f $LOCAL_SAMGZ
-            exit 1
-        fi
+        echo "Working directory: $TEMP_DIR"
         
-        # Verify TSV file exists and is readable
-        if [ ! -f "$LOCAL_TSV" ]; then
-            echo "ERROR: TSV file not found at $LOCAL_TSV after successful copy"
-            rm -f $LOCAL_SAMGZ
-            exit 1
-        fi
+        # Step 1: Verify input sam.gz is properly gzipped
+        verify_gzipped --file {input.samgz} --description "input sam.gz"
         
-        # Process with hickit pipeline using local TSV
+        # Step 2: Copy sam.gz to local node with retry logic
+        copy_with_retry --source {input.samgz} --dest $LOCAL_SAMGZ --description "split sam.gz"
+        
+        # Step 3: Copy TSV to local node with retry logic
+        copy_with_retry --source {input.tsv} --dest $LOCAL_TSV --description "phased SNP TSV"
+        
+        # Step 4: BED file stays where it is (network storage)
+        
+        # Step 5: Process with hickit pipeline on local node
         echo "Processing with hickit pipeline..."
         if [ "{wildcards.par}" != "nopar" ]; then
             # With PAR bed filtering
@@ -629,43 +611,19 @@ rule sam2seg_per_split:
                 gzip > $LOCAL_SEG
         fi
         
-        # Validate seg.gz file before moving
-        echo "Validating seg.gz file..."
+        # Step 6: Verify output seg.gz is properly gzipped (fail if not)
+        verify_gzipped --file $LOCAL_SEG --description "output seg.gz"
         
-        # Test gzip integrity (file may be empty if no reads mapped to this segment)
-        if ! gzip -t $LOCAL_SEG 2>/dev/null; then
-            echo "ERROR: seg.gz file failed gzip integrity test"
-            rm -f $LOCAL_SAMGZ $LOCAL_TSV $LOCAL_SEG
-            exit 1
-        fi
-        echo "seg.gz gzip integrity validated"
-        
-        # Calculate md5sum before moving
-        echo "Calculating md5sum before move..."
-        LOCAL_MD5=$(md5sum $LOCAL_SEG | awk '{{print $1}}')
-        echo "Local seg.gz md5: $LOCAL_MD5"
-        
-        # Move output to target directory
-        echo "Moving output to target directory..."
+        # Step 7: Copy seg.gz to destination with verification
+        echo "Copying seg.gz to destination with verification..."
         mkdir -p $(dirname {output.seg})
-        mv $LOCAL_SEG {output.seg}
-        sync
+        copy_with_retry --source $LOCAL_SEG --dest {output.seg} --description "output seg.gz"
         
-        # Verify md5sum after move
-        echo "Verifying seg.gz integrity after move..."
-        FINAL_MD5=$(md5sum {output.seg} | awk '{{print $1}}')
-        if [ "$LOCAL_MD5" != "$FINAL_MD5" ]; then
-            echo "ERROR: md5sum mismatch after move!"
-            echo "  Local:  $LOCAL_MD5"
-            echo "  Final:  $FINAL_MD5"
-            rm -f $LOCAL_SAMGZ $LOCAL_TSV {output.seg}
-            exit 1
-        fi
-        echo "seg.gz integrity verified after move (md5: $FINAL_MD5)"
+        # Step 8: Clean up temporary directory
+        echo "Cleaning up temporary directory: $TEMP_DIR"
+        rm -rf $TEMP_DIR
         
-        # Clean up local copies
-        echo "Cleaning up local files..."
-        rm -f $LOCAL_SAMGZ $LOCAL_TSV
+        echo "sam2seg processing complete"
         """
 
 ######################################################################
@@ -678,7 +636,14 @@ rule seg_to_pairs:
         hickit -i contacts.seg.gz -o - | bgzip > contacts.pairs.gz
     
     This processes each seg.gz file independently to generate pairs.gz files.
-    Strategy: Copy seg.gz to $TMPDIR with retry logic, process with hickit binary, pipe to bgzip
+    
+    Strategy:
+    1. Verify input seg.gz is properly gzipped
+    2. Copy seg.gz to $TMPDIR using utility functions
+    3. Process locally with hickit binary
+    4. Verify output pairs.gz is properly gzipped
+    5. Copy pairs.gz to destination with verification
+    6. Clean up temporary files
     """
     input:
         seg = config["tool"] + "/output/contacts_seg/{vcfname}/{par}/{libtype}.{libname}.part{part}.seg.gz"
@@ -691,70 +656,43 @@ rule seg_to_pairs:
         runtime = 120
     shell:
         """
-        # Copy seg.gz to local disk with retry logic (10 attempts with exponential backoff)
-        # This handles filesystem contention from parallel jobs
-        LOCAL_SEG=$TMPDIR/$(basename {input.seg})
-        LOCAL_PAIRS=$TMPDIR/$(basename {output.pairs})
+        # Source utility functions
+        source {filepath}/../scripts/file_utils.sh
         
-        echo "Copying seg.gz to $TMPDIR with retry logic..."
-        SEG_COPIED=0
-        for ATTEMPT in {{1..10}}; do
-            echo "seg.gz copy attempt $ATTEMPT of 10..."
-            
-            # Copy the file
-            if cp {input.seg} $LOCAL_SEG 2>/dev/null; then
-                sync
-                
-                # Verify with md5sum
-                echo "Verifying seg.gz file integrity with md5sum..."
-                SRC_MD5=$(md5sum {input.seg} | awk '{{print $1}}')
-                DST_MD5=$(md5sum $LOCAL_SEG | awk '{{print $1}}')
-                
-                if [ "$SRC_MD5" = "$DST_MD5" ]; then
-                    echo "seg.gz copy successful on attempt $ATTEMPT (md5: $DST_MD5)"
-                    SEG_COPIED=1
-                    break
-                else
-                    echo "WARNING: md5sum mismatch on attempt $ATTEMPT"
-                    echo "  Source: $SRC_MD5"
-                    echo "  Local:  $DST_MD5"
-                    rm -f $LOCAL_SEG
-                fi
-            else
-                echo "WARNING: Copy failed on attempt $ATTEMPT"
-            fi
-            
-            # Exponential backoff with jitter: 2, 5, 10, 17, 26, 37, 50, 65, 82, 101 seconds
-            if [ $ATTEMPT -lt 10 ]; then
-                DELAY=$((2 + (ATTEMPT * ATTEMPT)))
-                echo "Waiting ${{DELAY}} seconds before retry..."
-                sleep $DELAY
-            fi
-        done
+        # Get unique job ID for temporary files
+        JOB_ID=$(get_job_id)
+        TEMP_DIR=$TMPDIR/seg2pairs_${{JOB_ID}}_{wildcards.libtype}_{wildcards.libname}_{wildcards.part}
+        mkdir -p $TEMP_DIR
         
-        if [ $SEG_COPIED -eq 0 ]; then
-            echo "ERROR: Failed to copy seg.gz after 10 attempts"
-            exit 1
-        fi
+        # Setup local paths
+        LOCAL_SEG=$TEMP_DIR/$(basename {input.seg})
+        LOCAL_PAIRS=$TEMP_DIR/$(basename {output.pairs})
         
-        # Verify seg.gz file exists and is readable
-        if [ ! -f "$LOCAL_SEG" ]; then
-            echo "ERROR: seg.gz file not found at $LOCAL_SEG after successful copy"
-            exit 1
-        fi
+        echo "Working directory: $TEMP_DIR"
         
-        # Process with hickit binary
+        # Step 1: Verify input seg.gz is properly gzipped
+        verify_gzipped --file {input.seg} --description "input seg.gz"
+        
+        # Step 2: Copy seg.gz to local node with retry logic
+        copy_with_retry --source {input.seg} --dest $LOCAL_SEG --description "seg.gz file"
+        
+        # Step 3: Process with hickit binary on local node
         echo "Converting seg.gz to pairs.gz with hickit..."
         {HICKIT_BIN} -i $LOCAL_SEG -o - | {BGZIP} > $LOCAL_PAIRS
         
-        # Move output to target directory
-        echo "Moving output to target directory..."
-        mkdir -p $(dirname {output.pairs})
-        mv $LOCAL_PAIRS {output.pairs}
+        # Step 4: Verify output pairs.gz is properly gzipped (fail if not)
+        verify_gzipped --file $LOCAL_PAIRS --description "output pairs.gz"
         
-        # Clean up local seg.gz copy
-        echo "Cleaning up local files..."
-        rm -f $LOCAL_SEG
+        # Step 5: Copy pairs.gz to destination with verification
+        echo "Copying pairs.gz to destination with verification..."
+        mkdir -p $(dirname {output.pairs})
+        copy_with_retry --source $LOCAL_PAIRS --dest {output.pairs} --description "output pairs.gz"
+        
+        # Step 6: Clean up temporary directory
+        echo "Cleaning up temporary directory: $TEMP_DIR"
+        rm -rf $TEMP_DIR
+        
+        echo "seg_to_pairs processing complete"
         """
 
 ######################################################################
@@ -780,7 +718,7 @@ rule aggregate_pairs_files:
         """
 
 ######################################################################
-# Step 5: Merge and sort all pairs.gz files for each library+PAR
+# Step 5: Merge and sort all pairs.gz files for each library+PAR 
 ######################################################################
 
 rule merge_and_sort_pairs:
@@ -788,10 +726,13 @@ rule merge_and_sort_pairs:
     Merge and sort all pairs.gz parts for a library+PAR combination.
     
     Takes all part*.pairs.gz files and:
-    1. Decompresses with zcat
-    2. Removes header lines with grep -v '^#'
-    3. Sorts by chr2, chr4, pos3, pos5 with parallel sort
-    4. Compresses with pigz
+    1. Verifies all input files are properly gzipped
+    2. Decompresses with zcat
+    3. Removes header lines with grep -v '^#'
+    4. Sorts by chr2, chr4, pos3, pos5 with parallel sort
+    5. Compresses with bgzip
+    6. Verifies output and copies to destination
+    7. Cleans up temporary files
     
     This creates a single merged and sorted pairs.gz file per library+PAR combination.
     
@@ -813,94 +754,55 @@ rule merge_and_sort_pairs:
     threads: 64
     resources:
         mem_mb = lambda wildcards, input: int(sum(os.path.getsize(f) for f in input) / (1024**2) * 26 * 1.5),
-        runtime = lambda wildcards, input: int(sum(os.path.getsize(f) for f in input) / (1024**3) * 66) # 66 minutes per GB of pairs.gz. Should take 11 minutes per GB but some systems are slow
+        runtime = lambda wildcards, input: int(sum(os.path.getsize(f) for f in input) / (1024**3) * 88) # 88 minutes per GB of pairs.gz. Should take 11 minutes per GB but some systems are slow.
     shell:
         """
+        # Source utility functions
+        source {filepath}/../scripts/file_utils.sh
+        
         echo "Merge and sort job started at $(date)"
+        
+        # Get unique job ID (SLURM-aware)
+        JOB_ID=$(get_job_id)
+        TEMP_DIR=$TMPDIR/merge_sort_${{JOB_ID}}_{wildcards.libtype}_{wildcards.libname}
+        mkdir -p $TEMP_DIR
+        
+        echo "Working directory: $TEMP_DIR"
+        
+        # Step 1: Verify all input files are properly gzipped
+        echo "Verifying all input files are gzipped..."
+        for FILE in {input}; do
+            verify_gzipped --file "$FILE" --description "pairs.gz input"
+        done
+        echo "All input files verified as gzipped"
         
         # Calculate buffer size (80% of allocated memory for sort buffer)
         BUFFER_SIZE=$(echo "{resources.mem_mb} * 0.8" | bc | cut -d. -f1)
 
-        # Use SLURM_JOB_ID for unique filename on node (defaults to $$ if not in SLURM)
-        JOB_ID=${{SLURM_JOB_ID:-$$}}
-        LOCAL_MERGED=$TMPDIR/merged_pairs_${{JOB_ID}}.gz
+        LOCAL_MERGED=$TEMP_DIR/merged_pairs.gz
         
         echo "Writing output to local file: $LOCAL_MERGED"
 
-        # Extract header from first file (with error handling)
-        if gzip -t {input[0]} 2>/dev/null; then
-            zcat {input[0]} | grep '^#' | {BGZIP} > $LOCAL_MERGED
-        else
-            echo "WARNING: {input[0]} failed gzip test, treating as uncompressed" >&2
-            cat {input[0]} | grep '^#' | {BGZIP} > $LOCAL_MERGED
-        fi
+        # Step 2: Extract header from first file
+        zcat {input[0]} | grep '^#' | {BGZIP} > $LOCAL_MERGED
 
-        # Merge all parts (excluding headers), validate 9-field format, sort, and append
-        # Loop through files and handle both gzipped and non-gzipped
-        (for FILE in {input}; do
-            if gzip -t "$FILE" 2>/dev/null; then
-                zcat "$FILE"
-            else
-                echo "WARNING: $FILE failed gzip test, treating as uncompressed" >&2
-                cat "$FILE"
-            fi
-        done) | \
+        # Step 3: Merge all parts (excluding headers), sort, and append
+        zcat {input} | \
         grep -v '^#' | \
-        awk 'NF==9 {{print}}' | \
         sort -k2,2V -k4,4V -k3,3n -k5,5n --parallel={threads} --buffer-size=${{BUFFER_SIZE}}M | \
         {BGZIP} >> $LOCAL_MERGED
         
-        echo "Merge and sort complete, verifying and copying to target..."
+        # Step 4: Verify output is properly gzipped (fail if not)
+        verify_gzipped --file $LOCAL_MERGED --description "merged pairs.gz output"
         
-        # Calculate md5sum of local file
-        LOCAL_MD5=$(md5sum $LOCAL_MERGED | awk '{{print $1}}')
-        echo "Local merged file md5: $LOCAL_MD5"
+        # Step 5: Copy to destination with verification
+        echo "Copying merged file to destination with verification..."
+        mkdir -p $(dirname {output.merged})
+        copy_with_retry --source $LOCAL_MERGED --dest {output.merged} --description "merged pairs.gz"
         
-        # Copy to target with retry logic (10 attempts with exponential backoff)
-        COPY_SUCCESS=0
-        for ATTEMPT in {{1..10}}; do
-            echo "Copy attempt $ATTEMPT of 10..."
-            
-            # Create target directory and copy
-            mkdir -p $(dirname {output.merged})
-            if cp $LOCAL_MERGED {output.merged} 2>/dev/null; then
-                sync
-                
-                # Verify with md5sum
-                echo "Verifying file integrity with md5sum..."
-                TARGET_MD5=$(md5sum {output.merged} | awk '{{print $1}}')
-                
-                if [ "$LOCAL_MD5" = "$TARGET_MD5" ]; then
-                    echo "Copy successful on attempt $ATTEMPT (md5: $TARGET_MD5)"
-                    COPY_SUCCESS=1
-                    break
-                else
-                    echo "WARNING: md5sum mismatch on attempt $ATTEMPT"
-                    echo "  Local:  $LOCAL_MD5"
-                    echo "  Target: $TARGET_MD5"
-                    rm -f {output.merged}
-                fi
-            else
-                echo "WARNING: Copy failed on attempt $ATTEMPT"
-            fi
-            
-            # Exponential backoff with jitter: 2, 5, 10, 17, 26, 37, 50, 65, 82, 101 seconds
-            if [ $ATTEMPT -lt 10 ]; then
-                DELAY=$((2 + (ATTEMPT * ATTEMPT)))
-                echo "Waiting ${{DELAY}} seconds before retry..."
-                sleep $DELAY
-            fi
-        done
-        
-        if [ $COPY_SUCCESS -eq 0 ]; then
-            echo "ERROR: Failed to copy merged file after 10 attempts"
-            rm -f $LOCAL_MERGED
-            exit 1
-        fi
-        
-        # Clean up local file
-        echo "Cleaning up local file..."
-        rm -f $LOCAL_MERGED
+        # Step 6: Clean up temporary directory
+        echo "Cleaning up temporary directory: $TEMP_DIR"
+        rm -rf $TEMP_DIR
         
         echo "Merge and sort job finished at $(date)"
         """
@@ -988,11 +890,15 @@ rule filter_pairs:
     Special case: snpfilter='nofilter' passes through unfiltered.
     
     Process:
-    1. Use precomputed side1 and side2 BED files (created once per library+PAR)
-    2. Find line numbers where side 1 intersects the BED regions
-    3. Find line numbers where side 2 intersects the BED regions
-    4. Keep only line numbers that passed filtering on BOTH sides
-    5. Extract header and those specific lines from the original pairs file
+    1. Verify input pairs.gz is properly gzipped
+    2. Use precomputed side1 and side2 BED files (created once per library+PAR)
+    3. Copy files to TMPDIR using utility functions
+    4. Find line numbers where side 1 intersects the BED regions
+    5. Find line numbers where side 2 intersects the BED regions
+    6. Keep only line numbers that passed filtering on BOTH sides
+    7. Extract header and those specific lines from the original pairs file
+    8. Verify output and copy to destination
+    9. Clean up temporary files
     
     This approach uses line numbers instead of read IDs since all read IDs may be "."
     """
@@ -1004,85 +910,90 @@ rule filter_pairs:
     output:
         filtered = config["tool"] + "/output/contacts_pairs_filtered/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.filtered.pairs.gz"
     threads: 4
+    retries: 4
     resources:
         mem_mb = 32000,
         runtime = 180
     shell:
         """
+        # Source utility functions
+        source {filepath}/../scripts/file_utils.sh
+        
         if [ "{wildcards.snpfilter}" = "nofilter" ]; then
-            # No filtering - just copy the input
-            echo "No SNP filter applied, copying input..."
-            cp {input.pairs} {output.filtered}
+            # No filtering - verify and copy the input
+            echo "No SNP filter applied, verifying and copying input..."
+            
+            # Verify input is properly gzipped
+            verify_gzipped --file {input.pairs} --description "input phased pairs.gz"
+            
+            # Copy with verification
+            mkdir -p $(dirname {output.filtered})
+            copy_with_retry --source {input.pairs} --dest {output.filtered} --description "unfiltered pairs.gz"
         else
             echo "Filtering pairs with BED: {input.bed}"
             
-            # Create output directory
-            mkdir -p $(dirname {output.filtered})
+            # Get unique job ID for temporary files
+            JOB_ID=$(get_job_id)
+            TEMP_DIR=$TMPDIR/filter_pairs_${{JOB_ID}}_{wildcards.libtype}_{wildcards.libname}
+            mkdir -p $TEMP_DIR
             
-            # Temporary files in TMPDIR
-            PAIRS_TMP=$TMPDIR/pairs_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.gz
-            BED_TMP=$TMPDIR/bed_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.bed
-            SIDE1_BED=$TMPDIR/side1_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.bed
-            SIDE2_BED=$TMPDIR/side2_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.bed
-            SIDE1_IDS=$TMPDIR/side1_ids_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.txt
-            SIDE2_IDS=$TMPDIR/side2_ids_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.txt
-            KEEP_IDS=$TMPDIR/keep_ids_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.txt
+            echo "Working directory: $TEMP_DIR"
             
+            # Setup local paths
+            PAIRS_TMP=$TEMP_DIR/pairs.gz
+            BED_TMP=$TEMP_DIR/bed.bed
+            SIDE1_BED=$TEMP_DIR/side1.bed
+            SIDE2_BED=$TEMP_DIR/side2.bed
+            SIDE1_IDS=$TEMP_DIR/side1_ids.txt
+            SIDE2_IDS=$TEMP_DIR/side2_ids.txt
+            KEEP_IDS=$TEMP_DIR/keep_ids.txt
+            OUTPUT_TMP=$TEMP_DIR/filtered.pairs.gz
+            
+            # Step 1: Verify input pairs.gz is properly gzipped
+            verify_gzipped --file {input.pairs} --description "input phased pairs.gz"
+            
+            # Step 2-3: Copy input files to TMPDIR with retry logic
             echo "Copying input files to TMPDIR for faster I/O..."
-            cp {input.pairs} $PAIRS_TMP
-            cp {input.bed} $BED_TMP
-            cp {input.side1} $SIDE1_BED
-            cp {input.side2} $SIDE2_BED
+            copy_with_retry --source {input.pairs} --dest $PAIRS_TMP --description "phased pairs.gz"
+            copy_with_retry --source {input.bed} --dest $BED_TMP --description "SNP filter BED"
+            copy_with_retry --source {input.side1} --dest $SIDE1_BED --description "side1 BED"
+            copy_with_retry --source {input.side2} --dest $SIDE2_BED --description "side2 BED"
             
-            echo "Verifying file integrity with md5sum..."
-            ORIGINAL_PAIRS_MD5=$TMPDIR/original_pairs_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.md5
-            COPIED_PAIRS_MD5=$TMPDIR/copied_pairs_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.md5
-            ORIGINAL_BED_MD5=$TMPDIR/original_bed_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.md5
-            COPIED_BED_MD5=$TMPDIR/copied_bed_{wildcards.libtype}_{wildcards.libname}_{wildcards.par}_{wildcards.snpfilter}.md5
-            
-            md5sum {input.pairs} | awk '{{print $1}}' > $ORIGINAL_PAIRS_MD5
-            md5sum $PAIRS_TMP | awk '{{print $1}}' > $COPIED_PAIRS_MD5
-            md5sum {input.bed} | awk '{{print $1}}' > $ORIGINAL_BED_MD5
-            md5sum $BED_TMP | awk '{{print $1}}' > $COPIED_BED_MD5
-            
-            if ! diff -q $ORIGINAL_PAIRS_MD5 $COPIED_PAIRS_MD5 > /dev/null; then
-                echo "ERROR: md5sum mismatch for pairs file after copy to TMPDIR"
-                exit 1
-            fi
-            if ! diff -q $ORIGINAL_BED_MD5 $COPIED_BED_MD5 > /dev/null; then
-                echo "ERROR: md5sum mismatch for BED file after copy to TMPDIR"
-                exit 1
-            fi
-            echo "md5sum verification passed for both files"
-            
-            # Clean up md5 files
-            rm -f $ORIGINAL_PAIRS_MD5 $COPIED_PAIRS_MD5 $ORIGINAL_BED_MD5 $COPIED_BED_MD5
-            
+            # Step 4: Find line numbers where side 1 intersects BED regions
             echo "Finding line numbers where side 1 intersects BED regions..."
             {BEDTOOLS} intersect -a $SIDE1_BED -b $BED_TMP -wa | \
               cut -f4 | sort --parallel={threads} --buffer-size=24G -u > $SIDE1_IDS
             
+            # Step 5: Find line numbers where side 2 intersects BED regions
             echo "Finding line numbers where side 2 intersects BED regions..."
             {BEDTOOLS} intersect -a $SIDE2_BED -b $BED_TMP -wa | \
               cut -f4 | sort --parallel={threads} --buffer-size=24G -u > $SIDE2_IDS
             
+            # Step 6: Keep only line numbers that passed filtering on BOTH sides
             echo "Finding line numbers that passed filtering on BOTH sides..."
-            # Keep only line numbers present in both files
             comm -12 $SIDE1_IDS $SIDE2_IDS > $KEEP_IDS
             
             KEEP_COUNT=$(wc -l < $KEEP_IDS)
             echo "Keeping $KEEP_COUNT read pairs that passed filtering on both sides"
             
+            # Step 7: Filter pairs file
             echo "Filtering pairs file..."
-            # Extract header and the specific line numbers
             pigz -dc -p {threads} $PAIRS_TMP | \
               awk 'BEGIN{{while((getline < "'$KEEP_IDS'") > 0) keep[$1]=1}}
                    /^#/ {{print; next}}
                    {{line++; if(keep[line]) print}}' | \
-              pigz -p {threads} > {output.filtered}
+              pigz -p {threads} > $OUTPUT_TMP
             
-            # Clean up temporary files
-            rm -f $PAIRS_TMP $BED_TMP $SIDE1_BED $SIDE2_BED $SIDE1_IDS $SIDE2_IDS $KEEP_IDS
+            # Step 8: Verify output and copy to destination
+            verify_gzipped --file $OUTPUT_TMP --description "filtered pairs.gz output"
+            
+            echo "Copying filtered pairs to destination with verification..."
+            mkdir -p $(dirname {output.filtered})
+            copy_with_retry --source $OUTPUT_TMP --dest {output.filtered} --description "filtered pairs.gz"
+            
+            # Step 9: Clean up temporary directory
+            echo "Cleaning up temporary directory: $TEMP_DIR"
+            rm -rf $TEMP_DIR
             
             echo "Filtering complete"
         fi
