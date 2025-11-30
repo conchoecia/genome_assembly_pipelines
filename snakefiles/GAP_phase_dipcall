@@ -1,0 +1,223 @@
+# Snakefile for dipcall-style assembly evaluation for sample D21
+# Assumes:
+#   - pat.fa.gz and mat.fa.gz are in this directory
+#   - dipcall.kit/ contains minimap2, k8, samtools, htsbox, bedtk, dipcall-aux.js, paftools.js, hs37d5.PAR.bed
+
+shell.executable("/bin/bash")
+
+SAMPLE   = "D21"
+ROOT     = "dipcall.kit"
+REF_FA   = "/oak/stanford/groups/tttt/users/darrints/data/hs37d5_reference/hs37d5.fa"
+MM2_IDX  = REF_FA
+THREADS  = 8
+MAPPER   = "minimap2"
+
+# These are the minimap2 options you had in the Makefile
+MM2_OPTS = "-x asm5 --cs"
+
+PAR_BED  = f"{ROOT}/hs37d5.PAR.bed"
+
+# Map hap wildcard to input fasta
+hap_fa = {
+    "1": "pat.fa.gz",
+    "2": "mat.fa.gz",
+}
+
+config["tools"] = GAP_phase_dipcall
+
+
+rule all:
+    input:
+        f"{SAMPLE}.dip.vcf.gz",
+        f"{SAMPLE}.dip.bed"
+
+
+######################################################################
+# Step 0: Install dipcall toolkit
+######################################################################
+
+rule install_dipcall:
+    output:
+        directory(ROOT)
+    shell:
+        """
+        wget https://github.com/lh3/dipcall/releases/download/v0.3/dipcall-0.3_x64-linux.tar.bz2
+        tar -jxf dipcall-0.3_x64-linux.tar.bz2
+        rm -f dipcall-0.3_x64-linux.tar.bz2
+        """
+
+
+######################################################################
+# Step 1: Map assemblies to reference
+######################################################################
+
+# PAF mapping (assembly vs reference)
+rule map_paf:
+    threads: THREADS
+    input:
+        lambda wc: hap_fa[wc.hap]
+    output:
+        "{sample}.hap{hap}.paf.gz"
+    log:
+        "{sample}.hap{hap}.paf.gz.log"
+    params:
+        root   = ROOT,
+        mapper = MAPPER,
+        ref    = MM2_IDX,
+        mm2    = MM2_OPTS
+    shell:
+        """
+        {params.root}/{params.mapper} -c --paf-no-hit {params.mm2} -t {threads} {params.ref} {input} \
+            2> {log} | gzip -c > {output}
+        """
+
+# SAM mapping (for BAM + pileup)
+rule map_sam:
+    threads: THREADS
+    input:
+        lambda wc: hap_fa[wc.hap]
+    output:
+        "{sample}.hap{hap}.sam.gz"
+    log:
+        "{sample}.hap{hap}.sam.gz.log"
+    params:
+        root   = ROOT,
+        mapper = MAPPER,
+        ref    = MM2_IDX,
+        mm2    = MM2_OPTS
+    shell:
+        """
+        {params.root}/{params.mapper} -a {params.mm2} -t {threads} {params.ref} {input} \
+            2> {log} | gzip -c > {output}
+        """
+
+
+######################################################################
+# Step 2: Process PAF files to variant calls and BED regions
+######################################################################
+
+# Call variants from PAF with paftools (per haplotype)
+rule hap_var:
+    input:
+        paf = "{sample}.hap{hap}.paf.gz"
+    output:
+        var = "{sample}.hap{hap}.var.gz"
+    log:
+        "{sample}.hap{hap}.var.gz.vst"
+    params:
+        root = ROOT
+    shell:
+        """
+        gzip -dc {input.paf} \
+          | sort -k6,6 -k8,8n \
+          | {params.root}/k8 {params.root}/paftools.js call - 2> {log} \
+          | gzip -c > {output.var}
+        """
+
+# Extract R lines to BED (per haplotype)
+rule hap_bed:
+    input:
+        "{sample}.hap{hap}.var.gz"
+    output:
+        "{sample}.hap{hap}.bed"
+    shell:
+        """
+        gzip -dc {input} | grep '^R' | cut -f2- > {output}
+        """
+
+######################################################################
+# Step 3: Process SAM files to BAM and variant calls
+######################################################################
+
+# Filter SAM and sort to BAM
+rule sam_to_bam:
+    input:
+        sam = "{sample}.hap{hap}.sam.gz"
+    output:
+        bam = "{sample}.hap{hap}.bam"
+    log:
+        "{sample}.hap{hap}.bam.log"
+    params:
+        root = ROOT
+    shell:
+        """
+        {params.root}/k8 {params.root}/dipcall-aux.js samflt {input.sam} 2> {log} \
+            | {params.root}/samtools sort -m4G --threads 4 -o {output.bam} -
+        """
+
+# Joint pileup to pair VCF (hap1 + hap2 as two samples)
+rule pair_vcf:
+    input:
+        hap1 = f"{SAMPLE}.hap1.bam",
+        hap2 = f"{SAMPLE}.hap2.bam"
+    output:
+        f"{SAMPLE}.pair.vcf.gz"
+    log:
+        f"{SAMPLE}.pair.vcf.gz.log"
+    params:
+        root = ROOT,
+        ref  = REF_FA
+    shell:
+        """
+        {params.root}/htsbox pileup -q5 -evcf {params.ref} {input.hap1} {input.hap2} 2> {log} \
+            | {params.root}/htsbox bgzip > {output}
+        """
+
+
+######################################################################
+# Step 4: Generate final outputs
+######################################################################
+
+# Convert pair VCF to diploid VCF (handle PAR properly)
+rule dip_vcf:
+    input:
+        f"{SAMPLE}.pair.vcf.gz"
+    output:
+        f"{SAMPLE}.dip.vcf.gz"
+    log:
+        f"{SAMPLE}.dip.vcf.gz.log"
+    params:
+        root   = ROOT,
+        parbed = PAR_BED
+    shell:
+        """
+        {params.root}/k8 {params.root}/dipcall-aux.js vcfpair -p {params.parbed} {input} 2> {log} \
+            | {params.root}/htsbox bgzip > {output}
+        """
+
+# Combine hap1/hap2 BEDs into dipcall-style diploid callable BED
+rule dip_bed:
+    input:
+        hap1_bed = f"{SAMPLE}.hap1.bed",
+        hap2_bed = f"{SAMPLE}.hap2.bed"
+    output:
+        f"{SAMPLE}.dip.bed"
+    log:
+        f"{SAMPLE}.dip.bed.log"
+    params:
+        root   = ROOT,
+        parbed = PAR_BED,
+        tmp    = f"{SAMPLE}.tmp.bed"
+    shell:
+        """
+        set -euo pipefail
+
+        # Autosomes: intersection of both haps, excluding X/Y
+        {params.root}/bedtk isec {input.hap1_bed} {input.hap2_bed} \
+            | egrep -v '^(chr)?[XY]' > {params.tmp}
+
+        # PAR: intersection of both haps, intersected with PAR bed
+        {params.root}/bedtk isec {input.hap1_bed} {input.hap2_bed} \
+            | {params.root}/bedtk isec {params.parbed} >> {params.tmp}
+
+         Non-PAR X: hap2 minus hap1, minus PAR
+        {params.root}/bedtk sub {input.hap2_bed} {input.hap1_bed} \
+            | egrep '^(chr)?X' \
+            | {params.root}/bedtk sub - {params.parbed} >> {params.tmp}
+
+        # Y: hap1 minus hap2
+        {params.root}/bedtk sub {input.hap1_bed} {input.hap2_bed} \
+            | egrep '^(chr)?Y' >> {params.tmp}
+
+        {params.root}/bedtk sort {params.tmp} > {output}
+        """
