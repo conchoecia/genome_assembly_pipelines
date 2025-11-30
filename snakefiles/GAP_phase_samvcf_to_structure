@@ -1089,11 +1089,11 @@ rule plot_hic_heatmap:
         matrix = config["tool"] + "/output/contact_matrices/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.matrix.npz",
         metadata = config["tool"] + "/output/contact_matrices/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.matrix.metadata.npz"
     output:
-        heatmap = config["tool"] + "/output/hic_heatmaps/{vcfname}/{par}/{snpfilter}/{libtype}.{libname}.par{par}.snp{snpfilter}.bin2.5Mb.heatmap.png"
+        heatmap = config["tool"] + "/output/hic_heatmaps/{vcfname}/{par}/{snpfilter}/{vcfname}.{par}.{snpfilter}.{libtype}.{libname}.bin2.5Mb.heatmap.png"
     threads: 1
     resources:
-        mem_mb = 32000,  # Need memory to convert sparse to dense
-        runtime = 60
+        mem_mb = 16000,  # Need memory to convert sparse to dense
+        runtime = 30
     shell:
         """
         python {filepath}/../scripts/plot_hic.py \
