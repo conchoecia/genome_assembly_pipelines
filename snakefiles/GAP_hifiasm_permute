@@ -179,7 +179,7 @@ rule bam_to_fastq:
     threads: 2
     resources:
         mem_mb = 4000,
-        runtime = lambda wildcards, input: max(60, int(os.path.getsize([b for b in config["hifi_bam"] if os.path.basename(b).replace(".bam", "") == wildcards.bam_basename][0]) / (1024**3) * 30))
+        runtime = lambda wildcards, input: max(120, int(os.path.getsize([b for b in config["hifi_bam"] if os.path.basename(b).replace(".bam", "") == wildcards.bam_basename][0]) / (1024**3) * 60))
     shell:
         """
         mkdir -p step0_bam_to_fastq
