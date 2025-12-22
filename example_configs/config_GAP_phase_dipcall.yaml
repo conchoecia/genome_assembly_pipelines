@@ -1,0 +1,25 @@
+# Configuration file for GAP_phase_dipcall
+# Dipcall-style assembly evaluation
+
+# Sample name (used as prefix for all output files)
+sample: "D21"
+
+# Reference genome FASTA file
+ref_fa: "/path/to/hs37d5.fa"
+
+# Number of threads for mapping
+threads: 8
+
+# PAR (Pseudo-Autosomal Region) BED file
+# This should be in the dipcall.kit directory
+# If you want to use the default hs37d5 PAR regions, use:
+#  par_bed: "dipcall.kit/hs37d5.PAR.bed"
+# If you don't have a PAR BED file, leave this commented out, like so:
+#  par_bed: ""
+par_bed: "dipcall.kit/hs37d5.PAR.bed"
+
+# Haplotype FASTA files
+# Map haplotype number to input FASTA file
+hap_fa:
+  "1": "/path/to/pat.fa.gz"  # Paternal haplotype. Gzipped or uncompressed fasta.
+  "2": "/path/to/mat.fa.gz"  # Maternal haplotype. Gzipped or uncompressed fasta.
