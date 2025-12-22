@@ -81,6 +81,10 @@ rule all:
 rule install_dipcall:
     output:
         directory(ROOT)
+    threads: 1
+    resources:
+        mem_mb = 1000,
+        runtime = 30
     shell:
         """
         wget https://github.com/lh3/dipcall/releases/download/v0.3/dipcall-0.3_x64-linux.tar.bz2
@@ -95,13 +99,16 @@ rule install_dipcall:
 
 # PAF mapping (assembly vs reference)
 rule map_paf:
-    threads: THREADS
     input:
         lambda wc: hap_fa[wc.hap]
     output:
         config["tool"] + "/{sample}.hap{hap}.paf.gz"
     log:
         config["tool"] + "/{sample}.hap{hap}.paf.gz.log"
+    threads: 8
+    resources:
+        mem_mb = 16000,
+        runtime = 2880
     params:
         root   = ROOT,
         mapper = MAPPER,
@@ -116,13 +123,16 @@ rule map_paf:
 
 # SAM mapping (for BAM + pileup)
 rule map_sam:
-    threads: THREADS
     input:
         lambda wc: hap_fa[wc.hap]
     output:
         config["tool"] + "/{sample}.hap{hap}.sam.gz"
     log:
         config["tool"] + "/{sample}.hap{hap}.sam.gz.log"
+    threads: 8
+    resources:
+        mem_mb = 16000,
+        runtime = 2880
     params:
         root   = ROOT,
         mapper = MAPPER,
@@ -147,6 +157,10 @@ rule hap_var:
         var = config["tool"] + "/{sample}.hap{hap}.var.gz"
     log:
         config["tool"] + "/{sample}.hap{hap}.var.gz.vst"
+    threads: 1
+    resources:
+        mem_mb = 8000,
+        runtime = 180
     params:
         root = ROOT
     shell:
@@ -163,6 +177,10 @@ rule hap_bed:
         config["tool"] + "/{sample}.hap{hap}.var.gz"
     output:
         config["tool"] + "/{sample}.hap{hap}.bed"
+    threads: 1
+    resources:
+        mem_mb = 4000,
+        runtime = 30
     shell:
         """
         gzip -dc {input} | grep '^R' | cut -f2- > {output}
@@ -180,6 +198,10 @@ rule sam_to_bam:
         bam = config["tool"] + "/{sample}.hap{hap}.bam"
     log:
         config["tool"] + "/{sample}.hap{hap}.bam.log"
+    threads: 4
+    resources:
+        mem_mb = 20000,
+        runtime = 360
     params:
         root = ROOT
     shell:
@@ -197,6 +219,10 @@ rule pair_vcf:
         config["tool"] + f"/{SAMPLE}.pair.vcf.gz"
     log:
         config["tool"] + f"/{SAMPLE}.pair.vcf.gz.log"
+    threads: 2
+    resources:
+        mem_mb = 16000,
+        runtime = 480
     params:
         root = ROOT,
         ref  = REF_FA
@@ -219,6 +245,10 @@ rule dip_vcf:
         config["tool"] + f"/{SAMPLE}.dip.vcf.gz"
     log:
         config["tool"] + f"/{SAMPLE}.dip.vcf.gz.log"
+    threads: 1
+    resources:
+        mem_mb = 8000,
+        runtime = 120
     params:
         root   = ROOT,
         parbed = PAR_BED
@@ -237,6 +267,10 @@ rule dip_bed:
         config["tool"] + f"/{SAMPLE}.dip.bed"
     log:
         config["tool"] + f"/{SAMPLE}.dip.bed.log"
+    threads: 1
+    resources:
+        mem_mb = 8000,
+        runtime = 60
     params:
         root   = ROOT,
         parbed = PAR_BED,
