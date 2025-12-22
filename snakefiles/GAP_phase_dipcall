@@ -115,7 +115,7 @@ rule map_paf:
         config["tool"] + "/{sample}.hap{hap}.paf.gz.log"
     threads: 8
     resources:
-        mem_mb = 16000,
+        mem_mb = lambda wildcards, input: max(16000, int(os.path.getsize(input.assembly) / 1000000 * 12)),
         runtime = 2880
     params:
         mm2 = MM2_OPTS
@@ -138,7 +138,7 @@ rule map_sam:
         config["tool"] + "/{sample}.hap{hap}.sam.gz.log"
     threads: 8
     resources:
-        mem_mb = 16000,
+        mem_mb = lambda wildcards, input: max(16000, int(os.path.getsize(input.assembly) / 1000000 * 12)),
         runtime = 2880
     params:
         mm2 = MM2_OPTS
