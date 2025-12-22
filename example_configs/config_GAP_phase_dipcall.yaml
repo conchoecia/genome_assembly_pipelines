@@ -1,5 +1,6 @@
 # Configuration file for GAP_phase_dipcall
 # Dipcall-style assembly evaluation
+# Copy this file to your working directory and rename it to config.yaml
 
 # Sample name (used as prefix for all output files)
 sample: "D21"

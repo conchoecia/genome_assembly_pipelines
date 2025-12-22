@@ -99,9 +99,9 @@ rule map_paf:
     input:
         lambda wc: hap_fa[wc.hap]
     output:
-        "{sample}.hap{hap}.paf.gz"
+        config["tool"] + "/{sample}.hap{hap}.paf.gz"
     log:
-        "{sample}.hap{hap}.paf.gz.log"
+        config["tool"] + "/{sample}.hap{hap}.paf.gz.log"
     params:
         root   = ROOT,
         mapper = MAPPER,
@@ -109,6 +109,7 @@ rule map_paf:
         mm2    = MM2_OPTS
     shell:
         """
+        mkdir -p $(dirname {output})
         {params.root}/{params.mapper} -c --paf-no-hit {params.mm2} -t {threads} {params.ref} {input} \
             2> {log} | gzip -c > {output}
         """
@@ -119,9 +120,9 @@ rule map_sam:
     input:
         lambda wc: hap_fa[wc.hap]
     output:
-        "{sample}.hap{hap}.sam.gz"
+        config["tool"] + "/{sample}.hap{hap}.sam.gz"
     log:
-        "{sample}.hap{hap}.sam.gz.log"
+        config["tool"] + "/{sample}.hap{hap}.sam.gz.log"
     params:
         root   = ROOT,
         mapper = MAPPER,
@@ -129,6 +130,7 @@ rule map_sam:
         mm2    = MM2_OPTS
     shell:
         """
+        mkdir -p $(dirname {output})
         {params.root}/{params.mapper} -a {params.mm2} -t {threads} {params.ref} {input} \
             2> {log} | gzip -c > {output}
         """
@@ -140,11 +142,11 @@ rule map_sam:
 # Call variants from PAF with paftools (per haplotype)
 rule hap_var:
     input:
-        paf = "{sample}.hap{hap}.paf.gz"
+        paf = config["tool"] + "/{sample}.hap{hap}.paf.gz"
     output:
-        var = "{sample}.hap{hap}.var.gz"
+        var = config["tool"] + "/{sample}.hap{hap}.var.gz"
     log:
-        "{sample}.hap{hap}.var.gz.vst"
+        config["tool"] + "/{sample}.hap{hap}.var.gz.vst"
     params:
         root = ROOT
     shell:
@@ -158,9 +160,9 @@ rule hap_var:
 # Extract R lines to BED (per haplotype)
 rule hap_bed:
     input:
-        "{sample}.hap{hap}.var.gz"
+        config["tool"] + "/{sample}.hap{hap}.var.gz"
     output:
-        "{sample}.hap{hap}.bed"
+        config["tool"] + "/{sample}.hap{hap}.bed"
     shell:
         """
         gzip -dc {input} | grep '^R' | cut -f2- > {output}
@@ -173,11 +175,11 @@ rule hap_bed:
 # Filter SAM and sort to BAM
 rule sam_to_bam:
     input:
-        sam = "{sample}.hap{hap}.sam.gz"
+        sam = config["tool"] + "/{sample}.hap{hap}.sam.gz"
     output:
-        bam = "{sample}.hap{hap}.bam"
+        bam = config["tool"] + "/{sample}.hap{hap}.bam"
     log:
-        "{sample}.hap{hap}.bam.log"
+        config["tool"] + "/{sample}.hap{hap}.bam.log"
     params:
         root = ROOT
     shell:
@@ -189,12 +191,12 @@ rule sam_to_bam:
 # Joint pileup to pair VCF (hap1 + hap2 as two samples)
 rule pair_vcf:
     input:
-        hap1 = f"{SAMPLE}.hap1.bam",
-        hap2 = f"{SAMPLE}.hap2.bam"
+        hap1 = config["tool"] + f"/{SAMPLE}.hap1.bam",
+        hap2 = config["tool"] + f"/{SAMPLE}.hap2.bam"
     output:
-        f"{SAMPLE}.pair.vcf.gz"
+        config["tool"] + f"/{SAMPLE}.pair.vcf.gz"
     log:
-        f"{SAMPLE}.pair.vcf.gz.log"
+        config["tool"] + f"/{SAMPLE}.pair.vcf.gz.log"
     params:
         root = ROOT,
         ref  = REF_FA
@@ -212,11 +214,11 @@ rule pair_vcf:
 # Convert pair VCF to diploid VCF (handle PAR properly)
 rule dip_vcf:
     input:
-        f"{SAMPLE}.pair.vcf.gz"
+        config["tool"] + f"/{SAMPLE}.pair.vcf.gz"
     output:
-        f"{SAMPLE}.dip.vcf.gz"
+        config["tool"] + f"/{SAMPLE}.dip.vcf.gz"
     log:
-        f"{SAMPLE}.dip.vcf.gz.log"
+        config["tool"] + f"/{SAMPLE}.dip.vcf.gz.log"
     params:
         root   = ROOT,
         parbed = PAR_BED
@@ -229,16 +231,16 @@ rule dip_vcf:
 # Combine hap1/hap2 BEDs into dipcall-style diploid callable BED
 rule dip_bed:
     input:
-        hap1_bed = f"{SAMPLE}.hap1.bed",
-        hap2_bed = f"{SAMPLE}.hap2.bed"
+        hap1_bed = config["tool"] + f"/{SAMPLE}.hap1.bed",
+        hap2_bed = config["tool"] + f"/{SAMPLE}.hap2.bed"
     output:
-        f"{SAMPLE}.dip.bed"
+        config["tool"] + f"/{SAMPLE}.dip.bed"
     log:
-        f"{SAMPLE}.dip.bed.log"
+        config["tool"] + f"/{SAMPLE}.dip.bed.log"
     params:
         root   = ROOT,
         parbed = PAR_BED,
-        tmp    = f"{SAMPLE}.tmp.bed"
+        tmp    = config["tool"] + f"/{SAMPLE}.tmp.bed"
     shell:
         """
         set -euo pipefail
