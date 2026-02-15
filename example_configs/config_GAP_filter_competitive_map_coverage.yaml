@@ -1,0 +1,68 @@
+# Author dts 2026
+# dts@ucsc.edu
+# dschultz@mbari.org
+#
+# This config file is for the script `GAP_filter_competitive_map_coverage`
+#  https://github.com/conchoecia/genome_assembly_pipelines
+# To use this config file, copy it to the directory you want to run the analysis in,
+#  then rename it to config.yaml. Edit the config.yaml file and then run:
+#  snakemake --snakefile /path/to/genome_assembly_pipelines/snakefiles/GAP_filter_competitive_map_coverage --configfile config.yaml
+
+# This pipeline classifies scaffolds by competitive long-read mapping and coverage analysis.
+# It performs the following steps:
+#   1. Competitively maps HiFi and ONT reads to the genome using -F 2304 to filter
+#      secondary and supplementary alignments
+#   2. Splits the assembly into chromosome-scale and non-chromosome-scale scaffolds
+#   3. Maps non-chromosome scaffolds to chromosome scaffolds to assess overlap
+#   4. Calculates long-read coverage for all scaffolds
+#   5. Generates a summary table and interactive visualization showing mapping % vs coverage
+
+# The path to your assembly for which you want to analyze scaffolds
+assemblies:
+  myassembly: "/path/to/your/assembly.fasta"
+
+# Define which scaffolds are considered chromosome-scale scaffolds
+# These will be used as the reference for mapping non-chromosome scaffolds
+# List them in any order - they represent the main chromosomes in your assembly
+chromosomes:
+  - Chr01
+  - Chr02
+  - Chr03
+  - Chr04
+  - Chr05
+  - Chr06
+  - Chr07
+  - Chr08
+  - Chr09
+  - Chr10
+
+# Define your long read datasets
+# Each entry should have a unique name, the path to the file, and the minimap2 preset
+# Valid types: "map-hifi" for PacBio HiFi, "map-ont" for Oxford Nanopore, "map-pb" for PacBio CLR
+long_reads:
+  hifi_run1:
+    file: "/path/to/hifi/reads/run1.fastq.gz"
+    type: "map-hifi"
+  hifi_run2:
+    file: "/path/to/hifi/reads/run2.fastq.gz"
+    type: "map-hifi"
+  ont_run1:
+    file: "/path/to/ont/reads/run1.fastq.gz"
+    type: "map-ont"
+
+# The name of the tool - this determines where output files go
+tool: "GAP_filter_competitive_map_coverage"
+
+# Number of threads to use for mapping steps
+mapping_threads: 32
+
+# Number of threads to use for sorting and indexing
+sort_threads: 8
+
+# Minimum mapping quality for considering alignments in statistics (default: 0)
+min_mapq: 0
+
+# Output formats
+# Set to true to generate interactive HTML reports, false for static PNG/PDF
+generate_html: true
+generate_static: false

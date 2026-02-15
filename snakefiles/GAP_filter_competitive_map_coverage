@@ -1,0 +1,374 @@
+"""
+This snakefile performs competitive long-read mapping and coverage analysis
+to classify scaffolds based on their alignment to chromosome-scale scaffolds.
+
+The goal of the analysis is to identify unplaced contigs that either are redundant
+with the chromosome-scale scaffolds, or contigs that have few to no reads mapping to them.
+These are both reasons to exclude these contigs from the assembly.
+
+Pipeline steps:
+  1. Competitively maps HiFi and ONT reads to genome (-F 2304 filters secondary/supplementary)
+  2. Splits assembly into chromosome-scale and non-chromosome scaffolds
+  3. Maps non-chromosome scaffolds to chromosome scaffolds
+  4. Calculates mapping statistics and long-read coverage
+  5. Generates summary table and interactive visualization
+"""
+
+from Bio import SeqIO
+import gzip
+import os
+import sys
+
+configfile: "config.yaml"
+config["tool"] = "GAP_filter_competitive_map_coverage"
+
+# Validate config file has required fields
+required_fields = ["assemblies", "chromosomes", "long_reads"]
+for field in required_fields:
+    if field not in config:
+        raise IOError(f"Config file must contain '{field}' field")
+
+# Check assembly names don't have special characters
+for x in config["assemblies"]:
+    if "_" in x:
+        raise IOError(f"Assembly names must not contain underscores: {x}. Use only [A-Za-z0-9]+")
+
+# Validate long_reads structure
+if not isinstance(config["long_reads"], dict):
+    raise IOError("'long_reads' must be a dictionary with structure: {name: {file: path, type: map-hifi/map-ont}}")
+
+for lr_name, lr_info in config["long_reads"].items():
+    if "file" not in lr_info or "type" not in lr_info:
+        raise IOError(f"Long read entry '{lr_name}' must have 'file' and 'type' fields")
+    if lr_info["type"] not in ["map-hifi", "map-ont", "map-pb"]:
+        raise IOError(f"Long read type must be 'map-hifi', 'map-ont', or 'map-pb'. Got: {lr_info['type']}")
+    if not os.path.exists(lr_info["file"]):
+        print(f"Warning: Long read file does not exist: {lr_info['file']}")
+
+# Set default values
+if "mapping_threads" not in config:
+    config["mapping_threads"] = 32
+if "sort_threads" not in config:
+    config["sort_threads"] = 8
+if "min_mapq" not in config:
+    config["min_mapq"] = 0
+if "generate_html" not in config:
+    config["generate_html"] = True
+if "generate_static" not in config:
+    config["generate_static"] = False
+
+# Get paths to scripts
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+parser_script = os.path.join(filepath, "../scripts/parse_scaffold_mapping_stats.py")
+report_script = os.path.join(filepath, "../scripts/generate_scaffold_classification_report.py")
+
+wildcard_constraints:
+    nom="[A-Za-z0-9.]+",
+    lr_name="[A-Za-z0-9._-]+"
+
+rule all:
+    input:
+        # Summary table with mapping and coverage stats
+        expand(config["tool"] + "/output/{nom}/{nom}_scaffold_classification_summary.csv",
+               nom = config["assemblies"]),
+        # Interactive HTML report (if enabled)
+        expand(config["tool"] + "/output/{nom}/{nom}_scaffold_classification_report.html",
+               nom = config["assemblies"]) if config["generate_html"] else [],
+        # Static plots (if enabled)
+        expand(config["tool"] + "/output/{nom}/{nom}_scaffold_classification_plot.png",
+               nom = config["assemblies"]) if config["generate_static"] else []
+
+# Softlink input assembly
+rule softlink_assembly:
+    """
+    Create softlink to input assembly
+    """
+    input:
+        assem = lambda wildcards: config["assemblies"][wildcards.nom]
+    output:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    threads: 1
+    resources:
+        mem_mb=1000,
+        runtime=2
+    run:
+        os.makedirs(os.path.dirname(output.assem), exist_ok=True)
+        if os.path.exists(output.assem):
+            os.remove(output.assem)
+        os.symlink(os.path.abspath(input.assem), output.assem)
+
+# Softlink long read files
+rule softlink_long_reads:
+    """
+    Create softlink to long read files
+    """
+    output:
+        lr = config["tool"] + "/input/longreads/{lr_name}"
+    threads: 1
+    resources:
+        mem_mb=1000,
+        runtime=2
+    run:
+        os.makedirs(os.path.dirname(output.lr), exist_ok=True)
+        lr_file = config["long_reads"][wildcards.lr_name]["file"]
+        if os.path.exists(output.lr):
+            os.remove(output.lr)
+        os.symlink(os.path.abspath(lr_file), output.lr)
+
+rule competitive_map_LR_to_genome:
+    """
+    Maps long reads to assembly with competitive mapping
+    Uses -F 2304 to filter out secondary (256) and supplementary (2048) alignments
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        long_reads = config["tool"] + "/input/longreads/{lr_name}"
+    output:
+        bam = config["tool"] + "/output/bams_LR/{nom}/LR_{lr_name}_to_{nom}.bam"
+    params:
+        minimaparg = lambda wildcards: config["long_reads"][wildcards.lr_name]["type"],
+        lr_name = lambda wildcards: wildcards.lr_name
+    threads: config["mapping_threads"]
+    resources:
+        mem_mb=lambda wildcards, input: max(16000, int(os.path.getsize(input.assem) / 1000000 * 4)),
+        runtime=lambda wildcards, input: max(60, int(os.path.getsize(input.long_reads) / 1000000000 * 30))
+    shell:
+        """
+        minimap2 -t {threads} -ax {params.minimaparg} {input.assem} \
+            --split-prefix {params.lr_name} {input.long_reads} | \
+          samtools view -F 2304 -hb - | \
+          samtools sort -@ {threads} - > {output.bam}
+        """
+
+rule index_LR_bams:
+    """
+    Index the long read BAM files
+    """
+    input:
+        bam = config["tool"] + "/output/bams_LR/{nom}/LR_{lr_name}_to_{nom}.bam"
+    output:
+        bai = config["tool"] + "/output/bams_LR/{nom}/LR_{lr_name}_to_{nom}.bam.bai"
+    threads: 1
+    resources:
+        mem_mb=2000,
+        runtime=10
+    shell:
+        """
+        samtools index {input.bam}
+        """
+
+rule split_assembly_by_chromosomes:
+    """
+    Split the assembly into chromosome-scale and non-chromosome-scale scaffolds
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+    output:
+        chr_fasta = config["tool"] + "/output/{nom}/{nom}_chr_scaffolds.fasta",
+        non_chr_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_scaffolds.fasta",
+        chr_list = config["tool"] + "/output/{nom}/{nom}_chr_list.txt",
+        non_chr_list = config["tool"] + "/output/{nom}/{nom}_non_chr_list.txt"
+    params:
+        chromosomes = config["chromosomes"]
+    threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
+    run:
+        chr_set = set(params.chromosomes)
+        chr_records = []
+        non_chr_records = []
+        
+        with open(input.assem) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                if record.id in chr_set:
+                    chr_records.append(record)
+                else:
+                    non_chr_records.append(record)
+        
+        # Write chromosome scaffolds
+        with open(output.chr_fasta, "w") as out_handle:
+            SeqIO.write(chr_records, out_handle, "fasta")
+        
+        # Write non-chromosome scaffolds
+        with open(output.non_chr_fasta, "w") as out_handle:
+            SeqIO.write(non_chr_records, out_handle, "fasta")
+        
+        # Write lists
+        with open(output.chr_list, "w") as out_handle:
+            for record in chr_records:
+                out_handle.write(f"{record.id}\n")
+        
+        with open(output.non_chr_list, "w") as out_handle:
+            for record in non_chr_records:
+                out_handle.write(f"{record.id}\n")
+
+rule map_non_chr_to_chr_scaffolds:
+    """
+    Map non-chromosome scaffolds to chromosome scaffolds using minimap2 asm5 preset
+    Keep raw sorted BAM without filtering
+    """
+    input:
+        chr_fasta = config["tool"] + "/output/{nom}/{nom}_chr_scaffolds.fasta",
+        non_chr_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_scaffolds.fasta"
+    output:
+        bam = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam"
+    threads: config["mapping_threads"]
+    resources:
+        mem_mb=16000,
+        runtime=60
+    shell:
+        """
+        minimap2 -t {threads} -ax asm5 {input.chr_fasta} {input.non_chr_fasta} | \
+          samtools view -hb - | \
+          samtools sort -@ {threads} - > {output.bam}
+        """
+
+rule index_scaffold_mapping_bam:
+    """
+    Index the scaffold-to-scaffold mapping BAM
+    """
+    input:
+        bam = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam"
+    output:
+        bai = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam.bai"
+    threads: 1
+    resources:
+        mem_mb=2000,
+        runtime=10
+    shell:
+        """
+        samtools index {input.bam}
+        """
+
+rule calculate_scaffold_mapping_stats:
+    """
+    Calculate how much each non-chr scaffold maps to each chr scaffold
+    """
+    input:
+        bam = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam",
+        bai = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam.bai",
+        non_chr_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_scaffolds.fasta",
+        chr_list = config["tool"] + "/output/{nom}/{nom}_chr_list.txt"
+    output:
+        stats = config["tool"] + "/output/{nom}/{nom}_scaffold_mapping_stats.tsv"
+    params:
+        min_mapq = config["min_mapq"]
+    threads: 1
+    resources:
+        mem_mb=8000,
+        runtime=30
+    shell:
+        """
+        python {parser_script} \
+            --bam {input.bam} \
+            --non_chr_fasta {input.non_chr_fasta} \
+            --chr_list {input.chr_list} \
+            --min_mapq {params.min_mapq} \
+            --output {output.stats}
+        """
+
+rule calculate_LR_coverage:
+    """
+    Calculate long-read coverage for all scaffolds
+    Merge all LR BAMs and calculate per-scaffold mean coverage
+    """
+    input:
+        assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        bams = expand(config["tool"] + "/output/bams_LR/{{nom}}/LR_{lr_name}_to_{{nom}}.bam",
+                      lr_name = config["long_reads"].keys()),
+        bais = expand(config["tool"] + "/output/bams_LR/{{nom}}/LR_{lr_name}_to_{{nom}}.bam.bai",
+                      lr_name = config["long_reads"].keys())
+    output:
+        coverage = config["tool"] + "/output/{nom}/{nom}_LR_coverage.tsv"
+    threads: config["sort_threads"]
+    resources:
+        mem_mb=16000,
+        runtime=120
+    shell:
+        """
+        # Merge all BAMs, sort, and calculate coverage per scaffold
+        samtools merge -@ {threads} - {input.bams} | \
+          samtools sort -@ {threads} - | \
+          samtools coverage - | \
+          awk 'NR==1 || $1 !~ /^#/' | \
+          cut -f1,7 > {output.coverage}
+        """
+
+rule generate_summary_table:
+    """
+    Combine mapping stats and coverage into a single summary table
+    """
+    input:
+        mapping_stats = config["tool"] + "/output/{nom}/{nom}_scaffold_mapping_stats.tsv",
+        coverage = config["tool"] + "/output/{nom}/{nom}_LR_coverage.tsv",
+        non_chr_list = config["tool"] + "/output/{nom}/{nom}_non_chr_list.txt"
+    output:
+        summary = config["tool"] + "/output/{nom}/{nom}_scaffold_classification_summary.csv"
+    threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
+    run:
+        import pandas as pd
+        
+        # Read mapping stats
+        mapping_df = pd.read_csv(input.mapping_stats, sep='\t')
+        
+        # Read coverage stats
+        coverage_df = pd.read_csv(input.coverage, sep='\t')
+        coverage_df.columns = ['scaffold_name', 'mean_coverage']
+        
+        # Merge the two dataframes
+        summary_df = pd.merge(mapping_df, coverage_df, on='scaffold_name', how='left')
+        
+        # Fill NaN values with 0 for scaffolds without coverage
+        summary_df['mean_coverage'] = summary_df['mean_coverage'].fillna(0)
+        
+        # Save as CSV
+        summary_df.to_csv(output.summary, index=False)
+
+rule generate_html_report:
+    """
+    Generate interactive HTML report with plotly
+    """
+    input:
+        summary = config["tool"] + "/output/{nom}/{nom}_scaffold_classification_summary.csv"
+    output:
+        html = config["tool"] + "/output/{nom}/{nom}_scaffold_classification_report.html"
+    params:
+        generate_html = config["generate_html"]
+    threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
+    shell:
+        """
+        python {report_script} \
+            --input {input.summary} \
+            --output_html {output.html} \
+            --title "{wildcards.nom} Scaffold Classification"
+        """
+
+rule generate_static_plot:
+    """
+    Generate static PNG/PDF plot
+    """
+    input:
+        summary = config["tool"] + "/output/{nom}/{nom}_scaffold_classification_summary.csv"
+    output:
+        png = config["tool"] + "/output/{nom}/{nom}_scaffold_classification_plot.png"
+    params:
+        generate_static = config["generate_static"]
+    threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
+    shell:
+        """
+        python {report_script} \
+            --input {input.summary} \
+            --output_static {output.png} \
+            --title "{wildcards.nom} Scaffold Classification"
+        """
+
