@@ -120,7 +120,8 @@ def calculate_mapping_stats(bam_file, scaffold_lengths, chromosomes, min_mapq):
         ref_name = read.reference_name  # chr scaffold name
         
         # Calculate aligned bases (using alignment blocks to skip insertions/deletions)
-        aligned_bases = sum(block_length for block_length in read.get_blocks())
+        # get_blocks() returns list of (start, end) tuples
+        aligned_bases = sum(end - start for start, end in read.get_blocks())
         
         mapping_stats[query_name][ref_name] += aligned_bases
     
