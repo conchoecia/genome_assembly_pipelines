@@ -23,6 +23,10 @@ def parse_arguments():
         help="Input CSV file with scaffold classification summary"
     )
     parser.add_argument(
+        "--alignments",
+        help="Optional JSON file with alignment details for dot plots (auto-detected if not provided)"
+    )
+    parser.add_argument(
         "--output_html",
         help="Output HTML file for interactive report"
     )
@@ -68,7 +72,7 @@ def load_data(input_file):
         sys.exit(1)
 
 
-def generate_html_report(df, output_file, title, coverage_threshold=None, mapping_threshold=None):
+def generate_html_report(df, output_file, title, coverage_threshold=None, mapping_threshold=None, alignment_data=None):
     """
     Generate interactive HTML report using D3.js.
     
@@ -78,20 +82,22 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
         title: Title for the report
         coverage_threshold: Optional coverage threshold line
         mapping_threshold: Optional mapping percentage threshold line
+        alignment_data: Optional dictionary with alignment details for dot plots
     """
-    import json
     import json
     
     # Prepare data for D3.js
     scaffold_data = []
     for idx, row in df.iterrows():
+        scaffold_name = row['scaffold_name']
         scaffold_info = {
-            'name': row['scaffold_name'],
+            'name': scaffold_name,
             'length': int(row['scaffold_length']),
             'mapping_pct': float(row['best_match_pct']),
             'coverage': float(row['mean_coverage']),
             'best_chr': str(row['best_match_chr']),
-            'total_aligned_pct': float(row.get('percent_aligned', 0))
+            'total_aligned_pct': float(row.get('percent_aligned', 0)),
+            'alignments': alignment_data.get(scaffold_name, {}) if alignment_data else {}
         }
         scaffold_data.append(scaffold_info)
     
@@ -235,6 +241,59 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
             stroke-width: 2;
             stroke-dasharray: 5,5;
         }}
+        .detail-modal {{
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.7);
+        }}
+        .detail-content {{
+            background-color: white;
+            margin: 2% auto;
+            padding: 20px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 1200px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }}
+        .close-btn {{
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 20px;
+        }}
+        .close-btn:hover {{
+            color: #000;
+        }}
+        .detail-section {{
+            margin-top: 20px;
+        }}
+        .detail-section h3 {{
+            color: #2c3e50;
+            margin-bottom: 10px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 5px;
+        }}
+        .coverage-bar {{
+            fill: #3498db;
+            opacity: 0.7;
+        }}
+        .alignment-block {{
+            fill: #e74c3c;
+            opacity: 0.6;
+            cursor: pointer;
+        }}
+        .alignment-block:hover {{
+            opacity: 0.9;
+        }}
     </style>
 </head>
 <body>
@@ -276,6 +335,15 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
     </div>
     
     <div class="tooltip" id="tooltip"></div>
+    
+    <!-- Detail Modal -->
+    <div id="detailModal" class="detail-modal">
+        <div class="detail-content">
+            <span class="close-btn" onclick="closeDetailModal()">&times;</span>
+            <h2 id="modalTitle">Scaffold Details</h2>
+            <div id="modalBody"></div>
+        </div>
+    </div>
     
     <script>
         // Data
@@ -386,6 +454,7 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                 .attr("opacity", 0.7)
                 .on("mouseover", function(event, d) {{
                     d3.select(this).attr("opacity", 1);
+                    const hasAlignments = d.alignments && Object.keys(d.alignments).length > 0;
                     tooltip.style("display", "block")
                         .html(`
                             <strong>${{d.name}}</strong><br/>
@@ -393,6 +462,7 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                             Best match: ${{d.best_chr}}<br/>
                             Mapping %: ${{d.mapping_pct.toFixed(2)}}%<br/>
                             Coverage: ${{d.coverage.toFixed(2)}}x
+                            ${{hasAlignments ? '<br/><em>Click for dot plot</em>' : ''}}
                         `);
                 }})
                 .on("mousemove", function(event) {{
@@ -403,6 +473,11 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                 .on("mouseout", function() {{
                     d3.select(this).attr("opacity", 0.7);
                     tooltip.style("display", "none");
+                }})
+                .on("click", function(event, d) {{
+                    if (d.alignments && Object.keys(d.alignments).length > 0) {{
+                        showDetailModal(d);
+                    }}
                 }});
             
             // Color legend
@@ -533,6 +608,177 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
             }});
         }}
         
+        // Modal functions
+        function closeDetailModal() {{
+            document.getElementById('detailModal').style.display = 'none';
+        }}
+        
+        function showDetailModal(scaffoldData) {{
+            const modal = document.getElementById('detailModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalBody = document.getElementById('modalBody');
+            
+            modalTitle.textContent = `Details for ${{scaffoldData.name}}`;
+            
+            // Build modal content
+            let content = `
+                <div class="detail-section">
+                    <p><strong>Length:</strong> ${{scaffoldData.length.toLocaleString()}} bp</p>
+                    <p><strong>Best Match:</strong> ${{scaffoldData.best_chr}} (${{scaffoldData.mapping_pct.toFixed(2)}}% mapped)</p>
+                    <p><strong>Coverage:</strong> ${{scaffoldData.coverage.toFixed(2)}}x</p>
+                </div>
+            `;
+            
+            // Add dot plot for each chromosome with alignments
+            const alignments = scaffoldData.alignments;
+            if (alignments && Object.keys(alignments).length > 0) {{
+                content += '<div class="detail-section"><h3>Alignment Dot Plots</h3>';
+                
+                for (const [chrName, chrAlignments] of Object.entries(alignments)) {{
+                    if (chrAlignments.length > 0) {{
+                        content += `<h4>${{chrName}} (${{chrAlignments.length}} alignment${{chrAlignments.length > 1 ? 's' : ''}})</h4>`;
+                        content += `<div id="dotplot_${{chrName.replace(/[^a-zA-Z0-9]/g, '_')}}"></div>`;
+                    }}
+                }}
+                
+                content += '</div>';
+            }} else {{
+                content += '<p><em>No alignment details available</em></p>';
+            }}
+            
+            modalBody.innerHTML = content;
+            modal.style.display = 'block';
+            
+            // Create dot plots after modal is shown
+            if (alignments && Object.keys(alignments).length > 0) {{
+                for (const [chrName, chrAlignments] of Object.entries(alignments)) {{
+                    if (chrAlignments.length > 0) {{
+                        const divId = `dotplot_${{chrName.replace(/[^a-zA-Z0-9]/g, '_')}}`;
+                        createDotPlot(divId, scaffoldData.name, chrName, chrAlignments, scaffoldData.length);
+                    }}
+                }}
+            }}
+        }}
+        
+        function createDotPlot(divId, scaffoldName, chrName, alignments, scaffoldLength) {{
+            const margin = {{top: 20, right: 20, bottom: 50, left: 70}};
+            const width = 800 - margin.left - margin.right;
+            const height = 300 - margin.top - margin.bottom;
+            
+            // Clear any existing content
+            d3.select(`#${{divId}}`).selectAll("*").remove();
+            
+            const svg = d3.select(`#${{divId}}`)
+                .append("svg")
+                .attr("width", width + margin.left + margin.right)
+                .attr("height", height + margin.top + margin.bottom)
+                .append("g")
+                .attr("transform", `translate(${{margin.left}},${{margin.top}})`);
+            
+            // Find max reference position
+            const maxRef = d3.max(alignments, d => d.ref_end);
+            
+            // Scales
+            const xScale = d3.scaleLinear()
+                .domain([0, scaffoldLength])
+                .range([0, width]);
+            
+            const yScale = d3.scaleLinear()
+                .domain([0, maxRef])
+                .range([height, 0]);
+            
+            // Axes
+            const xAxis = d3.axisBottom(xScale)
+                .ticks(8)
+                .tickFormat(d => (d / 1000).toFixed(0) + "kb");
+            
+            const yAxis = d3.axisLeft(yScale)
+                .ticks(6)
+                .tickFormat(d => (d / 1000).toFixed(0) + "kb");
+            
+            svg.append("g")
+                .attr("transform", `translate(0,${{height}})`)
+                .call(xAxis);
+            
+            svg.append("g")
+                .call(yAxis);
+            
+            // Axis labels
+            svg.append("text")
+                .attr("x", width / 2)
+                .attr("y", height + 40)
+                .attr("text-anchor", "middle")
+                .style("font-size", "12px")
+                .text(`${{scaffoldName}} position (bp)`);
+            
+            svg.append("text")
+                .attr("transform", "rotate(-90)")
+                .attr("x", -height / 2)
+                .attr("y", -50)
+                .attr("text-anchor", "middle")
+                .style("font-size", "12px")
+                .text(`${{chrName}} position (bp)`);
+            
+            // Tooltip
+            const tooltip = d3.select("#tooltip");
+            
+            // Draw alignment blocks
+            alignments.forEach(aln => {{
+                // Draw lines connecting query and reference positions
+                svg.append("line")
+                    .attr("x1", xScale(aln.query_start))
+                    .attr("x2", xScale(aln.query_end))
+                    .attr("y1", yScale(aln.ref_start))
+                    .attr("y2", yScale(aln.ref_end))
+                    .attr("stroke", aln.is_reverse ? "#e74c3c" : "#3498db")
+                    .attr("stroke-width", 2)
+                    .attr("opacity", 0.6)
+                    .on("mouseover", function(event) {{
+                        d3.select(this).attr("opacity", 1).attr("stroke-width", 3);
+                        tooltip.style("display", "block")
+                            .html(`
+                                Query: ${{aln.query_start.toLocaleString()}}-${{aln.query_end.toLocaleString()}}<br/>
+                                Ref: ${{aln.ref_start.toLocaleString()}}-${{aln.ref_end.toLocaleString()}}<br/>
+                                MAPQ: ${{aln.mapq}}<br/>
+                                Strand: ${{aln.is_reverse ? 'Reverse' : 'Forward'}}
+                            `);
+                    }})
+                    .on("mousemove", function(event) {{
+                        tooltip
+                            .style("left", (event.pageX + 15) + "px")
+                            .style("top", (event.pageY - 10) + "px");
+                    }})
+                    .on("mouseout", function() {{
+                        d3.select(this).attr("opacity", 0.6).attr("stroke-width", 2);
+                        tooltip.style("display", "none");
+                    }});
+            }});
+            
+            // Legend
+            const legend = svg.append("g")
+                .attr("transform", `translate(${{width - 100}}, 10)`);
+            
+            legend.append("line")
+                .attr("x1", 0).attr("x2", 20)
+                .attr("y1", 0).attr("y2", 0)
+                .attr("stroke", "#3498db")
+                .attr("stroke-width", 2);
+            legend.append("text")
+                .attr("x", 25).attr("y", 5)
+                .text("Forward")
+                .style("font-size", "11px");
+            
+            legend.append("line")
+                .attr("x1", 0).attr("x2", 20)
+                .attr("y1", 15).attr("y2", 15)
+                .attr("stroke", "#e74c3c")
+                .attr("stroke-width", 2);
+            legend.append("text")
+                .attr("x", 25).attr("y", 20)
+                .text("Reverse")
+                .style("font-size", "11px");
+        }}
+        
         // Create visualizations
         createScatterPlot();
         createHeatmap();
@@ -643,6 +889,29 @@ def main():
         print(f"Error: Missing required columns: {missing_cols}", file=sys.stderr)
         sys.exit(1)
     
+    # Load alignment details if available
+    alignment_data = None
+    if args.alignments:
+        alignment_file = args.alignments
+    else:
+        # Auto-detect: look for _alignments.json file next to the input
+        alignment_file = args.input.replace('_summary.csv', '_mapping_stats_alignments.json')
+        if not os.path.exists(alignment_file):
+            alignment_file = args.input.replace('.csv', '_alignments.json')
+    
+    if os.path.exists(alignment_file):
+        print(f"Loading alignment details from {alignment_file}...", file=sys.stderr)
+        import json
+        try:
+            with open(alignment_file, 'r') as f:
+                alignment_data = json.load(f)
+            print(f"  Loaded alignments for {len(alignment_data)} scaffolds", file=sys.stderr)
+        except Exception as e:
+            print(f"  Warning: Could not load alignment details: {e}", file=sys.stderr)
+    else:
+        print(f"  No alignment details found (looked for {alignment_file})", file=sys.stderr)
+        print("  Dot plots will not be available in the report", file=sys.stderr)
+    
     # Generate HTML report if requested
     if args.output_html:
         generate_html_report(
@@ -650,7 +919,8 @@ def main():
             args.output_html,
             args.title,
             args.coverage_threshold,
-            args.mapping_threshold
+            args.mapping_threshold,
+            alignment_data
         )
     
     # Generate static plot if requested
