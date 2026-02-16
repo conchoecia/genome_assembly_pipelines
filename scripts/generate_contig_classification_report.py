@@ -35,6 +35,14 @@ def parse_arguments():
         help="Optional JSON file with per-contig trimming details (for trimming visualization)"
     )
     parser.add_argument(
+        "--chr_coverage",
+        help="Optional JSON file with chromosome coverage statistics"
+    )
+    parser.add_argument(
+        "--binned_coverage",
+        help="Optional JSON file with binned contig coverage data"
+    )
+    parser.add_argument(
         "--output_html",
         help="Output HTML file for interactive report"
     )
@@ -116,8 +124,46 @@ def load_trimming_data(trimming_details_file):
         return None
 
 
+def load_chr_coverage_data(chr_coverage_file):
+    """Load chromosome coverage statistics."""
+    if not chr_coverage_file or not os.path.exists(chr_coverage_file):
+        return None
+    
+    try:
+        import json
+        with open(chr_coverage_file) as f:
+            data = json.load(f)
+        print(f"Loaded chromosome coverage statistics", file=sys.stderr)
+        if 'genome' in data:
+            genome = data['genome']
+            print(f"  Genome coverage: {genome.get('mean', 0):.1f}x mean, "
+                  f"{genome.get('p25', 0):.1f}-{genome.get('p75', 0):.1f}x (25-75th percentile)", 
+                  file=sys.stderr)
+        return data
+    except Exception as e:
+        print(f"Warning: Could not load chromosome coverage data: {e}", file=sys.stderr)
+        return None
+
+
+def load_binned_coverage_data(binned_coverage_file):
+    """Load binned contig coverage data."""
+    if not binned_coverage_file or not os.path.exists(binned_coverage_file):
+        return None
+    
+    try:
+        import json
+        with open(binned_coverage_file) as f:
+            data = json.load(f)
+        print(f"Loaded binned coverage for {len(data)} contigs", file=sys.stderr)
+        return data
+    except Exception as e:
+        print(f"Warning: Could not load binned coverage data: {e}", file=sys.stderr)
+        return None
+
+
 def generate_html_report(df, output_file, title, coverage_threshold=None, mapping_threshold=None, 
-                        alignment_data=None, filtering_data=None, trimming_data=None):
+                        alignment_data=None, filtering_data=None, trimming_data=None,
+                        chr_coverage_data=None, binned_coverage_data=None):
     """
     Generate interactive HTML report using D3.js.
     
@@ -128,6 +174,10 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
         coverage_threshold: Optional coverage threshold line
         mapping_threshold: Optional mapping percentage threshold line
         alignment_data: Optional dictionary with alignment details for dot plots
+        filtering_data: Optional DataFrame with removed contigs info
+        trimming_data: Optional dict with per-contig trimming details
+        chr_coverage_data: Optional dict with chromosome coverage statistics
+        binned_coverage_data: Optional dict with binned contig coverage
     """
     import json
     
@@ -422,6 +472,8 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
         const mappingThreshold = {json.dumps(mapping_threshold)};
         const trimmingData = {json.dumps(trimming_data) if trimming_data else 'null'};
         const filteringData = {json.dumps(filtering_data.to_dict('records') if filtering_data is not None else None)};
+        const chrCoverageData = {json.dumps(chr_coverage_data) if chr_coverage_data else 'null'};
+        const binnedCoverageData = {json.dumps(binned_coverage_data) if binned_coverage_data else 'null'};
         
         // Scatter plot
         function createScatterPlot() {{
@@ -462,6 +514,55 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
             svg.append("g")
                 .attr("class", "grid")
                 .call(d3.axisLeft(y).tickSize(-width).tickFormat(""));
+            
+            // Coverage percentile bands (if chromosome coverage data available)
+            if (chrCoverageData && chrCoverageData.genome) {{
+                const genomeCov = chrCoverageData.genome;
+                
+                // Draw 10-90th percentile band (light)
+                if (genomeCov.p10 !== undefined && genomeCov.p90 !== undefined) {{
+                    svg.append("rect")
+                        .attr("x", 0)
+                        .attr("y", y(genomeCov.p90))
+                        .attr("width", width)
+                        .attr("height", y(genomeCov.p10) - y(genomeCov.p90))
+                        .attr("fill", "#e8f4f8")
+                        .attr("opacity", 0.5);
+                }}
+                
+                // Draw 25-75th percentile band (darker)
+                if (genomeCov.p25 !== undefined && genomeCov.p75 !== undefined) {{
+                    svg.append("rect")
+                        .attr("x", 0)
+                        .attr("y", y(genomeCov.p75))
+                        .attr("width", width)
+                        .attr("height", y(genomeCov.p25) - y(genomeCov.p75))
+                        .attr("fill", "#b3d9e6")
+                        .attr("opacity", 0.5);
+                }}
+                
+                // Draw median line
+                if (genomeCov.median !== undefined) {{
+                    svg.append("line")
+                        .attr("x1", 0)
+                        .attr("x2", width)
+                        .attr("y1", y(genomeCov.median))
+                        .attr("y2", y(genomeCov.median))
+                        .attr("stroke", "#2c7bb6")
+                        .attr("stroke-width", 2)
+                        .attr("stroke-dasharray", "5,5")
+                        .attr("opacity", 0.7);
+                    
+                    // Add label for median
+                    svg.append("text")
+                        .attr("x", width - 5)
+                        .attr("y", y(genomeCov.median) - 5)
+                        .attr("text-anchor", "end")
+                        .style("font-size", "10px")
+                        .style("fill", "#2c7bb6")
+                        .text(`Median: ${{genomeCov.median.toFixed(1)}}x`);
+                }}
+            }}
             
             // Axes
             svg.append("g")
@@ -731,7 +832,11 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
         }}
         
         function createDotPlot(divId, scaffoldName, chrName, alignments, scaffoldLength) {{
-            const margin = {{top: 20, right: 20, bottom: 90, left: 70}};  // Increased bottom margin for rugplots
+            // Check if we have binned coverage data for this contig
+            const hasCoverageData = binnedCoverageData && binnedCoverageData[scaffoldName];
+            const coverageTrackHeight = hasCoverageData ? 60 : 0;  // Height for coverage track
+            
+            const margin = {{top: 20 + coverageTrackHeight, right: 20, bottom: 90, left: 70}};  // Increased margins
             const width = 800 - margin.left - margin.right;
             const height = 300 - margin.top - margin.bottom;
             
@@ -744,6 +849,73 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                 .attr("height", height + margin.top + margin.bottom)
                 .append("g")
                 .attr("transform", `translate(${{margin.left}},${{margin.top}})`);
+            
+            // Draw coverage track if data available
+            if (hasCoverageData) {{
+                const covData = binnedCoverageData[scaffoldName];
+                const bins = covData.bins;
+                const binSize = covData.bin_size;
+                const meanCov = covData.mean;
+                
+                // Coverage track position (above main plot)
+                const covTrackY = -coverageTrackHeight;
+                const covTrackHeight = 50;
+                
+                // Scale for coverage (0 to 2x mean for better visualization)
+                const maxCovDisplay = Math.max(meanCov * 2, d3.max(bins));
+                const covScale = d3.scaleLinear()
+                    .domain([0, maxCovDisplay])
+                    .range([covTrackHeight, 0]);
+                
+                // Draw coverage bars
+                const binWidth = width / bins.length;
+                bins.forEach((cov, idx) => {{
+                    svg.append("rect")
+                        .attr("x", idx * binWidth)
+                        .attr("y", covTrackY + covScale(cov))
+                        .attr("width", Math.max(binWidth - 0.5, 0.5))
+                        .attr("height", covTrackHeight - covScale(cov))
+                        .attr("fill", "#4a90e2")
+                        .attr("opacity", 0.7);
+                }});
+                
+                // Mean coverage line
+                svg.append("line")
+                    .attr("x1", 0)
+                    .attr("x2", width)
+                    .attr("y1", covTrackY + covScale(meanCov))
+                    .attr("y2", covTrackY + covScale(meanCov))
+                    .attr("stroke", "#d62728")
+                    .attr("stroke-width", 1.5)
+                    .attr("stroke-dasharray", "3,3");
+                
+                // Coverage track label
+                svg.append("text")
+                    .attr("x", -5)
+                    .attr("y", covTrackY + covTrackHeight / 2)
+                    .attr("text-anchor", "end")
+                    .style("font-size", "10px")
+                    .text("Coverage");
+                
+                // Coverage value label
+                svg.append("text")
+                    .attr("x", width + 5)
+                    .attr("y", covTrackY + covScale(meanCov) + 3)
+                    .attr("text-anchor", "start")
+                    .style("font-size", "9px")
+                    .style("fill", "#d62728")
+                    .text(`${{meanCov.toFixed(1)}}x`);
+                
+                // Y-axis for coverage
+                const covAxis = d3.axisLeft(covScale)
+                    .ticks(3)
+                    .tickFormat(d => d.toFixed(0) + "x");
+                
+                svg.append("g")
+                    .attr("transform", `translate(0,${{covTrackY}})`)
+                    .call(covAxis)
+                    .style("font-size", "9px");
+            }}
             
             // Find min/max reference positions (zoom to aligned region)
             const minRef = d3.min(alignments, d => d.ref_start);
@@ -1114,6 +1286,150 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                     Retained (intact or trimmed): ${{totalRetained}} (${{(totalRetained/totalInput*100).toFixed(1)}}%)<br/>
                     Removed: ${{totalRemoved}} (${{(totalRemoved/totalInput*100).toFixed(1)}}%)
                 `);
+            
+            // Add multi-step scatter plots showing contig progression
+            container.append("h3")
+                .style("margin-top", "40px")
+                .text("Contig Progression Through Pipeline");
+            
+            createProgressionScatterPlots(container);
+        }}
+        
+        // Create multi-step scatter plots showing filtering/trimming progression
+        function createProgressionScatterPlots(container) {{
+            // Prepare data for each step
+            const allContigs = scaffoldData.map(d => ({{
+                name: d.name,
+                mapping_pct: d.mapping_pct,
+                coverage: d.coverage,
+                length: d.length
+            }}));
+            
+            // Group contigs by status
+            const removed_filter = new Set(filteringData ? filteringData.map(d => d.contig_name) : []);
+            const statusMap = new Map();
+            
+            if (trimmingData) {{
+                Object.entries(trimmingData).forEach(([name, info]) => {{
+                    statusMap.set(name, info.status);
+                }});
+            }}
+            
+            // Create 3 small scatter plots side by side
+            const plotsData = [
+                {{
+                    title: 'Input Contigs',
+                    data: allContigs,
+                    colorFn: d => '#3498db'  // All blue
+                }},
+                {{
+                    title: 'After Filtering',
+                    data: allContigs.filter(d => !removed_filter.has(d.name)),
+                    colorFn: d => removed_filter.has(d.name) ? '#c0392b' : '#3498db'
+                }},
+                {{
+                    title: 'Final Retained',
+                    data: allContigs.filter(d => {{
+                        if (removed_filter.has(d.name)) return false;
+                        const status = statusMap.get(d.name);
+                        return status === 'kept_intact' || status === 'trimmed';
+                    }}),
+                    colorFn: d => {{
+                        const status = statusMap.get(d.name);
+                        if (status === 'kept_intact') return '#27ae60';  // Green
+                        if (status === 'trimmed') return '#f39c12';  // Orange
+                        return '#3498db';  // Blue
+                    }}
+                }}
+            ];
+            
+            const plotsContainer = container.append("div")
+                .style("display", "flex")
+                .style("justify-content", "space-around")
+                .style("margin-top", "20px")
+                .style("flex-wrap", "wrap");
+            
+            const smallMargin = {{top: 30, right: 10, bottom: 40, left: 50}};
+            const smallWidth = 280 - smallMargin.left - smallMargin.right;
+            const smallHeight = 250 - smallMargin.top - smallMargin.bottom;
+            
+            // Shared scales across all plots
+            const xScale = d3.scaleLinear()
+                .domain([0, 100])
+                .range([0, smallWidth]);
+            
+            const maxCov = d3.max(allContigs, d => d.coverage);
+            const yScale = d3.scaleLinear()
+                .domain([0, maxCov * 1.1])
+                .range([smallHeight, 0]);
+            
+            plotsData.forEach(plotInfo => {{
+                const plotDiv = plotsContainer.append("div")
+                    .style("margin", "10px");
+                
+                const svg = plotDiv.append("svg")
+                    .attr("width", smallWidth + smallMargin.left + smallMargin.right)
+                    .attr("height", smallHeight + smallMargin.top + smallMargin.bottom)
+                    .append("g")
+                    .attr("transform", `translate(${{smallMargin.left}},${{smallMargin.top}})`);
+                
+                // Title
+                svg.append("text")
+                    .attr("x", smallWidth / 2)
+                    .attr("y", -10)
+                    .attr("text-anchor", "middle")
+                    .style("font-size", "12px")
+                    .style("font-weight", "bold")
+                    .text(plotInfo.title);
+                
+                // Axes
+                svg.append("g")
+                    .attr("transform", `translate(0,${{smallHeight}})`)
+                    .call(d3.axisBottom(xScale).ticks(5))
+                    .style("font-size", "9px");
+                
+                svg.append("g")
+                    .call(d3.axisLeft(yScale).ticks(5))
+                    .style("font-size", "9px");
+                
+                // Axis labels
+                svg.append("text")
+                    .attr("x", smallWidth / 2)
+                    .attr("y", smallHeight + 35)
+                    .attr("text-anchor", "middle")
+                    .style("font-size", "9px")
+                    .text("% Mapped");
+                
+                svg.append("text")
+                    .attr("transform", "rotate(-90)")
+                    .attr("x", -smallHeight / 2)
+                    .attr("y", -35)
+                    .attr("text-anchor", "middle")
+                    .style("font-size", "9px")
+                    .text("Coverage");
+                
+                // Count label
+                svg.append("text")
+                    .attr("x", smallWidth / 2)
+                    .attr("y", -25)
+                    .attr("text-anchor", "middle")
+                    .style("font-size", "10px")
+                    .style("fill", "#666")
+                    .text(`n = ${{plotInfo.data.length}}`);
+                
+                // Points
+                svg.selectAll("circle")
+                    .data(plotInfo.data)
+                    .enter()
+                    .append("circle")
+                    .attr("cx", d => xScale(d.mapping_pct))
+                    .attr("cy", d => yScale(d.coverage))
+                    .attr("r", 2.5)
+                    .attr("fill", d => plotInfo.colorFn(d))
+                    .attr("opacity", 0.6)
+                    .attr("stroke", "#fff")
+                    .attr("stroke-width", 0.5);
+            }});
         }}
         
         // Create visualizations
@@ -1290,6 +1606,8 @@ def main():
     # Load filtering and trimming data if provided
     filtering_data = load_filtering_data(args.removed_contigs)
     trimming_data = load_trimming_data(args.trimming_details)
+    chr_coverage_data = load_chr_coverage_data(args.chr_coverage)
+    binned_coverage_data = load_binned_coverage_data(args.binned_coverage)
     
     # Generate HTML report if requested
     if args.output_html:
@@ -1301,7 +1619,9 @@ def main():
             args.mapping_threshold,
             alignment_data,
             filtering_data,
-            trimming_data
+            trimming_data,
+            chr_coverage_data,
+            binned_coverage_data
         )
     
     # Generate static plot if requested

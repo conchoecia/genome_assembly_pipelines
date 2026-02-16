@@ -71,13 +71,19 @@ if "trim_min_mapq" not in config:
 if "trim_min_keep_piece" not in config:
     config["trim_min_keep_piece"] = 5000
 if "trim_max_redundant_pct" not in config:
-    config["trim_max_redundant_pct"] = 80.0
+    config["trim_max_redundant_pct"] = 100.0
+if "trim_aggressive_min_block_size" not in config:
+    config["trim_aggressive_min_block_size"] = 50000
+if "trim_aggressive_min_mapq" not in config:
+    config["trim_aggressive_min_mapq"] = 8
 
 # Get paths to scripts
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 parser_script = os.path.join(filepath, "../scripts/parse_contig_mapping_stats.py")
 report_script = os.path.join(filepath, "../scripts/generate_contig_classification_report.py")
 coverage_script = os.path.join(filepath, "../scripts/calculate_contig_coverage.py")
+chr_coverage_script = os.path.join(filepath, "../scripts/calculate_chr_coverage_stats.py")
+binned_coverage_script = os.path.join(filepath, "../scripts/calculate_binned_contig_coverage.py")
 filter_script = os.path.join(filepath, "../scripts/filter_redundant_contigs.py")
 trim_script = os.path.join(filepath, "../scripts/trim_redundant_regions.py")
 combine_script = os.path.join(filepath, "../scripts/combine_chr_and_retained_contigs.py")
@@ -432,6 +438,79 @@ rule calculate_LR_coverage:
         rm -f $merged_bam $merged_bam.bai
         """
 
+rule calculate_chr_coverage_stats:
+    """
+    Calculate coverage statistics for chromosome-scale scaffolds
+    This provides expected coverage distribution for comparison
+    """
+    input:
+        chr_list = config["tool"] + "/output/{nom}/{nom}_chr_list.txt",
+        bams = expand(config["tool"] + "/output/bams_LR/{{nom}}/LR_{lr_name}_to_{{nom}}.bam",
+                      lr_name = config["long_reads"].keys()),
+        bais = expand(config["tool"] + "/output/bams_LR/{{nom}}/LR_{lr_name}_to_{{nom}}.bam.bai",
+                      lr_name = config["long_reads"].keys())
+    output:
+        json = config["tool"] + "/output/{nom}/{nom}_chr_coverage_stats.json",
+        tsv = config["tool"] + "/output/{nom}/{nom}_chr_coverage_stats.tsv"
+    threads: config["sort_threads"]
+    resources:
+        mem_mb=16000,
+        runtime=120
+    shell:
+        """
+        # Merge all BAMs and sort
+        merged_bam=$(mktemp).bam
+        samtools merge -@ {threads} $merged_bam {input.bams}
+        samtools index -@ {threads} $merged_bam
+        
+        # Calculate chromosome coverage statistics
+        python {chr_coverage_script} \
+            --bam $merged_bam \
+            --chr_list {input.chr_list} \
+            --output_json {output.json} \
+            --output_tsv {output.tsv}
+        
+        # Clean up
+        rm -f $merged_bam $merged_bam.bai
+        """
+
+rule calculate_binned_contig_coverage:
+    """
+    Calculate binned coverage (1kb bins) for contigs
+    This enables coverage track visualization in dotplots
+    """
+    input:
+        contig_map = config["tool"] + "/output/{nom}/{nom}_contig_to_scaffold_map.tsv",
+        bams = expand(config["tool"] + "/output/bams_LR/{{nom}}/LR_{lr_name}_to_{{nom}}.bam",
+                      lr_name = config["long_reads"].keys()),
+        bais = expand(config["tool"] + "/output/bams_LR/{{nom}}/LR_{lr_name}_to_{{nom}}.bam.bai",
+                      lr_name = config["long_reads"].keys())
+    output:
+        json = config["tool"] + "/output/{nom}/{nom}_binned_contig_coverage.json"
+    params:
+        bin_size = 1000
+    threads: config["sort_threads"]
+    resources:
+        mem_mb=16000,
+        runtime=120
+    shell:
+        """
+        # Merge all BAMs and sort
+        merged_bam=$(mktemp).bam
+        samtools merge -@ {threads} $merged_bam {input.bams}
+        samtools index -@ {threads} $merged_bam
+        
+        # Calculate binned coverage
+        python {binned_coverage_script} \
+            --bam $merged_bam \
+            --contig_map {input.contig_map} \
+            --output_json {output.json} \
+            --bin_size {params.bin_size}
+        
+        # Clean up
+        rm -f $merged_bam $merged_bam.bai
+        """
+
 rule generate_summary_table:
     """
     Combine mapping stats and coverage into a single summary table
@@ -471,7 +550,9 @@ rule generate_html_report:
     input:
         summary = config["tool"] + "/output/{nom}/{nom}_contig_classification_summary.csv",
         removed_list = config["tool"] + "/output/{nom}/{nom}_removed_contigs.tsv",
-        details_json = config["tool"] + "/output/{nom}/{nom}_trimming_details.json"
+        details_json = config["tool"] + "/output/{nom}/{nom}_trimming_details.json",
+        chr_coverage = config["tool"] + "/output/{nom}/{nom}_chr_coverage_stats.json",
+        binned_coverage = config["tool"] + "/output/{nom}/{nom}_binned_contig_coverage.json"
     output:
         html = config["tool"] + "/output/{nom}/{nom}_contig_classification_report.html"
     params:
@@ -487,7 +568,9 @@ rule generate_html_report:
             --output_html {output.html} \
             --title "{wildcards.nom} Contig Classification" \
             --removed_contigs {input.removed_list} \
-            --trimming_details {input.details_json}
+            --trimming_details {input.details_json} \
+            --chr_coverage {input.chr_coverage} \
+            --binned_coverage {input.binned_coverage}
         """
 
 rule generate_static_plot:
@@ -557,7 +640,9 @@ rule trim_redundant_regions:
         min_block_size = config["trim_min_block_size"],
         min_mapq = config["trim_min_mapq"],
         min_keep_piece = config["trim_min_keep_piece"],
-        max_redundant_pct = config["trim_max_redundant_pct"]
+        max_redundant_pct = config["trim_max_redundant_pct"],
+        aggressive_min_block_size = config["trim_aggressive_min_block_size"],
+        aggressive_min_mapq = config["trim_aggressive_min_mapq"]
     threads: 1
     resources:
         mem_mb=8000,
@@ -573,7 +658,9 @@ rule trim_redundant_regions:
             --min_block_size {params.min_block_size} \
             --min_mapq {params.min_mapq} \
             --min_keep_piece {params.min_keep_piece} \
-            --max_redundant_pct {params.max_redundant_pct}
+            --max_redundant_pct {params.max_redundant_pct} \
+            --aggressive_min_block_size {params.aggressive_min_block_size} \
+            --aggressive_min_mapq {params.aggressive_min_mapq}
         """
 
 rule combine_chr_and_retained_contigs:

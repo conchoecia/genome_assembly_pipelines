@@ -74,6 +74,18 @@ def parse_arguments():
         default=80.0,
         help="Remove entire contig if >this %% redundant (default: 80.0)"
     )
+    parser.add_argument(
+        "--aggressive_min_block_size",
+        type=int,
+        default=50000,
+        help="Aggressive: minimum block size for lower MAPQ threshold (default: 50000)"
+    )
+    parser.add_argument(
+        "--aggressive_min_mapq",
+        type=int,
+        default=8,
+        help="Aggressive: minimum MAPQ for large blocks (default: 8)"
+    )
     
     return parser.parse_args()
 
@@ -136,9 +148,13 @@ def parse_cigar_blocks(cigar, min_gap=1000):
     return blocks
 
 
-def identify_redundant_regions(bam_file, min_block_size, min_mapq):
+def identify_redundant_regions(bam_file, min_block_size, min_mapq, 
+                              aggressive_min_block_size=None, aggressive_min_mapq=None):
     """
     Identify redundant regions in each contig based on alignment blocks.
+    Uses two-tier approach:
+    - Standard: blocks ≥min_block_size with MAPQ ≥min_mapq
+    - Aggressive: blocks ≥aggressive_min_block_size with MAPQ ≥aggressive_min_mapq
     
     Returns:
         Dictionary: {contig_name: [(start, end), ...]} of redundant regions
@@ -152,10 +168,15 @@ def identify_redundant_regions(bam_file, min_block_size, min_mapq):
         if read.is_unmapped:
             continue
         
-        # Skip low quality and supplementary alignments
-        if read.mapping_quality < min_mapq:
-            continue
         if read.is_supplementary:  # Skip supplementary (flag 2048)
+            continue
+        
+        # Check if alignment meets either standard or aggressive threshold
+        meets_standard = read.mapping_quality >= min_mapq
+        meets_aggressive = (aggressive_min_mapq is not None and 
+                          read.mapping_quality >= aggressive_min_mapq)
+        
+        if not (meets_standard or meets_aggressive):
             continue
         
         query_name = read.query_name
@@ -173,8 +194,15 @@ def identify_redundant_regions(bam_file, min_block_size, min_mapq):
         blocks = parse_cigar_blocks(cigar)
         
         # Add blocks that meet size threshold as redundant regions
+        # Check both standard and aggressive thresholds
         for block_start, block_end, block_size in blocks:
-            if block_size >= min_block_size:
+            standard_pass = (block_size >= min_block_size and 
+                           read.mapping_quality >= min_mapq)
+            aggressive_pass = (aggressive_min_block_size is not None and
+                             block_size >= aggressive_min_block_size and 
+                             read.mapping_quality >= aggressive_min_mapq)
+            
+            if standard_pass or aggressive_pass:
                 redundant_regions[query_name].append((block_start, block_end))
     
     bamfile.close()
@@ -368,8 +396,8 @@ def write_report(report_file, stats, args):
         f.write("# Redundant Region Trimming Report\n")
         f.write("#\n")
         f.write("# Parameters:\n")
-        f.write(f"#   Min block size: {args.min_block_size:,} bp\n")
-        f.write(f"#   Min MAPQ: {args.min_mapq}\n")
+        f.write(f"#   Standard: ≥{args.min_block_size:,} bp with MAPQ ≥{args.min_mapq}\n")
+        f.write(f"#   Aggressive: ≥{args.aggressive_min_block_size:,} bp with MAPQ ≥{args.aggressive_min_mapq}\n")
         f.write(f"#   Min keep piece: {args.min_keep_piece:,} bp\n")
         f.write(f"#   Max redundant %%: {args.max_redundant_pct:.1f}%%\n")
         f.write("#\n")
@@ -401,10 +429,14 @@ def main():
     
     # Step 1: Identify redundant regions
     print("Step 1: Identifying redundant regions from BAM...", file=sys.stderr)
+    print(f"  Standard threshold: ≥{args.min_block_size:,} bp with MAPQ ≥{args.min_mapq}", file=sys.stderr)
+    print(f"  Aggressive threshold: ≥{args.aggressive_min_block_size:,} bp with MAPQ ≥{args.aggressive_min_mapq}", file=sys.stderr)
     redundant_regions, contig_lengths = identify_redundant_regions(
         args.bam,
         args.min_block_size,
-        args.min_mapq
+        args.min_mapq,
+        args.aggressive_min_block_size,
+        args.aggressive_min_mapq
     )
     print(f"  Found redundant regions in {len(redundant_regions)} contigs", 
           file=sys.stderr)
