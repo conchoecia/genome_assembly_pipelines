@@ -260,6 +260,7 @@ rule jbat_bedgraph_to_wig:
     """
     Convert JBAT bedGraph to WIG format for JBAT 1D annotations
     This will have scaffold names like scaffold:::fragment_1 that match JBAT
+    Uses fixedStep format with proper span for better JBAT compatibility
     """
     input:
         bg = config["tool"] + "/output/{nom}/jbat/{nom}_jbat_teloKmer_{telo}.bg"
@@ -273,15 +274,21 @@ rule jbat_bedgraph_to_wig:
                 parts = line.strip().split('\t')
                 if len(parts) < 4:
                     continue
-                chrom, start, end, value = parts[0], parts[1], parts[2], parts[3]
+                chrom, start, end, value = parts[0], int(parts[1]), int(parts[2]), parts[3]
+                
+                # Skip regions with 0 value to reduce file size
+                if float(value) == 0:
+                    continue
                 
                 # Write chromosome header when we encounter a new chromosome
                 if chrom != current_chrom:
-                    outfile.write(f"variableStep chrom={chrom}\n")
                     current_chrom = chrom
                 
-                # Write position and value (use start position)
-                outfile.write(f"{start}\t{value}\n")
+                # Use fixedStep format with span for each interval
+                # This tells JBAT the value applies to the entire interval
+                span = end - start
+                outfile.write(f"fixedStep chrom={chrom} start={start+1} step={span} span={span}\n")
+                outfile.write(f"{value}\n")
 
 #   ___  _   _              _  _ _  ___ _              ___ _         __  __
 #  / _ \| |_| |_  ___ _ _  | || (_)/ __| |__ _ ______ / __| |_ _  _ / _|/ _|
@@ -425,6 +432,7 @@ rule telomere_kmer_positions_bigwig:
 rule bedgraph_to_wig:
     """
     Convert bedGraph to WIG format for better compatibility with JBAT 1D annotations
+    Uses fixedStep format with proper span for better compatibility
     """
     input:
         bg = config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.bg"
@@ -438,15 +446,21 @@ rule bedgraph_to_wig:
                 parts = line.strip().split('\t')
                 if len(parts) < 4:
                     continue
-                chrom, start, end, value = parts[0], parts[1], parts[2], parts[3]
+                chrom, start, end, value = parts[0], int(parts[1]), int(parts[2]), parts[3]
+                
+                # Skip regions with 0 value to reduce file size
+                if float(value) == 0:
+                    continue
                 
                 # Write chromosome header when we encounter a new chromosome
                 if chrom != current_chrom:
-                    outfile.write(f"variableStep chrom={chrom}\n")
                     current_chrom = chrom
                 
-                # Write position and value (use start position)
-                outfile.write(f"{start}\t{value}\n")
+                # Use fixedStep format with span for each interval
+                # This tells viewers the value applies to the entire interval
+                span = end - start
+                outfile.write(f"fixedStep chrom={chrom} start={start+1} step={span} span={span}\n")
+                outfile.write(f"{value}\n")
 
 #rule telomere_kmer_bigwig_to_multivec:
 #    """
