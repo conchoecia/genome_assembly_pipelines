@@ -89,15 +89,28 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
     # Prepare data for D3.js
     scaffold_data = []
     for idx, row in df.iterrows():
-        scaffold_name = row['scaffold_name']
+        # Handle both contig and scaffold naming conventions
+        if 'contig_name' in df.columns:
+            contig_name = row['contig_name']
+            parent_scaffold = row.get('parent_scaffold_name', contig_name)
+            display_name = f"{contig_name} ({parent_scaffold})" if contig_name != parent_scaffold else contig_name
+            length_col = 'contig_length'
+        else:
+            contig_name = row['scaffold_name']
+            parent_scaffold = None
+            display_name = contig_name
+            length_col = 'scaffold_length'
+        
         scaffold_info = {
-            'name': scaffold_name,
-            'length': int(row['scaffold_length']),
+            'name': contig_name,
+            'display_name': display_name,
+            'parent_scaffold': parent_scaffold,
+            'length': int(row[length_col]),
             'mapping_pct': float(row['best_match_pct']),
             'coverage': float(row['mean_coverage']),
             'best_chr': str(row['best_match_chr']),
             'total_aligned_pct': float(row.get('percent_aligned', 0)),
-            'alignments': alignment_data.get(scaffold_name, {}) if alignment_data else {}
+            'alignments': alignment_data.get(contig_name, {}) if alignment_data else {}
         }
         scaffold_data.append(scaffold_info)
     
@@ -108,18 +121,23 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
     # Prepare heatmap data
     heatmap_data = []
     for idx, row in df.iterrows():
+        # Use contig_name or scaffold_name as identifier
+        identifier = row.get('contig_name', row.get('scaffold_name'))
         scaffold_heatmap = {
-            'scaffold': row['scaffold_name'],
+            'scaffold': identifier,
             'values': [float(row[col]) for col in chr_cols]
         }
         heatmap_data.append(scaffold_heatmap)
     
     # Sort heatmap by best match percentage
-    heatmap_data.sort(key=lambda x: df[df['scaffold_name'] == x['scaffold']]['best_match_pct'].values[0], reverse=True)
+    identifier_col = 'contig_name' if 'contig_name' in df.columns else 'scaffold_name'
+    heatmap_data.sort(key=lambda x: df[df[identifier_col] == x['scaffold']]['best_match_pct'].values[0], reverse=True)
     
     # Calculate summary statistics
+    length_col = 'contig_length' if 'contig_length' in df.columns else 'scaffold_length'
+    identifier_label = 'Contigs' if 'contig_length' in df.columns else 'Scaffolds'
     total_scaffolds = len(df)
-    total_bases = int(df['scaffold_length'].sum())
+    total_bases = int(df[length_col].sum())
     mean_coverage = float(df['mean_coverage'].mean())
     mean_mapping = float(df['best_match_pct'].mean())
     
@@ -306,7 +324,7 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
             <div class="summary-stats">
                 <div class="stat-box">
                     <div class="stat-value">{total_scaffolds:,}</div>
-                    <div class="stat-label">Non-Chr Scaffolds</div>
+                    <div class="stat-label">Non-Chr {identifier_label}</div>
                 </div>
                 <div class="stat-box">
                     <div class="stat-value">{total_bases:,}</div>
@@ -457,7 +475,7 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                     const hasAlignments = d.alignments && Object.keys(d.alignments).length > 0;
                     tooltip.style("display", "block")
                         .html(`
-                            <strong>${{d.name}}</strong><br/>
+                            <strong>${{d.display_name || d.name}}</strong><br/>
                             Length: ${{d.length.toLocaleString()}} bp<br/>
                             Best match: ${{d.best_chr}}<br/>
                             Mapping %: ${{d.mapping_pct.toFixed(2)}}%<br/>
@@ -618,7 +636,7 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
             const modalTitle = document.getElementById('modalTitle');
             const modalBody = document.getElementById('modalBody');
             
-            modalTitle.textContent = `Details for ${{scaffoldData.name}}`;
+            modalTitle.textContent = `Details for ${{scaffoldData.display_name || scaffoldData.name}}`;
             
             // Build modal content
             let content = `
@@ -797,7 +815,7 @@ def generate_static_plot(df, output_file, title, coverage_threshold=None, mappin
     Generate static plot using matplotlib.
     
     Args:
-        df: pandas DataFrame with scaffold data
+        df: pandas DataFrame with scaffold/contig data
         output_file: Path to output PNG/PDF file
         title: Title for the plot
         coverage_threshold: Optional coverage threshold line
@@ -811,6 +829,9 @@ def generate_static_plot(df, output_file, title, coverage_threshold=None, mappin
         print("Install with: pip install matplotlib", file=sys.stderr)
         sys.exit(1)
     
+    # Determine column names based on what's available
+    length_col = 'contig_length' if 'contig_length' in df.columns else 'scaffold_length'
+    
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 7))
     
@@ -818,7 +839,7 @@ def generate_static_plot(df, output_file, title, coverage_threshold=None, mappin
     scatter = ax.scatter(
         df['best_match_pct'],
         df['mean_coverage'],
-        c=df['scaffold_length'],
+        c=df[length_col],
         s=50,
         alpha=0.6,
         cmap='viridis',
@@ -828,7 +849,8 @@ def generate_static_plot(df, output_file, title, coverage_threshold=None, mappin
     
     # Add colorbar
     cbar = plt.colorbar(scatter, ax=ax)
-    cbar.set_label('Scaffold Length (bp)', rotation=270, labelpad=20)
+    label_text = 'Contig Length (bp)' if length_col == 'contig_length' else 'Scaffold Length (bp)'
+    cbar.set_label(label_text, rotation=270, labelpad=20)
     
     # Add threshold lines if specified
     if mapping_threshold is not None:
@@ -850,7 +872,8 @@ def generate_static_plot(df, output_file, title, coverage_threshold=None, mappin
         )
     
     # Labels and title
-    ax.set_xlabel('% of Scaffold Aligned to Best Chr-Scaffold', fontsize=12)
+    x_label_text = '% of Contig Aligned to Best Chr-Scaffold' if length_col == 'contig_length' else '% of Scaffold Aligned to Best Chr-Scaffold'
+    ax.set_xlabel(x_label_text, fontsize=12)
     ax.set_ylabel('Mean Long-Read Coverage (x)', fontsize=12)
     ax.set_title(title, fontsize=14, fontweight='bold')
     
@@ -882,8 +905,12 @@ def main():
     # Load data
     df = load_data(args.input)
     
-    # Validate required columns
-    required_cols = ['scaffold_name', 'scaffold_length', 'best_match_pct', 'mean_coverage']
+    # Validate required columns - support both contig and scaffold formats
+    if 'contig_name' in df.columns:
+        required_cols = ['contig_name', 'contig_length', 'best_match_pct', 'mean_coverage']
+    else:
+        required_cols = ['scaffold_name', 'scaffold_length', 'best_match_pct', 'mean_coverage']
+    
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         print(f"Error: Missing required columns: {missing_cols}", file=sys.stderr)
@@ -895,7 +922,9 @@ def main():
         alignment_file = args.alignments
     else:
         # Auto-detect: look for _alignments.json file next to the input
-        alignment_file = args.input.replace('_summary.csv', '_mapping_stats_alignments.json')
+        alignment_file = args.input.replace('_summary.csv', '_contig_mapping_stats_alignments.json')
+        if not os.path.exists(alignment_file):
+            alignment_file = args.input.replace('_summary.csv', '_mapping_stats_alignments.json')
         if not os.path.exists(alignment_file):
             alignment_file = args.input.replace('.csv', '_alignments.json')
     

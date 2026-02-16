@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Parse scaffold-to-scaffold mapping BAM file to calculate mapping statistics.
+Parse contig-to-scaffold mapping BAM file to calculate mapping statistics.
 
-This script analyzes how much each non-chromosome scaffold maps to each 
-chromosome-scale scaffold. It outputs a TSV file with mapping percentages
-for each scaffold to each chromosome.
+This script analyzes how much each non-chromosome contig maps to each 
+chromosome-scale scaffold. Contigs are segments of non-chromosome scaffolds
+that were split at N-gaps. The script outputs a TSV file with mapping 
+percentages for each contig to each chromosome, along with the parent scaffold
+information for each contig.
 """
 
 import argparse
@@ -17,17 +19,22 @@ import sys
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Parse scaffold mapping BAM to calculate mapping statistics"
+        description="Parse contig mapping BAM to calculate mapping statistics"
     )
     parser.add_argument(
         "--bam",
         required=True,
-        help="Input BAM file (non-chr scaffolds mapped to chr scaffolds)"
+        help="Input BAM file (non-chr contigs mapped to chr scaffolds)"
     )
     parser.add_argument(
         "--non_chr_fasta",
         required=True,
-        help="FASTA file containing non-chromosome scaffolds"
+        help="FASTA file containing non-chromosome contigs"
+    )
+    parser.add_argument(
+        "--contig_map",
+        required=True,
+        help="TSV file mapping contig names to parent scaffold names"
     )
     parser.add_argument(
         "--chr_list",
@@ -83,6 +90,28 @@ def get_chromosome_list(chr_list_file):
             if line:
                 chromosomes.append(line)
     return chromosomes
+
+
+def get_contig_to_scaffold_map(contig_map_file):
+    """
+    Read contig to scaffold mapping from TSV file.
+    
+    Args:
+        contig_map_file: Path to TSV file with contig to scaffold mapping
+        
+    Returns:
+        Dictionary mapping contig_name to parent_scaffold_name
+    """
+    contig_map = {}
+    with open(contig_map_file, 'r') as f:
+        header = f.readline()  # Skip header
+        for line in f:
+            parts = line.strip().split('\t')
+            if len(parts) >= 2:
+                contig_name = parts[0]
+                scaffold_name = parts[1]
+                contig_map[contig_name] = scaffold_name
+    return contig_map
 
 
 def calculate_mapping_stats(bam_file, scaffold_lengths, chromosomes, min_mapq):
@@ -195,7 +224,7 @@ def calculate_mapping_stats(bam_file, scaffold_lengths, chromosomes, min_mapq):
     return results, chromosomes, alignment_details
 
 
-def write_output(results, chromosomes, alignment_details, output_file):
+def write_output(results, chromosomes, alignment_details, output_file, contig_map):
     """
     Write results to TSV file and alignment details to JSON file.
     
@@ -204,6 +233,7 @@ def write_output(results, chromosomes, alignment_details, output_file):
         chromosomes: List of chromosome names
         alignment_details: Dictionary with alignment coordinates for dot plots
         output_file: Path to output TSV file
+        contig_map: Dictionary mapping contig name to parent scaffold name
     """
     if not results:
         print("Warning: No results to write", file=sys.stderr)
@@ -211,8 +241,9 @@ def write_output(results, chromosomes, alignment_details, output_file):
     
     # Define column order
     base_columns = [
-        'scaffold_name',
-        'scaffold_length',
+        'contig_name',
+        'parent_scaffold_name',
+        'contig_length',
         'total_aligned_bases',
         'percent_aligned',
         'best_match_chr',
@@ -233,8 +264,14 @@ def write_output(results, chromosomes, alignment_details, output_file):
         # Write header
         f.write('\t'.join(all_columns) + '\n')
         
-        # Write data
+        # Write data - add parent scaffold name from contig_map
         for result in results:
+            # Add parent scaffold name
+            contig_name = result.get('scaffold_name', '')
+            result['contig_name'] = contig_name
+            result['parent_scaffold_name'] = contig_map.get(contig_name, contig_name)
+            result['contig_length'] = result.get('scaffold_length', '')
+            
             values = [str(result.get(col, '')) for col in all_columns]
             f.write('\t'.join(values) + '\n')
     
@@ -259,9 +296,13 @@ def main():
     """Main function."""
     args = parse_arguments()
     
-    print(f"Reading scaffold lengths from {args.non_chr_fasta}...", file=sys.stderr)
+    print(f"Reading contig lengths from {args.non_chr_fasta}...", file=sys.stderr)
     scaffold_lengths = get_scaffold_lengths(args.non_chr_fasta)
-    print(f"  Found {len(scaffold_lengths)} non-chromosome scaffolds", file=sys.stderr)
+    print(f"  Found {len(scaffold_lengths)} non-chromosome contigs", file=sys.stderr)
+    
+    print(f"Reading contig to scaffold map from {args.contig_map}...", file=sys.stderr)
+    contig_map = get_contig_to_scaffold_map(args.contig_map)
+    print(f"  Mapped {len(contig_map)} contigs to parent scaffolds", file=sys.stderr)
     
     print(f"Reading chromosome list from {args.chr_list}...", file=sys.stderr)
     chromosomes = get_chromosome_list(args.chr_list)
@@ -274,10 +315,10 @@ def main():
         chromosomes,
         args.min_mapq
     )
-    print(f"  Processed {len(results)} scaffolds", file=sys.stderr)
+    print(f"  Processed {len(results)} contigs", file=sys.stderr)
     
     print(f"Writing output to {args.output}...", file=sys.stderr)
-    write_output(results, chromosomes, alignment_details, args.output)
+    write_output(results, chromosomes, alignment_details, args.output, contig_map)
     print("Done!", file=sys.stderr)
 
 
