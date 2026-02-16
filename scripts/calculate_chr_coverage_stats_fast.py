@@ -26,7 +26,7 @@ def parse_args():
     parser.add_argument(
         '--chr_list',
         required=True,
-        help='Comma-separated list of chromosomes to analyze'
+        help='File with list of chromosomes to analyze (one per line)'
     )
     parser.add_argument(
         '--output_json',
@@ -180,8 +180,16 @@ def main():
     """Main function."""
     args = parse_args()
     
-    # Parse chromosome list
-    chromosomes = [c.strip() for c in args.chr_list.split(',')]
+    # Parse chromosome list from file
+    print(f"Loading chromosome list from {args.chr_list}...", file=sys.stderr)
+    chromosomes = []
+    with open(args.chr_list, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                chromosomes.append(line)
+    
+    print(f"  Found {len(chromosomes)} chromosomes to process", file=sys.stderr)
     
     # Get chromosome lengths
     print("Reading BAM header to get chromosome lengths...", file=sys.stderr)
@@ -204,7 +212,7 @@ def main():
     
     for chr_name in chromosomes:
         chr_length = chr_lengths[chr_name]
-        print(f"Processing {chr_name} (length: {chr_length:,})...", file=sys.stderr)
+        print(f"\nProcessing {chr_name} ({chr_length:,} bp)...", file=sys.stderr)
         
         # Get sampled coverage
         coverage_values = get_sampled_coverage(
@@ -212,10 +220,10 @@ def main():
         )
         
         if not coverage_values:
-            print(f"Warning: No coverage data for {chr_name}", file=sys.stderr)
+            print(f"  Warning: No coverage data for {chr_name}", file=sys.stderr)
             continue
         
-        print(f"  Sampled {len(coverage_values):,} positions", file=sys.stderr)
+        print(f"  Sampled {len(coverage_values):,} positions (every {args.sample_interval:,} bp)", file=sys.stderr)
         
         # Calculate statistics
         stats = calculate_stats(coverage_values)
@@ -223,19 +231,31 @@ def main():
         
         results['chromosomes'][chr_name] = stats
         all_coverage_values.extend(coverage_values)
+        
+        # Print stats
+        print(f"  Mean coverage: {stats['mean']:.1f}x", file=sys.stderr)
+        print(f"  Median coverage: {stats['median']:.1f}x", file=sys.stderr)
+        print(f"  IQR (25-75th): {stats['p25']:.1f}x - {stats['p75']:.1f}x", file=sys.stderr)
     
     # Calculate genome-wide statistics
-    print("Calculating genome-wide statistics...", file=sys.stderr)
+    print(f"\nCalculating genome-wide statistics from {len(all_coverage_values):,} sampled positions...", file=sys.stderr)
     genome_stats = calculate_stats(all_coverage_values)
     results['genome'] = genome_stats
     
+    print(f"\nGenome-wide coverage:", file=sys.stderr)
+    print(f"  Mean: {genome_stats['mean']:.1f}x", file=sys.stderr)
+    print(f"  Median: {genome_stats['median']:.1f}x", file=sys.stderr)
+    print(f"  IQR (25-75th): {genome_stats['p25']:.1f}x - {genome_stats['p75']:.1f}x", file=sys.stderr)
+    print(f"  10-90th: {genome_stats['p10']:.1f}x - {genome_stats['p90']:.1f}x", file=sys.stderr)
+    
     # Write JSON output
-    print(f"Writing JSON output to {args.output_json}...", file=sys.stderr)
+    print(f"\nWriting outputs...", file=sys.stderr)
+    print(f"  JSON: {args.output_json}", file=sys.stderr)
     with open(args.output_json, 'w') as f:
         json.dump(results, f, indent=2)
     
     # Write TSV output
-    print(f"Writing TSV output to {args.output_tsv}...", file=sys.stderr)
+    print(f"  TSV: {args.output_tsv}", file=sys.stderr)
     with open(args.output_tsv, 'w') as f:
         # Write header
         f.write("chromosome\tlength\tmean_coverage\tmedian_coverage\tp25\tp75\tp10\tp90\n")
@@ -256,7 +276,7 @@ def main():
                f"{genome_stats['p25']}\t{genome_stats['p75']}\t"
                f"{genome_stats['p10']}\t{genome_stats['p90']}\n")
     
-    print("Done!", file=sys.stderr)
+    print(f"\n✓ Done! Processed {len(results['chromosomes'])} chromosomes", file=sys.stderr)
 
 
 if __name__ == '__main__':
