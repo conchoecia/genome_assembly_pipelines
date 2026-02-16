@@ -130,6 +130,10 @@ rule all:
         expand(config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.bg",
                telo = flatten(config["telomere_strands"].values()),
                nom = config["assemblies"]),
+        # Telomere WIG files for interactive Juicebox Assembly Tools (more reliable)
+        expand(config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.wig",
+               telo = flatten(config["telomere_strands"].values()),
+               nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/plots/{nom}_allData_linear_track.pdf",
             nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/plots/{nom}_stacked_per_scaffold.pdf",
@@ -283,6 +287,32 @@ rule telomere_kmer_positions_bigwig:
         {input.bedsort} {output.bg} {output.depth}
         {input.bed2bw} {output.depth} {input.cs} {output.bw}
         """
+
+rule bedgraph_to_wig:
+    """
+    Convert bedGraph to WIG format for better compatibility with JBAT 1D annotations
+    """
+    input:
+        bg = config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.bg"
+    output:
+        wig = config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.wig"
+    threads: 1
+    run:
+        with open(input.bg) as infile, open(output.wig, 'w') as outfile:
+            current_chrom = None
+            for line in infile:
+                parts = line.strip().split('\t')
+                if len(parts) < 4:
+                    continue
+                chrom, start, end, value = parts[0], parts[1], parts[2], parts[3]
+                
+                # Write chromosome header when we encounter a new chromosome
+                if chrom != current_chrom:
+                    outfile.write(f"variableStep chrom={chrom}\n")
+                    current_chrom = chrom
+                
+                # Write position and value (use start position)
+                outfile.write(f"{start}\t{value}\n")
 
 #rule telomere_kmer_bigwig_to_multivec:
 #    """
