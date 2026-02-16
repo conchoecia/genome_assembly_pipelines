@@ -418,15 +418,27 @@ rule plot_bigwig_track:
         if len(all_tracks) == 1:
             axes = [axes]  # Ensure iterable even if one track
 
+        # Use binned statistics to avoid loading billions of values into memory
+        # Aim for ~10k bins max per chromosome for visual clarity and memory efficiency
+        max_bins_per_chrom = 10000
+        
         for ax, track_path, label in zip(axes, all_tracks, track_labels):
             bw = pyBigWig.open(track_path)
             x = []
             y = []
             for chrom in chrom_order:
-                vals = bw.values(chrom, 0, chrom_lengths[chrom_order.index(chrom)])
+                chrom_len = chrom_lengths[chrom_order.index(chrom)]
+                # Calculate bins: use smaller of max_bins or 1 bin per 1kb
+                n_bins = min(max_bins_per_chrom, max(1, chrom_len // 1000))
+                
+                # Use stats() with mean to get binned values - vastly more memory efficient
+                vals = bw.stats(chrom, 0, chrom_len, type="mean", nBins=n_bins)
                 vals = np.nan_to_num(vals, nan=0.0)
+                
                 offset = chrom_offsets[chrom]
-                x.extend(range(offset, offset + len(vals)))
+                # Create x positions at bin centers
+                bin_width = chrom_len / n_bins
+                x.extend([offset + (i + 0.5) * bin_width for i in range(len(vals))])
                 y.extend(vals)
             bw.close()
             ax.plot(x, y, lw=0.5)
@@ -513,8 +525,16 @@ rule plot_bigwig_track_per_scaffold:
                     continue
 
                 chrom_len = min(chrom_len, bw.chroms()[chrom])
-                vals = np.array(bw.values(chrom, 0, chrom_len))  # keep NaNs!
-                x = np.arange(chrom_len)
+                
+                # Use binned statistics to avoid loading millions of values per scaffold
+                # Aim for ~5000 bins max per scaffold for memory efficiency
+                n_bins = min(5000, max(1, chrom_len // 1000))
+                vals = bw.stats(chrom, 0, chrom_len, type="mean", nBins=n_bins)
+                vals = np.array(vals) if vals else np.array([])
+                
+                # Create x positions at bin centers
+                bin_width = chrom_len / n_bins if n_bins > 0 else 1
+                x = np.array([(i + 0.5) * bin_width for i in range(len(vals))])
                 valid = ~np.isnan(vals)
                 bw.close()
 
@@ -523,7 +543,7 @@ rule plot_bigwig_track_per_scaffold:
 
                 # Clean up axes
                 ax.set_xlim(0, chrom_len)
-                ymax = max(10, max(vals) * 1.1 if np.any(vals) else 1)
+                ymax = max(10, np.nanmax(vals) * 1.1 if len(vals) > 0 and np.any(valid) else 1)
                 ax.set_ylim(0, ymax)
                 ax.set_yticks([ymax/2, ymax])
                 ax.set_yticklabels([label, round(ymax)], fontsize=5)
