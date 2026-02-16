@@ -1505,15 +1505,10 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                         d3.selectAll(".tooltip").remove();
                     }})
                     .on("click", function(event, d) {{
-                        // Scroll to the contig's alignments section
-                        const contigSection = document.getElementById(`contig-${{d.name}}`);
-                        if (contigSection) {{
-                            contigSection.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
-                            // Highlight briefly
-                            contigSection.style.backgroundColor = '#ffffcc';
-                            setTimeout(() => {{
-                                contigSection.style.backgroundColor = '';
-                            }}, 2000);
+                        // Find the full scaffold data for this contig
+                        const fullData = scaffoldData.find(s => s.name === d.name);
+                        if (fullData && fullData.alignments && Object.keys(fullData.alignments).length > 0) {{
+                            showDetailModal(fullData);
                         }}
                     }});
             }});
