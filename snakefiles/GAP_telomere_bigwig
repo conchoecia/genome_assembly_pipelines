@@ -126,6 +126,10 @@ rule all:
         expand(config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.bw",
                telo = flatten(config["telomere_strands"].values()),
                nom = config["assemblies"]),
+        # Telomere bedGraph files for interactive Juicebox Assembly Tools
+        expand(config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.bg",
+               telo = flatten(config["telomere_strands"].values()),
+               nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/plots/{nom}_allData_linear_track.pdf",
             nom = config["assemblies"]),
         expand(config["tool"] + "/output/{nom}/plots/{nom}_stacked_per_scaffold.pdf",
@@ -250,7 +254,7 @@ rule telomere_kmer_positions_bigwig:
     output:
         temppos   = temp(config["tool"] + "/output/{nom}/TEMP_{nom}_teloKmer_{telo}.nozero.bg"),
         tempzeros = temp(config["tool"] + "/output/{nom}/TEMP_{nom}_teloKmer_{telo}.zero.bg"),
-        bg    =     temp(config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.bg"),
+        bg    =          config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.bg",
         depth =     temp(config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.s.bg"),
         bw    =          config["tool"] + "/output/{nom}/{nom}_teloKmer_{telo}.bw"
     params:
