@@ -988,12 +988,19 @@ def main():
         
         # Construct alignment file path
         alignment_file = os.path.join(dir_name, f'{assembly_name}_contig_mapping_stats_alignments.json')
+        print(f"  Looking for alignment file: {alignment_file}", file=sys.stderr)
         
         # Fallback patterns if not found
         if not os.path.exists(alignment_file):
+            # Try old scaffold naming for backwards compatibility
+            alignment_file = os.path.join(dir_name, f'{assembly_name}_scaffold_mapping_stats_alignments.json')
+            print(f"  Trying fallback: {alignment_file}", file=sys.stderr)
+        if not os.path.exists(alignment_file):
             alignment_file = os.path.join(dir_name, f'{assembly_name}_mapping_stats_alignments.json')
+            print(f"  Trying fallback: {alignment_file}", file=sys.stderr)
         if not os.path.exists(alignment_file):
             alignment_file = os.path.join(dir_name, f'{assembly_name}_alignments.json')
+            print(f"  Trying fallback: {alignment_file}", file=sys.stderr)
     
     if os.path.exists(alignment_file):
         print(f"Loading alignment details from {alignment_file}...", file=sys.stderr)
