@@ -922,7 +922,13 @@ def main():
         alignment_file = args.alignments
     else:
         # Auto-detect: look for _alignments.json file next to the input
-        alignment_file = args.input.replace('_summary.csv', '_contig_mapping_stats_alignments.json')
+        # Input is like: path/h12v7_contig_classification_summary.csv
+        # Look for: path/h12v7_contig_mapping_stats_alignments.json
+        alignment_file = args.input.replace('_contig_classification_summary.csv', '_contig_mapping_stats_alignments.json')
+        if not os.path.exists(alignment_file):
+            alignment_file = args.input.replace('_scaffold_classification_summary.csv', '_contig_mapping_stats_alignments.json')
+        if not os.path.exists(alignment_file):
+            alignment_file = args.input.replace('_summary.csv', '_contig_mapping_stats_alignments.json')
         if not os.path.exists(alignment_file):
             alignment_file = args.input.replace('_summary.csv', '_mapping_stats_alignments.json')
         if not os.path.exists(alignment_file):
