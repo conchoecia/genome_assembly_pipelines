@@ -466,20 +466,21 @@ rule calculate_chr_coverage_stats:
             working_bam={input.bams}
             cleanup_bam=""
         else
-            # Multiple BAMs - merge
-            working_bam=$(mktemp).bam
+            # Multiple BAMs - merge (use work dir to avoid filling /tmp)
+            working_bam=$(mktemp -p {resources.tmpdir} --suffix=.bam)
             cleanup_bam=$working_bam
             echo "Merging $bam_count BAM files..."
             samtools merge -@ {threads} $working_bam {input.bams}
             samtools index -@ {threads} $working_bam
         fi
         
-        # Calculate chromosome coverage statistics
+        # Calculate chromosome coverage statistics (sample every 50kb for speed)
         python {chr_coverage_script} \
             --bam $working_bam \
             --chr_list {input.chr_list} \
             --output_json {output.json} \
-            --output_tsv {output.tsv}
+            --output_tsv {output.tsv} \
+            --sample_interval 50000
         
         # Clean up merged BAM if created
         if [ -n "$cleanup_bam" ]; then
@@ -516,8 +517,8 @@ rule calculate_binned_contig_coverage:
             working_bam={input.bams}
             cleanup_bam=""
         else
-            # Multiple BAMs - merge
-            working_bam=$(mktemp).bam
+            # Multiple BAMs - merge (use work dir to avoid filling /tmp)
+            working_bam=$(mktemp -p {resources.tmpdir} --suffix=.bam)
             cleanup_bam=$working_bam
             echo "Merging $bam_count BAM files..."
             samtools merge -@ {threads} $working_bam {input.bams}
