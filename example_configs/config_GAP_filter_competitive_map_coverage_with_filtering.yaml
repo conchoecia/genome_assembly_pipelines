@@ -47,39 +47,48 @@ min_mapq: 0
 generate_html: True
 generate_static: False
 
-# Optional: Filter redundant contigs (default: False)
-# Set to True to enable filtering
-filter_redundant: True
+# ============================================================
+# Filtering and Trimming Configuration
+# ============================================================
 
-# Optional: Filtering thresholds
-# Conservative: 95% coverage, MAPQ >= 30 (removes ~280/448 contigs in test case)
-filter_min_coverage: 95.0
-filter_min_mapq: 30
+# Optional: Full-contig filtering (runs first, removes complete redundant contigs)
+filter_redundant: True           # Remove contigs that are completely redundant
+filter_min_coverage: 95.0        # Remove if ≥95% of contig aligned
+filter_min_mapq: 30              # And best match MAPQ ≥30
 
-# Moderate filtering (removes more contigs):
+# Enable regional trimming (runs second, breaks contigs and keeps non-redundant pieces)
+trim_redundant_regions: True
+
+# Standard trimming threshold (catches most redundant regions)
+trim_min_block_size: 10000       # 10kb blocks
+trim_min_mapq: 20                # Good quality alignments
+
+# Aggressive threshold (catches large regions with ambiguous mapping)
+trim_aggressive_min_block_size: 50000   # 50kb blocks
+trim_aggressive_min_mapq: 8              # Lower MAPQ threshold
+
+# Other trimming parameters
+trim_min_keep_piece: 5000        # Keep pieces ≥5kb after trimming
+trim_max_redundant_pct: 100.0    # Effectively disabled - keep all pieces ≥ min_keep_piece
+                                 # (Lower to 80.0 if you want to remove "swiss cheese" contigs)
+
+# Alternative filtering thresholds (commented out):
+# Moderate filtering:
 # filter_min_coverage: 80.0
 # filter_min_mapq: 20
 
-# Aggressive filtering (removes even more):
+# Aggressive filtering:
 # filter_min_coverage: 50.0
 # filter_min_mapq: 10
-
-# Optional: Trim redundant regions from contigs (default: False)
-# This breaks contigs at redundant regions and keeps non-redundant pieces
-# More granular than full contig filtering - removes redundant sections while keeping unique sequence
-trim_redundant_regions: True
-
-# Optional: Trimming thresholds
-# Trim blocks >= 10 kbp with MAPQ >= 20 (recommended)
-trim_min_block_size: 10000      # Minimum block size to consider redundant (bp)
-trim_min_mapq: 20                # Minimum MAPQ for redundant blocks
-trim_min_keep_piece: 5000        # Minimum size of non-redundant pieces to keep (bp)
-trim_max_redundant_pct: 80.0     # Remove entire contig if >this % is redundant
 
 # More aggressive trimming:
 # trim_min_block_size: 5000
 # trim_min_mapq: 15
+# trim_aggressive_min_block_size: 30000
+# trim_aggressive_min_mapq: 5
 
 # More conservative trimming:
 # trim_min_block_size: 20000
 # trim_min_mapq: 30
+# trim_aggressive_min_block_size: 100000
+# trim_aggressive_min_mapq: 10
