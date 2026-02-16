@@ -174,7 +174,7 @@ rule generate_jbat_assembly:
         script = assembly_from_fasta_path
     output:
         assembly = config["tool"] + "/output/{nom}/{nom}.assembly",
-        fasta = config["tool"] + "/output/{nom}/{nom}_jbat.fasta"
+        fasta = config["tool"] + "/output/{nom}/{nom}.fasta"
     params:
         outprefix = lambda wildcards: config["tool"] + "/output/{nom}/{nom}".format(nom=wildcards.nom)
     threads: 1
@@ -188,7 +188,7 @@ rule jbat_chrom_size:
     Make chromosome sizes file for JBAT fragmented assembly
     """
     input:
-        assem = config["tool"] + "/output/{nom}/{nom}_jbat.fasta"
+        assem = config["tool"] + "/output/{nom}/{nom}.fasta"
     output:
         cs = config["tool"] + "/output/{nom}/jbat/{nom}_jbat_chromsize.txt"
     threads: 1
@@ -202,7 +202,7 @@ rule jbat_genome_bed:
     BED file of the JBAT fragmented genome assembly
     """
     input:
-        assem = config["tool"] + "/output/{nom}/{nom}_jbat.fasta"
+        assem = config["tool"] + "/output/{nom}/{nom}.fasta"
     output:
         bed = config["tool"] + "/output/{nom}/jbat/{nom}_jbat.bed"
     threads: 1
@@ -217,7 +217,7 @@ rule jbat_telomere_kmer_positions_bigwig:
     Generate telomere kmer tracks for JBAT fragmented assembly
     """
     input:
-        assem = config["tool"] + "/output/{nom}/{nom}_jbat.fasta",
+        assem = config["tool"] + "/output/{nom}/{nom}.fasta",
         kmer_counter = kmer_position_path,
         bed = config["tool"] + "/output/{nom}/jbat/{nom}_jbat.bed",
         bedsort = bedsort_path,
