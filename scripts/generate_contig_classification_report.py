@@ -836,7 +836,7 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
             const hasCoverageData = binnedCoverageData && binnedCoverageData[scaffoldName];
             const coverageTrackHeight = hasCoverageData ? 60 : 0;  // Height for coverage track
             
-            const margin = {{top: 20 + coverageTrackHeight, right: 20, bottom: 90, left: 70}};  // Increased margins
+            const margin = {{top: 20 + coverageTrackHeight, right: 40, bottom: 90, left: 70}};  // Extra right margin for labels
             const width = 800 - margin.left - margin.right;
             const height = 300 - margin.top - margin.bottom;
             
@@ -897,13 +897,14 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                     .style("font-size", "10px")
                     .text("Coverage");
                 
-                // Coverage value label
+                // Coverage value label (inside plot to avoid clipping)
                 svg.append("text")
-                    .attr("x", width + 5)
+                    .attr("x", width - 5)
                     .attr("y", covTrackY + covScale(meanCov) + 3)
-                    .attr("text-anchor", "start")
+                    .attr("text-anchor", "end")
                     .style("font-size", "9px")
                     .style("fill", "#d62728")
+                    .style("font-weight", "bold")
                     .text(`${{meanCov.toFixed(1)}}x`);
                 
                 // Y-axis for coverage
@@ -915,6 +916,49 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                     .attr("transform", `translate(0,${{covTrackY}})`)
                     .call(covAxis)
                     .style("font-size", "9px");
+                    
+                // Add chromosome coverage reference bands if available
+                if (chrCoverageData && chrCoverageData.genome) {{
+                    const genomeCov = chrCoverageData.genome;
+                    
+                    // Draw 10-90th percentile band (light)
+                    if (genomeCov.p10 !== undefined && genomeCov.p90 !== undefined) {{
+                        svg.append("rect")
+                            .attr("x", 0)
+                            .attr("y", covTrackY + covScale(genomeCov.p90))
+                            .attr("width", width)
+                            .attr("height", Math.max(0, covScale(genomeCov.p10) - covScale(genomeCov.p90)))
+                            .attr("fill", "#e8f4f8")
+                            .attr("opacity", 0.3)
+                            .attr("pointer-events", "none");
+                    }}
+                    
+                    // Draw 25-75th percentile band (darker)
+                    if (genomeCov.p25 !== undefined && genomeCov.p75 !== undefined) {{
+                        svg.append("rect")
+                            .attr("x", 0)
+                            .attr("y", covTrackY + covScale(genomeCov.p75))
+                            .attr("width", width)
+                            .attr("height", Math.max(0, covScale(genomeCov.p25) - covScale(genomeCov.p75)))
+                            .attr("fill", "#b3d9e6")
+                            .attr("opacity", 0.3)
+                            .attr("pointer-events", "none");
+                    }}
+                    
+                    // Draw median line
+                    if (genomeCov.median !== undefined) {{
+                        svg.append("line")
+                            .attr("x1", 0)
+                            .attr("x2", width)
+                            .attr("y1", covTrackY + covScale(genomeCov.median))
+                            .attr("y2", covTrackY + covScale(genomeCov.median))
+                            .attr("stroke", "#2c7bb6")
+                            .attr("stroke-width", 1)
+                            .attr("stroke-dasharray", "3,3")
+                            .attr("opacity", 0.5)
+                            .attr("pointer-events", "none");
+                    }}
+                }}
             }}
             
             // Find min/max reference positions (zoom to aligned region)
@@ -1417,7 +1461,7 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                     .style("fill", "#666")
                     .text(`n = ${{plotInfo.data.length}}`);
                 
-                // Points
+                // Points - make interactive
                 svg.selectAll("circle")
                     .data(plotInfo.data)
                     .enter()
@@ -1428,7 +1472,50 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                     .attr("fill", d => plotInfo.colorFn(d))
                     .attr("opacity", 0.6)
                     .attr("stroke", "#fff")
-                    .attr("stroke-width", 0.5);
+                    .attr("stroke-width", 0.5)
+                    .style("cursor", "pointer")
+                    .on("mouseover", function(event, d) {{
+                        d3.select(this)
+                            .attr("r", 4)
+                            .attr("opacity", 1);
+                        
+                        // Show tooltip
+                        const tooltip = d3.select("body").append("div")
+                            .attr("class", "tooltip")
+                            .style("position", "absolute")
+                            .style("background", "white")
+                            .style("border", "1px solid #ddd")
+                            .style("padding", "8px")
+                            .style("border-radius", "4px")
+                            .style("pointer-events", "none")
+                            .style("font-size", "11px")
+                            .style("z-index", "1000")
+                            .html(`<strong>${{d.name}}</strong><br/>
+                                   Length: ${{d.length.toLocaleString()}} bp<br/>
+                                   Mapped: ${{d.mapping_pct.toFixed(1)}}%<br/>
+                                   Coverage: ${{d.coverage.toFixed(1)}}x<br/>
+                                   <em>Click to view alignments</em>`)
+                            .style("left", (event.pageX + 10) + "px")
+                            .style("top", (event.pageY - 10) + "px");
+                    }})
+                    .on("mouseout", function() {{
+                        d3.select(this)
+                            .attr("r", 2.5)
+                            .attr("opacity", 0.6);
+                        d3.selectAll(".tooltip").remove();
+                    }})
+                    .on("click", function(event, d) {{
+                        // Scroll to the contig's alignments section
+                        const contigSection = document.getElementById(`contig-${{d.name}}`);
+                        if (contigSection) {{
+                            contigSection.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                            // Highlight briefly
+                            contigSection.style.backgroundColor = '#ffffcc';
+                            setTimeout(() => {{
+                                contigSection.style.backgroundColor = '';
+                            }}, 2000);
+                        }}
+                    }});
             }});
         }}
         
