@@ -27,6 +27,14 @@ def parse_arguments():
         help="Optional JSON file with alignment details for dot plots (auto-detected if not provided)"
     )
     parser.add_argument(
+        "--removed_contigs",
+        help="Optional TSV file with list of removed contigs (for filtering visualization)"
+    )
+    parser.add_argument(
+        "--trimming_details",
+        help="Optional JSON file with per-contig trimming details (for trimming visualization)"
+    )
+    parser.add_argument(
         "--output_html",
         help="Output HTML file for interactive report"
     )
@@ -72,7 +80,44 @@ def load_data(input_file):
         sys.exit(1)
 
 
-def generate_html_report(df, output_file, title, coverage_threshold=None, mapping_threshold=None, alignment_data=None):
+def load_filtering_data(removed_contigs_file):
+    """Load filtering data (removed contigs)."""
+    if not removed_contigs_file or not os.path.exists(removed_contigs_file):
+        return None
+    
+    try:
+        import pandas as pd
+        # Skip comment lines starting with #
+        with open(removed_contigs_file) as f:
+            lines = [line for line in f if not line.startswith('#')]
+        
+        from io import StringIO
+        df = pd.read_csv(StringIO(''.join(lines)), sep='\t')
+        print(f"Loaded filtering data for {len(df)} removed contigs", file=sys.stderr)
+        return df
+    except Exception as e:
+        print(f"Warning: Could not load filtering data: {e}", file=sys.stderr)
+        return None
+
+
+def load_trimming_data(trimming_details_file):
+    """Load trimming data (per-contig details)."""
+    if not trimming_details_file or not os.path.exists(trimming_details_file):
+        return None
+    
+    try:
+        import json
+        with open(trimming_details_file) as f:
+            data = json.load(f)
+        print(f"Loaded trimming details for {len(data)} contigs", file=sys.stderr)
+        return data
+    except Exception as e:
+        print(f"Warning: Could not load trimming data: {e}", file=sys.stderr)
+        return None
+
+
+def generate_html_report(df, output_file, title, coverage_threshold=None, mapping_threshold=None, 
+                        alignment_data=None, filtering_data=None, trimming_data=None):
     """
     Generate interactive HTML report using D3.js.
     
@@ -350,6 +395,11 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
             <h2>Detailed Chromosome Mapping Heatmap</h2>
             <div id="heatmap"></div>
         </div>
+        
+        <div class="plot-container" id="filteringSummaryContainer" style="display:none;">
+            <h2>Filtering and Trimming Summary</h2>
+            <div id="filteringSummary"></div>
+        </div>
     </div>
     
     <div class="tooltip" id="tooltip"></div>
@@ -370,6 +420,8 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
         const chromosomes = {json.dumps(chr_names)};
         const coverageThreshold = {json.dumps(coverage_threshold)};
         const mappingThreshold = {json.dumps(mapping_threshold)};
+        const trimmingData = {json.dumps(trimming_data) if trimming_data else 'null'};
+        const filteringData = {json.dumps(filtering_data.to_dict('records') if filtering_data is not None else None)};
         
         // Scatter plot
         function createScatterPlot() {{
@@ -679,7 +731,7 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
         }}
         
         function createDotPlot(divId, scaffoldName, chrName, alignments, scaffoldLength) {{
-            const margin = {{top: 20, right: 20, bottom: 50, left: 70}};
+            const margin = {{top: 20, right: 20, bottom: 90, left: 70}};  // Increased bottom margin for rugplots
             const width = 800 - margin.left - margin.right;
             const height = 300 - margin.top - margin.bottom;
             
@@ -825,6 +877,84 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                 }}
             }});
             
+            // Add rugplots if trimming data is available
+            if (trimmingData && trimmingData[scaffoldName]) {{
+                const trimInfo = trimmingData[scaffoldName];
+                const rugY = height + 10;  // Position below X-axis
+                const rugHeight = 12;
+                
+                // Draw redundant regions (in red)
+                if (trimInfo.redundant_regions && trimInfo.redundant_regions.length > 0) {{
+                    trimInfo.redundant_regions.forEach(region => {{
+                        svg.append("rect")
+                            .attr("x", xScale(region[0]))
+                            .attr("width", Math.max(1, xScale(region[1]) - xScale(region[0])))
+                            .attr("y", rugY)
+                            .attr("height", rugHeight)
+                            .attr("fill", "#e74c3c")
+                            .attr("opacity", 0.7)
+                            .on("mouseover", function(event) {{
+                                d3.select(this).attr("opacity", 1);
+                                tooltip.style("display", "block")
+                                    .html(`Redundant region<br/>${{region[0].toLocaleString()}}-${{region[1].toLocaleString()}}`);
+                            }})
+                            .on("mousemove", function(event) {{
+                                tooltip
+                                    .style("left", (event.pageX + 15) + "px")
+                                    .style("top", (event.pageY - 10) + "px");
+                            }})
+                            .on("mouseout", function() {{
+                                d3.select(this).attr("opacity", 0.7);
+                                tooltip.style("display", "none");
+                            }});
+                    }});
+                }}
+                
+                // Draw kept pieces (in green)
+                if (trimInfo.kept_pieces && trimInfo.kept_pieces.length > 0) {{
+                    trimInfo.kept_pieces.forEach(piece => {{
+                        svg.append("rect")
+                            .attr("x", xScale(piece[0]))
+                            .attr("width", Math.max(1, xScale(piece[1]) - xScale(piece[0])))
+                            .attr("y", rugY + rugHeight + 2)
+                            .attr("height", rugHeight)
+                            .attr("fill", "#27ae60")
+                            .attr("opacity", 0.7)
+                            .on("mouseover", function(event) {{
+                                d3.select(this).attr("opacity", 1);
+                                tooltip.style("display", "block")
+                                    .html(`Kept region<br/>${{piece[0].toLocaleString()}}-${{piece[1].toLocaleString()}}`);
+                            }})
+                            .on("mousemove", function(event) {{
+                                tooltip
+                                    .style("left", (event.pageX + 15) + "px")
+                                    .style("top", (event.pageY - 10) + "px");
+                            }})
+                            .on("mouseout", function() {{
+                                d3.select(this).attr("opacity", 0.7);
+                                tooltip.style("display", "none");
+                            }});
+                    }});
+                }}
+                
+                // Add rugplot labels
+                svg.append("text")
+                    .attr("x", -5)
+                    .attr("y", rugY + rugHeight/2 + 4)
+                    .attr("text-anchor", "end")
+                    .style("font-size", "10px")
+                    .style("fill", "#666")
+                    .text("Redundant");
+                
+                svg.append("text")
+                    .attr("x", -5)
+                    .attr("y", rugY + rugHeight + 2 + rugHeight/2 + 4)
+                    .attr("text-anchor", "end")
+                    .style("font-size", "10px")
+                    .style("fill", "#666")
+                    .text("Kept");
+            }}
+            
             // Legend
             const legend = svg.append("g")
                 .attr("transform", `translate(${{width - 100}}, 10)`);
@@ -850,9 +980,146 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                 .style("font-size", "11px");
         }}
         
+        // Create filtering/trimming summary
+        function createFilteringSummary() {{
+            if (!trimmingData && !filteringData) {{
+                return;  // No filtering data available
+            }}
+            
+            // Show the container
+            document.getElementById('filteringSummaryContainer').style.display = 'block';
+            
+            const container = d3.select("#filteringSummary");
+            container.selectAll("*").remove();
+            
+            // Calculate statistics
+            let stats = {{
+                kept_intact: 0,
+                trimmed: 0,
+                removed_swiss_cheese: 0,
+                removed_no_pieces: 0,
+                removed_filter: 0
+            }};
+            
+            // Count from trimming data
+            if (trimmingData) {{
+                Object.values(trimmingData).forEach(info => {{
+                    if (info.status in stats) {{
+                        stats[info.status]++;
+                    }}
+                }});
+            }}
+            
+            // Count from filtering data (removed contigs)
+            if (filteringData) {{
+                stats.removed_filter = filteringData.length;
+            }}
+            
+            // Create bar chart
+            const margin = {{top: 20, right: 20, bottom: 100, left: 70}};
+            const width = 600 - margin.left - margin.right;
+            const height = 300 - margin.top - margin.bottom;
+            
+            const svg = container.append("svg")
+                .attr("width", width + margin.left + margin.right)
+                .attr("height", height + margin.top + margin.bottom)
+                .append("g")
+                .attr("transform", `translate(${{margin.left}},${{margin.top}})`);
+            
+            // Prepare data for chart
+            const categories = [
+                {{name: 'Kept Intact', value: stats.kept_intact, color: '#27ae60'}},
+                {{name: 'Trimmed', value: stats.trimmed, color: '#f39c12'}},
+                {{name: 'Removed (filter)', value: stats.removed_filter, color: '#c0392b'}},
+                {{name: 'Removed (swiss cheese)', value: stats.removed_swiss_cheese, color: '#e74c3c'}},
+                {{name: 'Removed (no pieces)', value: stats.removed_no_pieces, color: '#95a5a6'}}
+            ]}.filter(d => d.value > 0);  // Only show categories with data
+            
+            // Scales
+            const x = d3.scaleBand()
+                .domain(categories.map(d => d.name))
+                .range([0, width])
+                .padding(0.2);
+            
+            const y = d3.scaleLinear()
+                .domain([0, d3.max(categories, d => d.value)])
+                .range([height, 0]);
+            
+            // Bars
+            svg.selectAll(".bar")
+                .data(categories)
+                .enter()
+                .append("rect")
+                .attr("class", "bar")
+                .attr("x", d => x(d.name))
+                .attr("width", x.bandwidth())
+                .attr("y", d => y(d.value))
+                .attr("height", d => height - y(d.value))
+                .attr("fill", d => d.color)
+                .attr("opacity", 0.8)
+                .on("mouseover", function(event, d) {{
+                    d3.select(this).attr("opacity", 1);
+                }})
+                .on("mouseout", function() {{
+                    d3.select(this).attr("opacity", 0.8);
+                }});
+            
+            // Value labels on bars
+            svg.selectAll(".label")
+                .data(categories)
+                .enter()
+                .append("text")
+                .attr("x", d => x(d.name) + x.bandwidth() / 2)
+                .attr("y", d => y(d.value) - 5)
+                .attr("text-anchor", "middle")
+                .style("font-size", "12px")
+                .style("font-weight", "bold")
+                .text(d => d.value);
+            
+            // Axes
+            svg.append("g")
+                .attr("transform", `translate(0,${{height}})`)
+                .call(d3.axisBottom(x))
+                .selectAll("text")
+                .attr("transform", "rotate(-45)")
+                .style("text-anchor", "end")
+                .attr("dx", "-.8em")
+                .attr("dy", ".15em");
+            
+            svg.append("g")
+                .call(d3.axisLeft(y));
+            
+            // Y-axis label
+            svg.append("text")
+                .attr("transform", "rotate(-90)")
+                .attr("x", -height / 2)
+                .attr("y", -50)
+                .attr("text-anchor", "middle")
+                .style("font-size", "12px")
+                .text("Number of Contigs");
+            
+            // Summary stats below chart
+            const totalInput = Object.values(stats).reduce((a, b) => a + b, 0);
+            const totalRetained = stats.kept_intact + stats.trimmed;
+            const totalRemoved = totalInput - totalRetained;
+            
+            container.append("div")
+                .style("margin-top", "20px")
+                .style("padding", "15px")
+                .style("background-color", "#f8f9fa")
+                .style("border-radius", "4px")
+                .html(`
+                    <strong>Summary:</strong><br/>
+                    Total contigs: ${{totalInput}}<br/>
+                    Retained (intact or trimmed): ${{totalRetained}} (${{(totalRetained/totalInput*100).toFixed(1)}}%)<br/>
+                    Removed: ${{totalRemoved}} (${{(totalRemoved/totalInput*100).toFixed(1)}}%)
+                `);
+        }}
+        
         // Create visualizations
         createScatterPlot();
         createHeatmap();
+        createFilteringSummary();
     </script>
 </body>
 </html>"""
@@ -1020,6 +1287,10 @@ def main():
         print(f"  No alignment details found (looked for {alignment_file})", file=sys.stderr)
         print("  Dot plots will not be available in the report", file=sys.stderr)
     
+    # Load filtering and trimming data if provided
+    filtering_data = load_filtering_data(args.removed_contigs)
+    trimming_data = load_trimming_data(args.trimming_details)
+    
     # Generate HTML report if requested
     if args.output_html:
         generate_html_report(
@@ -1028,7 +1299,9 @@ def main():
             args.title,
             args.coverage_threshold,
             args.mapping_threshold,
-            alignment_data
+            alignment_data,
+            filtering_data,
+            trimming_data
         )
     
     # Generate static plot if requested

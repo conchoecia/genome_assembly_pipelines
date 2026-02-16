@@ -46,6 +46,11 @@ def parse_arguments():
         help="Output report file with trimming statistics"
     )
     parser.add_argument(
+        "--details_json",
+        required=False,
+        help="Optional JSON file with per-contig trimming details for visualization"
+    )
+    parser.add_argument(
         "--min_block_size",
         type=int,
         default=10000,
@@ -255,9 +260,10 @@ def process_contigs(input_fasta, redundant_regions, contig_lengths,
     Process contigs and extract non-redundant pieces.
     
     Returns:
-        Tuple of (output_records, statistics)
+        Tuple of (output_records, statistics, contig_details)
     """
     output_records = []
+    contig_details = {}  # Track detailed information per contig
     stats = {
         'total_contigs': 0,
         'kept_intact': 0,
@@ -289,9 +295,19 @@ def process_contigs(input_fasta, redundant_regions, contig_lengths,
                 total_redundant = 0
                 redundant_pct = 0.0
             
+            # Store contig details
+            contig_details[contig_name] = {
+                'length': contig_length,
+                'redundant_regions': [[int(s), int(e)] for s, e in redun_regions],
+                'redundant_pct': round(redundant_pct, 2),
+                'status': None,
+                'kept_pieces': []
+            }
+            
             # Check if contig is too redundant ("swiss cheese")
             if redundant_pct > max_redundant_pct:
                 stats['removed_swiss_cheese'] += 1
+                contig_details[contig_name]['status'] = 'removed_swiss_cheese'
                 continue
             
             # Calculate non-redundant pieces
@@ -302,6 +318,7 @@ def process_contigs(input_fasta, redundant_regions, contig_lengths,
             if not pieces:
                 # No pieces large enough to keep
                 stats['removed_no_pieces'] += 1
+                contig_details[contig_name]['status'] = 'removed_no_pieces'
                 continue
             
             # Generate output records
@@ -311,9 +328,13 @@ def process_contigs(input_fasta, redundant_regions, contig_lengths,
                 stats['kept_intact'] += 1
                 stats['total_pieces_output'] += 1
                 stats['total_bp_output'] += len(record.seq)
+                contig_details[contig_name]['status'] = 'kept_intact'
+                contig_details[contig_name]['kept_pieces'] = [[0, contig_length]]
             else:
                 # Contig was trimmed - output pieces
                 stats['trimmed'] += 1
+                contig_details[contig_name]['status'] = 'trimmed'
+                contig_details[contig_name]['kept_pieces'] = [[int(s), int(e)] for s, e in pieces]
                 
                 for piece_idx, (start, end) in enumerate(pieces, 1):
                     piece_seq = record.seq[start:end]
@@ -338,7 +359,7 @@ def process_contigs(input_fasta, redundant_regions, contig_lengths,
                 # Track trimmed bases
                 stats['total_bp_trimmed'] += (contig_length - sum(end - start for start, end in pieces))
     
-    return output_records, stats
+    return output_records, stats, contig_details
 
 
 def write_report(report_file, stats, args):
@@ -392,7 +413,7 @@ def main():
     # Step 2: Process contigs and extract non-redundant pieces
     print("Step 2: Processing contigs and extracting non-redundant pieces...", 
           file=sys.stderr)
-    output_records, stats = process_contigs(
+    output_records, stats, contig_details = process_contigs(
         args.input_fasta,
         redundant_regions,
         contig_lengths,
@@ -407,6 +428,13 @@ def main():
         SeqIO.write(output_records, out_handle, "fasta")
     
     write_report(args.report, stats, args)
+    
+    # Write detailed JSON for visualization if requested
+    if args.details_json:
+        import json
+        with open(args.details_json, 'w') as f:
+            json.dump(contig_details, f, indent=2)
+        print(f"  Details JSON written to: {args.details_json}", file=sys.stderr)
     
     # Print summary
     print(f"\nTrimming complete:", file=sys.stderr)

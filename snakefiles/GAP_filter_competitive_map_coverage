@@ -80,6 +80,7 @@ report_script = os.path.join(filepath, "../scripts/generate_contig_classificatio
 coverage_script = os.path.join(filepath, "../scripts/calculate_contig_coverage.py")
 filter_script = os.path.join(filepath, "../scripts/filter_redundant_contigs.py")
 trim_script = os.path.join(filepath, "../scripts/trim_redundant_regions.py")
+combine_script = os.path.join(filepath, "../scripts/combine_chr_and_retained_contigs.py")
 
 wildcard_constraints:
     nom="[A-Za-z0-9.]+",
@@ -101,7 +102,10 @@ rule all:
                nom = config["assemblies"]) if config["filter_redundant"] else [],
         # Trimmed assembly (if trimming enabled)
         expand(config["tool"] + "/output/{nom}/{nom}_trimmed.fasta",
-               nom = config["assemblies"]) if config["trim_redundant_regions"] else []
+               nom = config["assemblies"]) if config["trim_redundant_regions"] else [],
+        # Combined assembly: chromosome scaffolds + retained contigs (if filtering/trimming enabled)
+        expand(config["tool"] + "/output/{nom}/{nom}_combined.fasta",
+               nom = config["assemblies"]) if (config["filter_redundant"] or config["trim_redundant_regions"]) else []
 
 # Softlink input assembly
 rule softlink_assembly:
@@ -465,7 +469,9 @@ rule generate_html_report:
     Generate interactive HTML report with plotly
     """
     input:
-        summary = config["tool"] + "/output/{nom}/{nom}_contig_classification_summary.csv"
+        summary = config["tool"] + "/output/{nom}/{nom}_contig_classification_summary.csv",
+        removed_list = config["tool"] + "/output/{nom}/{nom}_removed_contigs.tsv",
+        details_json = config["tool"] + "/output/{nom}/{nom}_trimming_details.json"
     output:
         html = config["tool"] + "/output/{nom}/{nom}_contig_classification_report.html"
     params:
@@ -479,7 +485,9 @@ rule generate_html_report:
         python {report_script} \
             --input {input.summary} \
             --output_html {output.html} \
-            --title "{wildcards.nom} Contig Classification"
+            --title "{wildcards.nom} Contig Classification" \
+            --removed_contigs {input.removed_list} \
+            --trimming_details {input.details_json}
         """
 
 rule generate_static_plot:
@@ -543,7 +551,8 @@ rule trim_redundant_regions:
         bai = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam.bai"
     output:
         trimmed_fasta = config["tool"] + "/output/{nom}/{nom}_trimmed.fasta",
-        report = config["tool"] + "/output/{nom}/{nom}_trimming_report.txt"
+        report = config["tool"] + "/output/{nom}/{nom}_trimming_report.txt",
+        details_json = config["tool"] + "/output/{nom}/{nom}_trimming_details.json"
     params:
         min_block_size = config["trim_min_block_size"],
         min_mapq = config["trim_min_mapq"],
@@ -560,8 +569,41 @@ rule trim_redundant_regions:
             --bam {input.bam} \
             --output_fasta {output.trimmed_fasta} \
             --report {output.report} \
+            --details_json {output.details_json} \
             --min_block_size {params.min_block_size} \
             --min_mapq {params.min_mapq} \
             --min_keep_piece {params.min_keep_piece} \
             --max_redundant_pct {params.max_redundant_pct}
+        """
+
+rule combine_chr_and_retained_contigs:
+    """
+    Combine chromosome-scale scaffolds with retained contigs in original order.
+    This creates the final curated assembly output.
+    
+    Uses trimmed.fasta if trimming is enabled, otherwise uses filtered.fasta.
+    """
+    input:
+        original_assembly = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        chr_list = config["tool"] + "/output/{nom}/{nom}_chr_list.txt",
+        contig_map = config["tool"] + "/output/{nom}/{nom}_contig_to_scaffold_map.tsv",
+        retained_contigs = lambda wildcards: (
+            config["tool"] + f"/output/{wildcards.nom}/{wildcards.nom}_trimmed.fasta"
+            if config["trim_redundant_regions"]
+            else config["tool"] + f"/output/{wildcards.nom}/{wildcards.nom}_filtered.fasta"
+        )
+    output:
+        combined_fasta = config["tool"] + "/output/{nom}/{nom}_combined.fasta"
+    threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
+    shell:
+        """
+        python {combine_script} \
+            --input_assembly {input.original_assembly} \
+            --chr_list {input.chr_list} \
+            --retained_contigs {input.retained_contigs} \
+            --contig_map {input.contig_map} \
+            --output_fasta {output.combined_fasta}
         """
