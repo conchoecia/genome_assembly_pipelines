@@ -1033,7 +1033,7 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                 {{name: 'Removed (filter)', value: stats.removed_filter, color: '#c0392b'}},
                 {{name: 'Removed (swiss cheese)', value: stats.removed_swiss_cheese, color: '#e74c3c'}},
                 {{name: 'Removed (no pieces)', value: stats.removed_no_pieces, color: '#95a5a6'}}
-            ]}.filter(d => d.value > 0);  // Only show categories with data
+            ].filter(d => d.value > 0);  // Only show categories with data
             
             // Scales
             const x = d3.scaleBand()
