@@ -742,34 +742,82 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
             
             // Draw alignment blocks
             alignments.forEach(aln => {{
-                // Draw lines connecting query and reference positions
-                svg.append("line")
-                    .attr("x1", xScale(aln.query_start))
-                    .attr("x2", xScale(aln.query_end))
-                    .attr("y1", yScale(aln.ref_start))
-                    .attr("y2", yScale(aln.ref_end))
-                    .attr("stroke", aln.is_reverse ? "#e74c3c" : "#3498db")
-                    .attr("stroke-width", 2)
-                    .attr("opacity", 0.6)
-                    .on("mouseover", function(event) {{
-                        d3.select(this).attr("opacity", 1).attr("stroke-width", 3);
-                        tooltip.style("display", "block")
-                            .html(`
-                                Query: ${{aln.query_start.toLocaleString()}}-${{aln.query_end.toLocaleString()}}<br/>
-                                Ref: ${{aln.ref_start.toLocaleString()}}-${{aln.ref_end.toLocaleString()}}<br/>
-                                MAPQ: ${{aln.mapq}}<br/>
-                                Strand: ${{aln.is_reverse ? 'Reverse' : 'Forward'}}
-                            `);
-                    }})
-                    .on("mousemove", function(event) {{
-                        tooltip
-                            .style("left", (event.pageX + 15) + "px")
-                            .style("top", (event.pageY - 10) + "px");
-                    }})
-                    .on("mouseout", function() {{
-                        d3.select(this).attr("opacity", 0.6).attr("stroke-width", 2);
-                        tooltip.style("display", "none");
-                    }});
+                // If we have aligned_pairs data, plot those points
+                if (aln.aligned_pairs && aln.aligned_pairs.length > 0) {{
+                    // Plot aligned pairs as small circles or line segments
+                    const color = aln.is_reverse ? "#e74c3c" : "#3498db";
+                    
+                    // Draw line segments between consecutive aligned pairs
+                    for (let i = 0; i < aln.aligned_pairs.length - 1; i++) {{
+                        const p1 = aln.aligned_pairs[i];
+                        const p2 = aln.aligned_pairs[i + 1];
+                        
+                        svg.append("line")
+                            .attr("x1", xScale(p1[0]))
+                            .attr("y1", yScale(p1[1]))
+                            .attr("x2", xScale(p2[0]))
+                            .attr("y2", yScale(p2[1]))
+                            .attr("stroke", color)
+                            .attr("stroke-width", 1.5)
+                            .attr("opacity", 0.7);
+                    }}
+                    
+                    // Add hover target (invisible wider line)
+                    svg.append("line")
+                        .attr("x1", xScale(aln.query_start))
+                        .attr("x2", xScale(aln.query_end))
+                        .attr("y1", yScale(aln.ref_start))
+                        .attr("y2", yScale(aln.ref_end))
+                        .attr("stroke", "transparent")
+                        .attr("stroke-width", 10)
+                        .style("cursor", "pointer")
+                        .on("mouseover", function(event) {{
+                            tooltip.style("display", "block")
+                                .html(`
+                                    Query: ${{aln.query_start.toLocaleString()}}-${{aln.query_end.toLocaleString()}}<br/>
+                                    Ref: ${{aln.ref_start.toLocaleString()}}-${{aln.ref_end.toLocaleString()}}<br/>
+                                    MAPQ: ${{aln.mapq}}<br/>
+                                    Strand: ${{aln.is_reverse ? 'Reverse' : 'Forward'}}
+                                `);
+                        }})
+                        .on("mousemove", function(event) {{
+                            tooltip
+                                .style("left", (event.pageX + 15) + "px")
+                                .style("top", (event.pageY - 10) + "px");
+                        }})
+                        .on("mouseout", function() {{
+                            tooltip.style("display", "none");
+                        }});
+                }} else {{
+                    // Fallback: draw simple line from start to end
+                    svg.append("line")
+                        .attr("x1", xScale(aln.query_start))
+                        .attr("x2", xScale(aln.query_end))
+                        .attr("y1", yScale(aln.ref_start))
+                        .attr("y2", yScale(aln.ref_end))
+                        .attr("stroke", aln.is_reverse ? "#e74c3c" : "#3498db")
+                        .attr("stroke-width", 2)
+                        .attr("opacity", 0.6)
+                        .on("mouseover", function(event) {{
+                            d3.select(this).attr("opacity", 1).attr("stroke-width", 3);
+                            tooltip.style("display", "block")
+                                .html(`
+                                    Query: ${{aln.query_start.toLocaleString()}}-${{aln.query_end.toLocaleString()}}<br/>
+                                    Ref: ${{aln.ref_start.toLocaleString()}}-${{aln.ref_end.toLocaleString()}}<br/>
+                                    MAPQ: ${{aln.mapq}}<br/>
+                                    Strand: ${{aln.is_reverse ? 'Reverse' : 'Forward'}}
+                                `);
+                        }})
+                        .on("mousemove", function(event) {{
+                            tooltip
+                                .style("left", (event.pageX + 15) + "px")
+                                .style("top", (event.pageY - 10) + "px");
+                        }})
+                        .on("mouseout", function() {{
+                            d3.select(this).attr("opacity", 0.6).attr("stroke-width", 2);
+                            tooltip.style("display", "none");
+                        }});
+                }}
             }});
             
             // Legend

@@ -151,19 +151,28 @@ def calculate_mapping_stats(bam_file, scaffold_lengths, chromosomes, min_mapq):
         query_name = read.query_name  # non-chr scaffold name
         ref_name = read.reference_name  # chr scaffold name
         
-        # Store alignment block coordinates for dot plot
+        # Get aligned positions on the query sequence
+        # This prevents double-counting overlapping alignments
+        aligned_pairs = read.get_aligned_pairs(matches_only=True)
+        
+        # Collect aligned base pairs for dot plot (sample every 100th for performance)
+        sampled_pairs = []
+        for i, (query_pos, ref_pos) in enumerate(aligned_pairs):
+            if i % 100 == 0 or i == 0 or i == len(aligned_pairs) - 1:
+                # Always include first, last, and every 100th position
+                if query_pos is not None and ref_pos is not None:
+                    sampled_pairs.append([int(query_pos), int(ref_pos)])
+        
+        # Store alignment details for dot plot
         alignment_details[query_name][ref_name].append({
             'query_start': read.query_alignment_start,
             'query_end': read.query_alignment_end,
             'ref_start': read.reference_start,
             'ref_end': read.reference_end,
             'mapq': read.mapping_quality,
-            'is_reverse': read.is_reverse
+            'is_reverse': read.is_reverse,
+            'aligned_pairs': sampled_pairs  # Add sampled aligned positions
         })
-        
-        # Get aligned positions on the query sequence
-        # This prevents double-counting overlapping alignments
-        aligned_pairs = read.get_aligned_pairs(matches_only=True)
         
         # Add each aligned query position to the set (prevents duplicates)
         for query_pos, ref_pos in aligned_pairs:
