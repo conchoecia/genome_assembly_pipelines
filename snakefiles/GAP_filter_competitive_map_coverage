@@ -458,20 +458,33 @@ rule calculate_chr_coverage_stats:
         runtime=120
     shell:
         """
-        # Merge all BAMs and sort
-        merged_bam=$(mktemp).bam
-        samtools merge -@ {threads} $merged_bam {input.bams}
-        samtools index -@ {threads} $merged_bam
+        # Smart BAM handling: only merge if multiple BAMs
+        bam_count=$(echo {input.bams} | wc -w)
+        
+        if [ $bam_count -eq 1 ]; then
+            # Single BAM - use directly
+            working_bam={input.bams}
+            cleanup_bam=""
+        else
+            # Multiple BAMs - merge
+            working_bam=$(mktemp).bam
+            cleanup_bam=$working_bam
+            echo "Merging $bam_count BAM files..."
+            samtools merge -@ {threads} $working_bam {input.bams}
+            samtools index -@ {threads} $working_bam
+        fi
         
         # Calculate chromosome coverage statistics
         python {chr_coverage_script} \
-            --bam $merged_bam \
+            --bam $working_bam \
             --chr_list {input.chr_list} \
             --output_json {output.json} \
             --output_tsv {output.tsv}
         
-        # Clean up
-        rm -f $merged_bam $merged_bam.bai
+        # Clean up merged BAM if created
+        if [ -n "$cleanup_bam" ]; then
+            rm -f $cleanup_bam $cleanup_bam.bai
+        fi
         """
 
 rule calculate_binned_contig_coverage:
@@ -495,20 +508,33 @@ rule calculate_binned_contig_coverage:
         runtime=120
     shell:
         """
-        # Merge all BAMs and sort
-        merged_bam=$(mktemp).bam
-        samtools merge -@ {threads} $merged_bam {input.bams}
-        samtools index -@ {threads} $merged_bam
+        # Smart BAM handling: only merge if multiple BAMs
+        bam_count=$(echo {input.bams} | wc -w)
+        
+        if [ $bam_count -eq 1 ]; then
+            # Single BAM - use directly
+            working_bam={input.bams}
+            cleanup_bam=""
+        else
+            # Multiple BAMs - merge
+            working_bam=$(mktemp).bam
+            cleanup_bam=$working_bam
+            echo "Merging $bam_count BAM files..."
+            samtools merge -@ {threads} $working_bam {input.bams}
+            samtools index -@ {threads} $working_bam
+        fi
         
         # Calculate binned coverage
         python {binned_coverage_script} \
-            --bam $merged_bam \
+            --bam $working_bam \
             --contig_map {input.contig_map} \
             --output_json {output.json} \
             --bin_size {params.bin_size}
         
-        # Clean up
-        rm -f $merged_bam $merged_bam.bai
+        # Clean up merged BAM if created
+        if [ -n "$cleanup_bam" ]; then
+            rm -f $cleanup_bam $cleanup_bam.bai
+        fi
         """
 
 rule generate_summary_table:
