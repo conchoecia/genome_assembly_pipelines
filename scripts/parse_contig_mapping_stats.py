@@ -153,7 +153,8 @@ def calculate_mapping_stats(bam_file, scaffold_lengths, chromosomes, min_mapq):
         
         # Get aligned positions on the query sequence
         # This prevents double-counting overlapping alignments
-        aligned_pairs = read.get_aligned_pairs(matches_only=True)
+        # Convert to list so we can iterate multiple times
+        aligned_pairs = list(read.get_aligned_pairs(matches_only=True))
         
         # Collect aligned base pairs for dot plot (sample every 100th for performance)
         sampled_pairs = []
