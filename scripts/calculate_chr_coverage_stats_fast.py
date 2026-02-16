@@ -41,8 +41,14 @@ def parse_args():
     parser.add_argument(
         '--sample_interval',
         type=int,
-        default=10000,
-        help='Sample every Nth position (default: 10000)'
+        default=None,
+        help='Sample every Nth position (default: 10000 if --samples_per_chr not specified)'
+    )
+    parser.add_argument(
+        '--samples_per_chr',
+        type=int,
+        default=None,
+        help='Number of samples per chromosome (overrides --sample_interval)'
     )
     return parser.parse_args()
 
@@ -210,20 +216,36 @@ def main():
     results = {'chromosomes': {}}
     all_coverage_values = []
     
+    # Determine sampling strategy
+    if args.samples_per_chr:
+        print(f"Using {args.samples_per_chr} samples per chromosome\n", file=sys.stderr)
+        sampling_mode = 'fixed_samples'
+    else:
+        sample_interval = args.sample_interval if args.sample_interval else 10000
+        print(f"Using fixed interval of {sample_interval:,} bp\n", file=sys.stderr)
+        sampling_mode = 'fixed_interval'
+    
     for chr_name in chromosomes:
         chr_length = chr_lengths[chr_name]
         print(f"\nProcessing {chr_name} ({chr_length:,} bp)...", file=sys.stderr)
         
+        # Calculate interval for this chromosome
+        if sampling_mode == 'fixed_samples':
+            interval = max(1, chr_length // args.samples_per_chr)
+            print(f"  Will sample ~{args.samples_per_chr} positions (every {interval:,} bp)", file=sys.stderr)
+        else:
+            interval = sample_interval
+        
         # Get sampled coverage
         coverage_values = get_sampled_coverage(
-            args.bam, chr_name, chr_length, args.sample_interval
+            args.bam, chr_name, chr_length, interval
         )
         
         if not coverage_values:
             print(f"  Warning: No coverage data for {chr_name}", file=sys.stderr)
             continue
         
-        print(f"  Sampled {len(coverage_values):,} positions (every {args.sample_interval:,} bp)", file=sys.stderr)
+        print(f"  Sampled {len(coverage_values):,} positions", file=sys.stderr)
         
         # Calculate statistics
         stats = calculate_stats(coverage_values)

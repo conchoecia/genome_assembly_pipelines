@@ -480,7 +480,7 @@ rule calculate_chr_coverage_stats:
             --chr_list {input.chr_list} \
             --output_json {output.json} \
             --output_tsv {output.tsv} \
-            --sample_interval 50000
+            --samples_per_chr 100
         
         # Clean up merged BAM if created
         if [ -n "$cleanup_bam" ]; then
