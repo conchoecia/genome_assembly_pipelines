@@ -1,0 +1,85 @@
+# Example configuration for GAP_filter_competitive_map_coverage with filtering
+#
+# This pipeline:
+# 1. Maps non-chr contigs to chromosome scaffolds
+# 2. Calculates mapping stats and long-read coverage
+# 3. Generates interactive HTML report
+# 4. Optionally filters redundant contigs
+
+# Input assembly (must be a dictionary)
+assemblies:
+  h12v7: /path/to/h12v7_assembly.fasta
+
+# Chromosome-scale scaffold names (list)
+chromosomes:
+  - h12v7_1
+  - h12v7_2
+  - h12v7_3
+  - h12v7_4
+  - h12v7_5
+  - h12v7_6
+  - h12v7_7
+  - h12v7_8
+  - h12v7_9
+  - h12v7_10
+  - h12v7_11
+  - h12v7_12
+  - h12v7_13
+
+# Long read files for coverage calculation
+# Structure: {name: {file: path, type: map-hifi/map-ont/map-pb}}
+long_reads:
+  hifi:
+    file: /path/to/hifi_reads.fastq.gz
+    type: map-hifi
+  ont:
+    file: /path/to/ont_reads.fastq.gz
+    type: map-ont
+
+# Optional: Thread configuration
+mapping_threads: 32
+sort_threads: 8
+
+# Optional: Minimum MAPQ for considering alignments (default: 0)
+min_mapq: 0
+
+# Optional: Generate reports (default: True)
+generate_html: True
+generate_static: False
+
+# Optional: Filter redundant contigs (default: False)
+# Set to True to enable filtering
+filter_redundant: True
+
+# Optional: Filtering thresholds
+# Conservative: 95% coverage, MAPQ >= 30 (removes ~280/448 contigs in test case)
+filter_min_coverage: 95.0
+filter_min_mapq: 30
+
+# Moderate filtering (removes more contigs):
+# filter_min_coverage: 80.0
+# filter_min_mapq: 20
+
+# Aggressive filtering (removes even more):
+# filter_min_coverage: 50.0
+# filter_min_mapq: 10
+
+# Optional: Trim redundant regions from contigs (default: False)
+# This breaks contigs at redundant regions and keeps non-redundant pieces
+# More granular than full contig filtering - removes redundant sections while keeping unique sequence
+trim_redundant_regions: True
+
+# Optional: Trimming thresholds
+# Trim blocks >= 10 kbp with MAPQ >= 20 (recommended)
+trim_min_block_size: 10000      # Minimum block size to consider redundant (bp)
+trim_min_mapq: 20                # Minimum MAPQ for redundant blocks
+trim_min_keep_piece: 5000        # Minimum size of non-redundant pieces to keep (bp)
+trim_max_redundant_pct: 80.0     # Remove entire contig if >this % is redundant
+
+# More aggressive trimming:
+# trim_min_block_size: 5000
+# trim_min_mapq: 15
+
+# More conservative trimming:
+# trim_min_block_size: 20000
+# trim_min_mapq: 30

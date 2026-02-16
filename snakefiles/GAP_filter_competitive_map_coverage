@@ -56,12 +56,30 @@ if "generate_html" not in config:
     config["generate_html"] = True
 if "generate_static" not in config:
     config["generate_static"] = False
+if "filter_redundant" not in config:
+    config["filter_redundant"] = False
+if "filter_min_coverage" not in config:
+    config["filter_min_coverage"] = 95.0
+if "filter_min_mapq" not in config:
+    config["filter_min_mapq"] = 30
+if "trim_redundant_regions" not in config:
+    config["trim_redundant_regions"] = False
+if "trim_min_block_size" not in config:
+    config["trim_min_block_size"] = 10000
+if "trim_min_mapq" not in config:
+    config["trim_min_mapq"] = 20
+if "trim_min_keep_piece" not in config:
+    config["trim_min_keep_piece"] = 5000
+if "trim_max_redundant_pct" not in config:
+    config["trim_max_redundant_pct"] = 80.0
 
 # Get paths to scripts
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
 parser_script = os.path.join(filepath, "../scripts/parse_contig_mapping_stats.py")
 report_script = os.path.join(filepath, "../scripts/generate_contig_classification_report.py")
 coverage_script = os.path.join(filepath, "../scripts/calculate_contig_coverage.py")
+filter_script = os.path.join(filepath, "../scripts/filter_redundant_contigs.py")
+trim_script = os.path.join(filepath, "../scripts/trim_redundant_regions.py")
 
 wildcard_constraints:
     nom="[A-Za-z0-9.]+",
@@ -77,7 +95,13 @@ rule all:
                nom = config["assemblies"]) if config["generate_html"] else [],
         # Static plots (if enabled)
         expand(config["tool"] + "/output/{nom}/{nom}_contig_classification_plot.png",
-               nom = config["assemblies"]) if config["generate_static"] else []
+               nom = config["assemblies"]) if config["generate_static"] else [],
+        # Filtered assembly (if filtering enabled)
+        expand(config["tool"] + "/output/{nom}/{nom}_filtered.fasta",
+               nom = config["assemblies"]) if config["filter_redundant"] else [],
+        # Trimmed assembly (if trimming enabled)
+        expand(config["tool"] + "/output/{nom}/{nom}_trimmed.fasta",
+               nom = config["assemblies"]) if config["trim_redundant_regions"] else []
 
 # Softlink input assembly
 rule softlink_assembly:
@@ -480,3 +504,64 @@ rule generate_static_plot:
             --title "{wildcards.nom} Contig Classification"
         """
 
+rule filter_redundant_contigs:
+    """
+    Filter out redundant contigs based on alignment coverage and mapping quality
+    """
+    input:
+        contigs_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_contigs.fasta",
+        summary = config["tool"] + "/output/{nom}/{nom}_contig_classification_summary.csv"
+    output:
+        filtered_fasta = config["tool"] + "/output/{nom}/{nom}_filtered.fasta",
+        removed_list = config["tool"] + "/output/{nom}/{nom}_removed_contigs.tsv"
+    params:
+        min_coverage = config["filter_min_coverage"],
+        min_mapq = config["filter_min_mapq"]
+    threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
+    shell:
+        """
+        python {filter_script} \
+            --input_fasta {input.contigs_fasta} \
+            --summary_csv {input.summary} \
+            --output_fasta {output.filtered_fasta} \
+            --removed_list {output.removed_list} \
+            --min_coverage {params.min_coverage} \
+            --min_mapq {params.min_mapq}
+        """
+
+rule trim_redundant_regions:
+    """
+    Trim redundant regions from contigs by breaking at high-quality alignment blocks
+    Keeps non-redundant pieces and removes highly redundant swiss-cheese contigs
+    """
+    input:
+        contigs_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_contigs.fasta",
+        bam = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam",
+        bai = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam.bai"
+    output:
+        trimmed_fasta = config["tool"] + "/output/{nom}/{nom}_trimmed.fasta",
+        report = config["tool"] + "/output/{nom}/{nom}_trimming_report.txt"
+    params:
+        min_block_size = config["trim_min_block_size"],
+        min_mapq = config["trim_min_mapq"],
+        min_keep_piece = config["trim_min_keep_piece"],
+        max_redundant_pct = config["trim_max_redundant_pct"]
+    threads: 1
+    resources:
+        mem_mb=8000,
+        runtime=30
+    shell:
+        """
+        python {trim_script} \
+            --input_fasta {input.contigs_fasta} \
+            --bam {input.bam} \
+            --output_fasta {output.trimmed_fasta} \
+            --report {output.report} \
+            --min_block_size {params.min_block_size} \
+            --min_mapq {params.min_mapq} \
+            --min_keep_piece {params.min_keep_piece} \
+            --max_redundant_pct {params.max_redundant_pct}
+        """

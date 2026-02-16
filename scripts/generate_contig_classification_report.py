@@ -693,8 +693,13 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                 .append("g")
                 .attr("transform", `translate(${{margin.left}},${{margin.top}})`);
             
-            // Find max reference position
+            // Find min/max reference positions (zoom to aligned region)
+            const minRef = d3.min(alignments, d => d.ref_start);
             const maxRef = d3.max(alignments, d => d.ref_end);
+            
+            // Add 5% padding to Y-axis for better visualization
+            const refRange = maxRef - minRef;
+            const refPadding = refRange * 0.05;
             
             // Scales
             const xScale = d3.scaleLinear()
@@ -702,7 +707,7 @@ def generate_html_report(df, output_file, title, coverage_threshold=None, mappin
                 .range([0, width]);
             
             const yScale = d3.scaleLinear()
-                .domain([0, maxRef])
+                .domain([Math.max(0, minRef - refPadding), maxRef + refPadding])
                 .range([height, 0]);
             
             // Axes

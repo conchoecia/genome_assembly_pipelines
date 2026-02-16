@@ -220,14 +220,23 @@ def calculate_mapping_stats(bam_file, scaffold_lengths, chromosomes, min_mapq):
             best_chr = max(chr_aligned_counts.keys(), key=lambda k: chr_aligned_counts[k])
             best_chr_bases = chr_aligned_counts[best_chr]
             best_chr_pct = round(100.0 * best_chr_bases / scaffold_length, 2) if scaffold_length > 0 else 0.0
+            
+            # Find best MAPQ for the best matching chromosome
+            best_chr_alignments = alignment_details.get(scaffold_name, {}).get(best_chr, [])
+            if best_chr_alignments:
+                best_mapq = max(aln['mapq'] for aln in best_chr_alignments)
+            else:
+                best_mapq = 0
         else:
             best_chr = "none"
             best_chr_bases = 0
             best_chr_pct = 0.0
+            best_mapq = 0
         
         result['best_match_chr'] = best_chr
         result['best_match_aligned_bases'] = best_chr_bases
         result['best_match_pct'] = best_chr_pct
+        result['best_match_mapq'] = best_mapq
         
         results.append(result)
     
@@ -258,7 +267,8 @@ def write_output(results, chromosomes, alignment_details, output_file, contig_ma
         'percent_aligned',
         'best_match_chr',
         'best_match_aligned_bases',
-        'best_match_pct'
+        'best_match_pct',
+        'best_match_mapq'
     ]
     
     # Add per-chromosome columns
