@@ -972,15 +972,28 @@ def main():
         # Auto-detect: look for _alignments.json file next to the input
         # Input is like: path/h12v7_contig_classification_summary.csv
         # Look for: path/h12v7_contig_mapping_stats_alignments.json
-        alignment_file = args.input.replace('_contig_classification_summary.csv', '_contig_mapping_stats_alignments.json')
+        import os
+        dir_name = os.path.dirname(args.input)
+        base_name = os.path.basename(args.input)
+        
+        # Extract the assembly name (e.g., h12v7)
+        # Assume format: {assembly}_contig_classification_summary.csv
+        if '_contig_classification_summary.csv' in base_name:
+            assembly_name = base_name.replace('_contig_classification_summary.csv', '')
+        elif '_scaffold_classification_summary.csv' in base_name:
+            assembly_name = base_name.replace('_scaffold_classification_summary.csv', '')
+        else:
+            # Fallback: remove .csv
+            assembly_name = base_name.replace('.csv', '')
+        
+        # Construct alignment file path
+        alignment_file = os.path.join(dir_name, f'{assembly_name}_contig_mapping_stats_alignments.json')
+        
+        # Fallback patterns if not found
         if not os.path.exists(alignment_file):
-            alignment_file = args.input.replace('_scaffold_classification_summary.csv', '_contig_mapping_stats_alignments.json')
+            alignment_file = os.path.join(dir_name, f'{assembly_name}_mapping_stats_alignments.json')
         if not os.path.exists(alignment_file):
-            alignment_file = args.input.replace('_summary.csv', '_contig_mapping_stats_alignments.json')
-        if not os.path.exists(alignment_file):
-            alignment_file = args.input.replace('_summary.csv', '_mapping_stats_alignments.json')
-        if not os.path.exists(alignment_file):
-            alignment_file = args.input.replace('.csv', '_alignments.json')
+            alignment_file = os.path.join(dir_name, f'{assembly_name}_alignments.json')
     
     if os.path.exists(alignment_file):
         print(f"Loading alignment details from {alignment_file}...", file=sys.stderr)
