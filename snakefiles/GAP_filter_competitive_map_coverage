@@ -59,8 +59,8 @@ if "generate_static" not in config:
 
 # Get paths to scripts
 filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
-parser_script = os.path.join(filepath, "../scripts/parse_scaffold_mapping_stats.py")
-report_script = os.path.join(filepath, "../scripts/generate_scaffold_classification_report.py")
+parser_script = os.path.join(filepath, "../scripts/parse_contig_mapping_stats.py")
+report_script = os.path.join(filepath, "../scripts/generate_contig_classification_report.py")
 
 wildcard_constraints:
     nom="[A-Za-z0-9.]+",
@@ -69,13 +69,13 @@ wildcard_constraints:
 rule all:
     input:
         # Summary table with mapping and coverage stats
-        expand(config["tool"] + "/output/{nom}/{nom}_scaffold_classification_summary.csv",
+        expand(config["tool"] + "/output/{nom}/{nom}_contig_classification_summary.csv",
                nom = config["assemblies"]),
         # Interactive HTML report (if enabled)
-        expand(config["tool"] + "/output/{nom}/{nom}_scaffold_classification_report.html",
+        expand(config["tool"] + "/output/{nom}/{nom}_contig_classification_report.html",
                nom = config["assemblies"]) if config["generate_html"] else [],
         # Static plots (if enabled)
-        expand(config["tool"] + "/output/{nom}/{nom}_scaffold_classification_plot.png",
+        expand(config["tool"] + "/output/{nom}/{nom}_contig_classification_plot.png",
                nom = config["assemblies"]) if config["generate_static"] else []
 
 # Softlink input assembly
@@ -203,14 +203,110 @@ rule split_assembly_by_chromosomes:
             for record in non_chr_records:
                 out_handle.write(f"{record.id}\n")
 
+rule split_scaffolds_into_contigs:
+    """
+    Split non-chromosome scaffolds into contigs at gap regions (10+ consecutive N's)
+    and trim N's from contig ends
+    """
+    input:
+        non_chr_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_scaffolds.fasta"
+    output:
+        contigs_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_contigs.fasta",
+        contig_map = config["tool"] + "/output/{nom}/{nom}_contig_to_scaffold_map.tsv"
+    params:
+        min_gap_length = 10
+    threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
+    run:
+        import re
+        
+        contig_records = []
+        contig_mapping = []
+        
+        with open(input.non_chr_fasta) as handle:
+            for scaffold in SeqIO.parse(handle, "fasta"):
+                scaffold_seq = str(scaffold.seq)
+                scaffold_name = scaffold.id
+                
+                # Split at regions with 10+ consecutive N's (case insensitive)
+                # Use regex to find gaps
+                gap_pattern = re.compile(r'[Nn]{' + str(params.min_gap_length) + r',}')
+                
+                # Find all gap positions
+                splits = []
+                last_end = 0
+                for match in gap_pattern.finditer(scaffold_seq):
+                    if last_end < match.start():
+                        splits.append((last_end, match.start()))
+                    last_end = match.end()
+                
+                # Add final segment if it exists
+                if last_end < len(scaffold_seq):
+                    splits.append((last_end, len(scaffold_seq)))
+                
+                # If no gaps found, treat whole scaffold as one contig
+                if not splits:
+                    splits = [(0, len(scaffold_seq))]
+                
+                # Create contig records
+                for contig_idx, (start, end) in enumerate(splits, 1):
+                    contig_seq = scaffold_seq[start:end]
+                    
+                    # Trim N's from both ends
+                    contig_seq_stripped = contig_seq.strip('Nn')
+                    
+                    # Skip if contig is too short after trimming
+                    if len(contig_seq_stripped) < 100:
+                        continue
+                    
+                    # Create contig name: scaffold_name_contig_X
+                    if len(splits) == 1:
+                        # If only one contig, keep original name
+                        contig_name = scaffold_name
+                    else:
+                        contig_name = f"{scaffold_name}_contig_{contig_idx}"
+                    
+                    # Create SeqRecord for contig
+                    from Bio.Seq import Seq
+                    contig_record = SeqIO.SeqRecord(
+                        Seq(contig_seq_stripped),
+                        id=contig_name,
+                        description=f"from {scaffold_name}"
+                    )
+                    contig_records.append(contig_record)
+                    
+                    # Track contig to scaffold mapping
+                    contig_mapping.append({
+                        'contig_name': contig_name,
+                        'scaffold_name': scaffold_name,
+                        'contig_index': contig_idx,
+                        'contig_length': len(contig_seq_stripped),
+                        'scaffold_start': start,
+                        'scaffold_end': end
+                    })
+        
+        # Write contigs to fasta
+        with open(output.contigs_fasta, "w") as out_handle:
+            SeqIO.write(contig_records, out_handle, "fasta")
+        
+        # Write mapping file
+        with open(output.contig_map, "w") as out_handle:
+            out_handle.write("contig_name\tscaffold_name\tcontig_index\tcontig_length\tscaffold_start\tscaffold_end\n")
+            for mapping in contig_mapping:
+                out_handle.write(f"{mapping['contig_name']}\t{mapping['scaffold_name']}\t"
+                               f"{mapping['contig_index']}\t{mapping['contig_length']}\t"
+                               f"{mapping['scaffold_start']}\t{mapping['scaffold_end']}\n")
+
 rule map_non_chr_to_chr_scaffolds:
     """
-    Map non-chromosome scaffolds to chromosome scaffolds using minimap2 asm5 preset
+    Map non-chromosome contigs to chromosome scaffolds using minimap2 asm5 preset
     Keep raw sorted BAM without filtering
     """
     input:
         chr_fasta = config["tool"] + "/output/{nom}/{nom}_chr_scaffolds.fasta",
-        non_chr_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_scaffolds.fasta"
+        contigs_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_contigs.fasta"
     output:
         bam = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam"
     threads: config["mapping_threads"]
@@ -219,7 +315,7 @@ rule map_non_chr_to_chr_scaffolds:
         runtime=60
     shell:
         """
-        minimap2 -t {threads} -ax asm5 {input.chr_fasta} {input.non_chr_fasta} | \
+        minimap2 -t {threads} -ax asm5 {input.chr_fasta} {input.contigs_fasta} | \
           samtools view -hb - | \
           samtools sort -@ {threads} - > {output.bam}
         """
@@ -241,58 +337,73 @@ rule index_scaffold_mapping_bam:
         samtools index {input.bam}
         """
 
-rule calculate_scaffold_mapping_stats:
+rule calculate_contig_mapping_stats:
     """
-    Calculate how much each non-chr scaffold maps to each chr scaffold
+    Calculate how much each non-chr contig maps to each chr scaffold
     """
     input:
         bam = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam",
         bai = config["tool"] + "/output/{nom}/{nom}_non_chr_to_chr.bam.bai",
-        non_chr_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_scaffolds.fasta",
+        contigs_fasta = config["tool"] + "/output/{nom}/{nom}_non_chr_contigs.fasta",
+        contig_map = config["tool"] + "/output/{nom}/{nom}_contig_to_scaffold_map.tsv",
         chr_list = config["tool"] + "/output/{nom}/{nom}_chr_list.txt"
     output:
-        stats = config["tool"] + "/output/{nom}/{nom}_scaffold_mapping_stats.tsv"
+        stats = config["tool"] + "/output/{nom}/{nom}_contig_mapping_stats.tsv"
     params:
-        min_mapq = config["min_mapq"]
+        min_mapq = config["min_mapq"],
+        parser_script = "scripts/parse_contig_mapping_stats.py"
     threads: 1
     resources:
         mem_mb=8000,
         runtime=30
     shell:
         """
-        python {parser_script} \
+        python {params.parser_script} \
             --bam {input.bam} \
-            --non_chr_fasta {input.non_chr_fasta} \
+            --non_chr_fasta {input.contigs_fasta} \
+            --contig_map {input.contig_map} \
             --chr_list {input.chr_list} \
             --min_mapq {params.min_mapq} \
             --output {output.stats}
         """
 
+
 rule calculate_LR_coverage:
     """
-    Calculate long-read coverage for all scaffolds
-    Merge all LR BAMs and calculate per-scaffold mean coverage
+    Calculate long-read coverage for all contigs
+    Merge all LR BAMs and calculate per-contig mean coverage using regions
     """
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta",
+        contig_map = config["tool"] + "/output/{nom}/{nom}_contig_to_scaffold_map.tsv",
         bams = expand(config["tool"] + "/output/bams_LR/{{nom}}/LR_{lr_name}_to_{{nom}}.bam",
                       lr_name = config["long_reads"].keys()),
         bais = expand(config["tool"] + "/output/bams_LR/{{nom}}/LR_{lr_name}_to_{{nom}}.bam.bai",
                       lr_name = config["long_reads"].keys())
     output:
         coverage = config["tool"] + "/output/{nom}/{nom}_LR_coverage.tsv"
+    params:
+        coverage_script = "scripts/calculate_contig_coverage.py"
     threads: config["sort_threads"]
     resources:
         mem_mb=16000,
         runtime=120
     shell:
         """
-        # Merge all BAMs, sort, and calculate coverage per scaffold
-        samtools merge -@ {threads} - {input.bams} | \
-          samtools sort -@ {threads} - | \
-          samtools coverage - | \
-          awk 'NR==1 || $1 !~ /^#/' | \
-          cut -f1,7 > {output.coverage}
+        # Merge all BAMs and sort
+        merged_bam=$(mktemp).bam
+        samtools merge -@ {threads} -o $merged_bam {input.bams}
+        samtools index -@ {threads} $merged_bam
+        
+        # Calculate coverage per contig using Python script
+        python {params.coverage_script} \
+            --bam $merged_bam \
+            --contig_map {input.contig_map} \
+            --output {output.coverage} \
+            --threads {threads}
+        
+        # Clean up
+        rm -f $merged_bam $merged_bam.bai
         """
 
 rule generate_summary_table:
@@ -300,11 +411,11 @@ rule generate_summary_table:
     Combine mapping stats and coverage into a single summary table
     """
     input:
-        mapping_stats = config["tool"] + "/output/{nom}/{nom}_scaffold_mapping_stats.tsv",
+        mapping_stats = config["tool"] + "/output/{nom}/{nom}_contig_mapping_stats.tsv",
         coverage = config["tool"] + "/output/{nom}/{nom}_LR_coverage.tsv",
         non_chr_list = config["tool"] + "/output/{nom}/{nom}_non_chr_list.txt"
     output:
-        summary = config["tool"] + "/output/{nom}/{nom}_scaffold_classification_summary.csv"
+        summary = config["tool"] + "/output/{nom}/{nom}_contig_classification_summary.csv"
     threads: 1
     resources:
         mem_mb=4000,
@@ -317,12 +428,11 @@ rule generate_summary_table:
         
         # Read coverage stats
         coverage_df = pd.read_csv(input.coverage, sep='\t')
-        coverage_df.columns = ['scaffold_name', 'mean_coverage']
         
-        # Merge the two dataframes
-        summary_df = pd.merge(mapping_df, coverage_df, on='scaffold_name', how='left')
+        # Merge the two dataframes on contig_name
+        summary_df = pd.merge(mapping_df, coverage_df, on='contig_name', how='left')
         
-        # Fill NaN values with 0 for scaffolds without coverage
+        # Fill NaN values with 0 for contigs without coverage
         summary_df['mean_coverage'] = summary_df['mean_coverage'].fillna(0)
         
         # Save as CSV
@@ -333,9 +443,9 @@ rule generate_html_report:
     Generate interactive HTML report with plotly
     """
     input:
-        summary = config["tool"] + "/output/{nom}/{nom}_scaffold_classification_summary.csv"
+        summary = config["tool"] + "/output/{nom}/{nom}_contig_classification_summary.csv"
     output:
-        html = config["tool"] + "/output/{nom}/{nom}_scaffold_classification_report.html"
+        html = config["tool"] + "/output/{nom}/{nom}_contig_classification_report.html"
     params:
         generate_html = config["generate_html"]
     threads: 1
@@ -347,7 +457,7 @@ rule generate_html_report:
         python {report_script} \
             --input {input.summary} \
             --output_html {output.html} \
-            --title "{wildcards.nom} Scaffold Classification"
+            --title "{wildcards.nom} Contig Classification"
         """
 
 rule generate_static_plot:
@@ -355,9 +465,9 @@ rule generate_static_plot:
     Generate static PNG/PDF plot
     """
     input:
-        summary = config["tool"] + "/output/{nom}/{nom}_scaffold_classification_summary.csv"
+        summary = config["tool"] + "/output/{nom}/{nom}_contig_classification_summary.csv"
     output:
-        png = config["tool"] + "/output/{nom}/{nom}_scaffold_classification_plot.png"
+        png = config["tool"] + "/output/{nom}/{nom}_contig_classification_plot.png"
     params:
         generate_static = config["generate_static"]
     threads: 1
@@ -369,6 +479,6 @@ rule generate_static_plot:
         python {report_script} \
             --input {input.summary} \
             --output_static {output.png} \
-            --title "{wildcards.nom} Scaffold Classification"
+            --title "{wildcards.nom} Contig Classification"
         """
 
