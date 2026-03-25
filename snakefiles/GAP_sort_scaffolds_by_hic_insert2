@@ -114,12 +114,13 @@ rule chrom_size:
     """
     input:
         assem = config["tool"] + "/input/assembly/{nom}_input.fasta"
+        bioawk = os.path.join(filepath, "../bin/bioawk/bioawk")
     output:
         cs = config["tool"] + "/output/{nom}/{nom}_chromsize.txt"
     threads: 1
     shell:
         """
-        bioawk -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
+        {input.bioawk} -cfastx '{{printf("%s\\t%d\\n", $name, length($seq))}}' {input.assem} > {output.cs}
         """
 
 #      _ ___   _ _____     _    _       __ _ _
@@ -145,6 +146,24 @@ rule compile_chromap:
         cd ..
         rsync -r chromap/ {params.mvdir}
         rm -rf ./chromap
+        """
+
+rule compile_bioawk:
+    """
+    build bioawk if it does not yet exist. Requires gcc, a YACC-compatible parser, and zlib.
+    """
+    output:
+        bioawk = os.path.join(filepath, "../bin/bioawk/bioawk")
+    params:
+        mvdir = os.path.join(filepath, "../bin/")
+    threads: 1
+    shell:
+        """
+        git clone https://github.com/lh3/bioawk.git
+        cd bioawk
+        make
+        cd ..
+        mv bioawk/ {params.mvdir}
         """
 
 rule index_ref:
